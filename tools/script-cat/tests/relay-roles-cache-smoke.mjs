@@ -87,6 +87,7 @@ const row = (name, url, fn = 'Executor', status = 'Активна') => ({
       status: 'Активна',
       zone: 'зона Tools',
       gate: 'гейт Tools',
+      repo: '',
       pageId: 'page-Tools',
     },
   ], 'карта строки полная');

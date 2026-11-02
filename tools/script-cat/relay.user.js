@@ -2282,7 +2282,12 @@
       if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
       p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
       if (!validProfile(p)) {
-        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
+        const routeProblem = p.roleRepos.some((route) =>
+          !PROJECT_UUID.test(String(route.roleId || "")) ||
+          !p.repos.some((entry) => String(entry.repo || "").toLowerCase() === String(route.repo || "").toLowerCase()));
+        say(routeProblem
+          ? "Не сохранено: проверьте автозаполненные маршруты ролей. Для каждой роли нужен UUID страницы из базы «Роли», а выбранный owner/repository должен быть в списке репозиториев профиля."
+          : "Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
         return;
       }
       const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
@@ -2464,10 +2469,9 @@
           if (!cursor) break;
         }
         const roles = rows.map((p) => {
-          const url = p.properties["Agent URL"]?.url || "";
-          const m = String(url).match(/\/agent\/([\w-]+)/);
           return {
-            id: m ? m[1] : "",
+            // Role routes use the Notion page UUID, never the Agent URL slug.
+            id: String(p.id || "").trim(),
             name: rt(p.properties["Роль"]),
             fn: sel(p.properties["Функция"]),
             status: sel(p.properties["Статус"]),
