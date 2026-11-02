@@ -37,6 +37,10 @@
               {
                 "name": "Reviewer",
                 "color": "blue"
+              },
+              {
+                "name": "Warden",
+                "color": "default"
               }
             ]
           }
@@ -58,6 +62,9 @@
               }
             ]
           }
+        },
+        "Репозиторий": {
+          "rich_text": {}
         }
       }
     },

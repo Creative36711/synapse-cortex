@@ -335,7 +335,12 @@
       if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
       p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
       if (!validProfile(p)) {
-        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
+        const routeProblem = p.roleRepos.some((route) =>
+          !PROJECT_UUID.test(String(route.roleId || "")) ||
+          !p.repos.some((entry) => String(entry.repo || "").toLowerCase() === String(route.repo || "").toLowerCase()));
+        say(routeProblem
+          ? "Не сохранено: проверьте автозаполненные маршруты ролей. Для каждой роли нужен UUID страницы из базы «Роли», а выбранный owner/repository должен быть в списке репозиториев профиля."
+          : "Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
         return;
       }
       const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
@@ -516,17 +521,26 @@
           cursor = String(page.next_cursor || "");
           if (!cursor) break;
         }
-        const roles = rows.map((p) => {
-          const url = p.properties["Agent URL"]?.url || "";
-          const m = String(url).match(/\/agent\/([\w-]+)/);
-          return {
-            id: m ? m[1] : "",
-            name: rt(p.properties["Роль"]),
-            fn: sel(p.properties["Функция"]),
-            status: sel(p.properties["Статус"]),
-            repo: rt(p.properties["Репозиторий"]),
-          };
-        });
+        const configuredRepos = (Array.isArray(repos) ? repos : [])
+          .map((entry) => String(entry.repo || "").trim()).filter(Boolean);
+        const defaultOwner = String(find("repo").value || "").trim().split("/")[0];
+        const fullRepo = (value) => {
+          const raw = String(value || "").trim();
+          if (!raw || raw.includes(" ")) return "";
+          if (raw.includes("/")) return raw;
+          const configured = configuredRepos.find((repo) => repo.split("/").at(-1).toLowerCase() === raw.toLowerCase());
+          return configured || (defaultOwner ? `${defaultOwner}/${raw}` : "");
+        };
+        const roles = rows.map((p) => ({
+          // Role routes use the Notion page UUID, never the Agent URL slug.
+          id: String(p.id || "").trim(),
+          name: rt(p.properties["Роль"]),
+          fn: sel(p.properties["Функция"]),
+          status: sel(p.properties["Статус"]),
+          // Role tables often store just a repository slug; qualify it with the
+          // configured owner so it satisfies the profile's owner/repository contract.
+          repo: fullRepo(rt(p.properties["Репозиторий"])),
+        }));
         const active = roles.filter((r) => r.status === "Активна");
         if (!active.length) throw new Error("Нет активных ролей в базе «Роли».");
         const warden = active.find((r) => r.name === "Warden");
@@ -543,6 +557,11 @@
         }
         repos = uniqueRepos;
         ensureMain();
+        const mainEntry = repos.find((entry) => entry.main) || repos[0];
+        if (mainEntry) {
+          find("repo").value = mainEntry.repo;
+          find("branch").value = mainEntry.branch;
+        }
         renderRepos();
         routes = active.map((r) => ({ roleId: r.id, repo: r.repo || mainRepo })).filter((rt) => rt.roleId && rt.repo);
         renderRoutes();
