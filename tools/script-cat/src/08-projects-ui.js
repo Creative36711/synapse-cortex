@@ -412,6 +412,8 @@
       repos = [{ repo: "", branch: "main", main: true }];
       routes = [];
       renderRepos(); renderRoutes();
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       for (const field of fields) find(field).value = field === "branch" ? "main" : "";
       form.style.display = "block"; say("Заполните настройки. Ничего в сервисах не создаётся автоматически.");
       find("name").focus();
@@ -424,6 +426,8 @@
       for (const field of fields) find(field).value = p[field] || (field === "branch" ? "main" : "");
       find("name").value = `${p.name} — новая настройка`;
       loadProfileUi(p);
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       form.style.display = "block";
       say("Будет создан новый профиль с пустым состоянием и отдельными доступами; старый профиль не изменится.");
       find("name").focus();
@@ -438,6 +442,8 @@
       editingId = ACTIVE_PROFILE.id;
       for (const field of fields) find(field).value = ACTIVE_PROFILE[field] || (field === "branch" ? "main" : "");
       loadProfileUi(ACTIVE_PROFILE);
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       find("save").textContent = "Сохранить исправления и перезагрузить вкладку";
       find("form-title").textContent = "Исправить текущий профиль";
       form.style.display = "block";

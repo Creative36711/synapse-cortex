@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.6.0
+// @version      1.7.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -504,7 +504,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.6.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.7.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -2359,6 +2359,8 @@
       repos = [{ repo: "", branch: "main", main: true }];
       routes = [];
       renderRepos(); renderRoutes();
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       for (const field of fields) find(field).value = field === "branch" ? "main" : "";
       form.style.display = "block"; say("Заполните настройки. Ничего в сервисах не создаётся автоматически.");
       find("name").focus();
@@ -2371,6 +2373,8 @@
       for (const field of fields) find(field).value = p[field] || (field === "branch" ? "main" : "");
       find("name").value = `${p.name} — новая настройка`;
       loadProfileUi(p);
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       form.style.display = "block";
       say("Будет создан новый профиль с пустым состоянием и отдельными доступами; старый профиль не изменится.");
       find("name").focus();
@@ -2385,6 +2389,8 @@
       editingId = ACTIVE_PROFILE.id;
       for (const field of fields) find(field).value = ACTIVE_PROFILE[field] || (field === "branch" ? "main" : "");
       loadProfileUi(ACTIVE_PROFILE);
+      find("repos").style.display = "block";
+      find("routes").style.display = "block";
       find("save").textContent = "Сохранить исправления и перезагрузить вкладку";
       find("form-title").textContent = "Исправить текущий профиль";
       form.style.display = "block";
