@@ -1,0 +1,328 @@
+{
+  "_instructions": "Используй properties каждого объекта как схему записи Notion API; перед созданием или после него заполни options у «Кому» реальными именами ролей нового проекта. Не копируй старые ID и строки. Формулу создай отдельно после её полей и проверь.",
+  "databases": {
+    "roles": {
+      "title": "Роли",
+      "properties": {
+        "Роль": {
+          "title": {}
+        },
+        "Agent URL": {
+          "url": {}
+        },
+        "Устав": {
+          "url": {}
+        },
+        "Зона записи": {
+          "rich_text": {}
+        },
+        "Гейт": {
+          "rich_text": {}
+        },
+        "Функция": {
+          "select": {
+            "options": [
+              {
+                "name": "Coordinator",
+                "color": "purple"
+              },
+              {
+                "name": "Executor",
+                "color": "green"
+              },
+              {
+                "name": "Auditor",
+                "color": "orange"
+              },
+              {
+                "name": "Reviewer",
+                "color": "blue"
+              }
+            ]
+          }
+        },
+        "Статус": {
+          "select": {
+            "options": [
+              {
+                "name": "Активна",
+                "color": "green"
+              },
+              {
+                "name": "Ждёт",
+                "color": "yellow"
+              },
+              {
+                "name": "Отключена",
+                "color": "gray"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "missions": {
+      "title": "Миссии",
+      "properties": {
+        "Миссия": {
+          "title": {}
+        },
+        "ТЗ URL": {
+          "url": {}
+        },
+        "Создана": {
+          "date": {}
+        },
+        "Завершена": {
+          "date": {}
+        },
+        "Возвращена": {
+          "date": {}
+        },
+        "Круг": {
+          "number": {
+            "format": "number"
+          }
+        },
+        "ТЗ SHA": {
+          "rich_text": {}
+        },
+        "Координатор": {
+          "rich_text": {}
+        },
+        "Замечания": {
+          "rich_text": {}
+        },
+        "Итог": {
+          "rich_text": {}
+        },
+        "Состояние": {
+          "select": {
+            "options": [
+              {
+                "name": "Черновик",
+                "color": "gray"
+              },
+              {
+                "name": "Активна",
+                "color": "green"
+              },
+              {
+                "name": "Пауза",
+                "color": "yellow"
+              },
+              {
+                "name": "Завершена",
+                "color": "blue"
+              },
+              {
+                "name": "Провалена",
+                "color": "red"
+              },
+              {
+                "name": "Возвращена",
+                "color": "default"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "requests": {
+      "title": "Запросы",
+      "properties": {
+        "Запрос": {
+          "title": {}
+        },
+        "Sequence": {
+          "number": {
+            "format": "number"
+          }
+        },
+        "PR": {
+          "url": {}
+        },
+        "Started At": {
+          "date": {}
+        },
+        "Submitted At": {
+          "date": {}
+        },
+        "Миссия": {
+          "rich_text": {}
+        },
+        "Mission ID": {
+          "rich_text": {}
+        },
+        "Run ID": {
+          "rich_text": {}
+        },
+        "Recipient Agent ID": {
+          "rich_text": {}
+        },
+        "Output Drive File ID": {
+          "rich_text": {}
+        },
+        "Payload Drive File ID": {
+          "rich_text": {}
+        },
+        "Намерение": {
+          "rich_text": {}
+        },
+        "Инварианты": {
+          "rich_text": {}
+        },
+        "Acceptance": {
+          "rich_text": {}
+        },
+        "Свободно": {
+          "rich_text": {}
+        },
+        "Scope": {
+          "rich_text": {}
+        },
+        "Ответ": {
+          "rich_text": {}
+        },
+        "Branch": {
+          "rich_text": {}
+        },
+        "Report SHA": {
+          "rich_text": {}
+        },
+        "Dependency": {
+          "rich_text": {}
+        },
+        "Проверка": {
+          "rich_text": {}
+        },
+        "Кому": {
+          "select": {
+            "options": []
+          }
+        },
+        "Dispatch State": {
+          "select": {
+            "options": [
+              {
+                "name": "Draft",
+                "color": "gray"
+              },
+              {
+                "name": "Ready",
+                "color": "blue"
+              },
+              {
+                "name": "Running",
+                "color": "yellow"
+              },
+              {
+                "name": "Submitted",
+                "color": "orange"
+              },
+              {
+                "name": "Accepted",
+                "color": "green"
+              },
+              {
+                "name": "Rework",
+                "color": "red"
+              },
+              {
+                "name": "Blocked",
+                "color": "brown"
+              }
+            ]
+          }
+        },
+        "Check": {
+          "select": {
+            "options": [
+              {
+                "name": "pass",
+                "color": "green"
+              },
+              {
+                "name": "fail",
+                "color": "red"
+              },
+              {
+                "name": "none",
+                "color": "gray"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "feedback": {
+      "title": "Обратная связь",
+      "properties": {
+        "Вопрос": {
+          "title": {}
+        },
+        "Срок": {
+          "date": {}
+        },
+        "Доставлено": {
+          "date": {}
+        },
+        "Материал": {
+          "url": {}
+        },
+        "По умолчанию": {
+          "rich_text": {}
+        },
+        "Ответ": {
+          "rich_text": {}
+        },
+        "Варианты": {
+          "rich_text": {}
+        },
+        "Роль": {
+          "rich_text": {}
+        },
+        "Карточка": {
+          "rich_text": {}
+        },
+        "Миссия": {
+          "rich_text": {}
+        },
+        "Что блокирует": {
+          "rich_text": {}
+        },
+        "Статус": {
+          "select": {
+            "options": [
+              {
+                "name": "Ждёт",
+                "color": "orange"
+              },
+              {
+                "name": "Решено",
+                "color": "green"
+              },
+              {
+                "name": "Принят дефолт",
+                "color": "yellow"
+              },
+              {
+                "name": "Отменён",
+                "color": "gray"
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "afterCreate": {
+    "feedback": {
+      "Тип": {
+        "formula": {
+          "expression": "if(or(contains(lower(prop(\"Вопрос\")), \"предложени\"), contains(lower(prop(\"Вопрос\")), \"docs/decisions/\"), contains(lower(prop(\"Вопрос\")), \"adr\"), contains(lower(prop(\"Материал\")), \"docs/decisions/\")), \"Предложение\", \"Вопрос\")"
+        }
+      }
+    }
+  }
+}

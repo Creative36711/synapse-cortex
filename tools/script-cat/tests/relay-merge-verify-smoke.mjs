@@ -1,0 +1,234 @@
+// Проба 1.4.63: «слит» в маркере — заявка, а не факт; 404 без токена — не «PR нет».
+//
+// 24.10 на странице Build/Release висела активная «Create PR»: Arena не знает
+// о PR, который агент слил через `gh`. Тогда транспорт верил маркеру на слово.
+// 1.4.48 стала спрашивать GitHub — и в тот же день отправила готовый PR #37 в
+// Rework. Причина не в маркере: `example/relay-fixture` приватный, и анонимный
+// запрос к API отвечает на него 404 — ровно как на несуществующий PR. Отличить
+// «нет PR» от «не видно репозитория» может только токен.
+//
+// Здесь проверяется:
+//   • номер PR берётся и числом, и ссылкой, и с чужим репозиторием;
+//   • состояние спрашивается у GitHub с токеном и без;
+//   • 404 без токена = «не проверили», и 404 с токеном — тоже не «нет PR»;
+//   • 401/403 — тоже «не проверили», а не отказ в работе;
+//   • ложная заявка (open / closed) не принимается и даёт Rework;
+//   • в журнале сказано, подтвердил GitHub мерж или нет.
+
+import { readFileSync } from 'node:fs';
+import { strict as assert } from 'node:assert';
+
+const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
+
+// ── 1. Версия и разрешение хоста ───────────────────────────────────────────
+import { assertUserscriptVersionContract } from '../version-oracle.mjs';
+const versionMatch = assertUserscriptVersionContract(src);
+assert.match(src, /\/\/ @connect\s+api\.github\.com/, 'api.github.com разрешён в @connect');
+
+// ── 2. Номер и репозиторий PR ──────────────────────────────────────────────
+const refFrom = src.indexOf('  function prRef(result) {');
+// До конца githubPr: он нужен проверке и живёт между prRef и verifyMergeClaim.
+const refTo = src.indexOf('  /**\n   * Проверка «PR слит» из маркера.');
+assert.ok(refFrom > 0 && refTo > refFrom, 'prRef на месте');
+const { prRef } = new Function(
+  'C',
+  `${src.slice(refFrom, refTo)}\nreturn { prRef };`,
+)({ repo: 'example/relay-fixture' });
+
+assert.deepEqual(prRef({ pr: 37 }), { repo: 'example/relay-fixture', number: 37 }, 'число');
+assert.deepEqual(prRef({ pr: '#37' }), { repo: 'example/relay-fixture', number: 37 }, 'решётка');
+assert.deepEqual(
+  prRef({ pr: 'https://github.com/example/relay-fixture/pull/37' }),
+  { repo: 'example/relay-fixture', number: 37 },
+  'ссылка',
+);
+assert.deepEqual(
+  prRef({ pr: 'https://github.com/other/repo/pull/5' }),
+  { repo: 'other/repo', number: 5 },
+  'чужой репозиторий берётся из ссылки',
+);
+assert.equal(prRef({ pr: null }), null, 'без PR — нечего проверять');
+assert.equal(prRef({ pr: 'none' }), null, '«none» — тоже');
+assert.equal(prRef(null), null, 'без ответа — тоже');
+
+// ── 3. Состояние PR по GitHub ──────────────────────────────────────────────
+const verifyFrom = src.indexOf('  async function verifyMergeClaim(result, token = "") {');
+// Границей служит следующая функция, а не её докблок: слова «вернуть карточку»
+// встречаются раньше, в комментарии про Ready.
+const verifyTo = src.indexOf('  async function recoverLastClaim(adopt = true) {');
+assert.ok(verifyFrom > 0 && verifyTo > verifyFrom, 'verifyMergeClaim на месте');
+
+function makeVerify(answer, repoAnswer = { full_name: 'example/relay-fixture', private: true }) {
+  const block = `${src.slice(refFrom, refTo)}\n${src.slice(verifyFrom, verifyTo)}\nreturn { verifyMergeClaim };`;
+  const calls = [];
+  const fn = new Function('C', 'request', block);
+  const api = fn({ repo: 'example/relay-fixture' }, async (method, url, headers) => {
+    calls.push({ method, url, headers });
+    if (/\/pulls\//.test(url)) {
+      if (answer instanceof Error) throw answer;
+      return answer;
+    }
+    // Проверка «а токен-то репозиторий видит?» — отдельный запрос.
+    if (repoAnswer instanceof Error) throw repoAnswer;
+    return repoAnswer;
+  });
+  return { ...api, calls };
+}
+
+const merged = await makeVerify({ merged: true, merged_at: '2026-10-24T16:16:10Z', state: 'closed' })
+  .verifyMergeClaim({ pr: 37 }, 'ghp_token');
+assert.equal(merged.status, 'merged', 'слитый PR подтверждается');
+assert.match(merged.why, /PR #37 слит/, 'в причине номер и факт');
+
+const open = await makeVerify({ merged: false, state: 'open' }).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+assert.equal(open.status, 'open', 'открытый PR — не мерж');
+
+const closed = await makeVerify({ merged: false, state: 'closed' }).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+assert.equal(closed.status, 'closed', 'закрытый без мержа — тоже не мерж');
+
+// Токен есть, репозиторий виден, а PR не читается. Это всё равно не «нет PR»:
+// 24.10 на таком ответе слитый PR #37 уехал в Rework, поэтому статус — unknown.
+const missing = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+assert.equal(missing.status, 'unknown', '404 на PR не доказывает, что PR нет');
+assert.equal(missing.notFound, true, 'но это названо: PR не читается');
+
+// Токена нет — тот же 404 значит «приватный репозиторий не виден».
+const hidden = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 });
+assert.equal(hidden.status, 'unknown', 'без токена 404 — не «PR нет», а «не проверили»');
+assert.equal(hidden.needsToken, true, 'и это прямо названо нехваткой токена');
+assert.match(hidden.why, /приватный|токен/i, 'в причине сказано, чего не хватает');
+
+// Токен есть, но и репозиторий ему не виден: это «нет доступа», а не «нет PR».
+{
+  const noAccess = await makeVerify(new Error('HTTP 404: Not Found'), new Error('HTTP 404: Not Found'))
+    .verifyMergeClaim({ pr: 37 }, 'ghp_nowhere');
+  assert.equal(noAccess.status, 'unknown', 'невидимый репозиторий — не отказ работе');
+  assert.equal(noAccess.needsToken, true, 'и снова повод проверить доступ');
+  assert.match(noAccess.why, /доступ/, 'сказано, что проверить');
+}
+
+// Код в ошибке важнее текста: ScriptCat не всегда кладёт «HTTP 404» в message.
+const byStatus = Object.assign(new Error('Not Found'), { status: 404 });
+{
+  const byCode = await makeVerify(byStatus).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+  assert.equal(byCode.status, 'unknown', 'код берётся из e.status, а не только из текста');
+  assert.equal(byCode.notFound, true, 'и 404 по коду — тоже «не читается», а не «нет»');
+}
+
+for (const code of [401, 403]) {
+  const denied = Object.assign(new Error(`HTTP ${code}: Bad credentials`), { status: code });
+  const check = await makeVerify(denied).verifyMergeClaim({ pr: 37 }, 'ghp_bad');
+  assert.equal(check.status, 'unknown', `${code} — не приговор работе`);
+  assert.equal(check.needsToken, true, `${code} — повод проверить токен`);
+}
+
+const offline = await makeVerify(new Error('таймаут запроса')).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+assert.equal(offline.status, 'unknown', 'сеть — «проверить не удалось»');
+
+const noPr = await makeVerify({ merged: true }).verifyMergeClaim({ pr: null });
+assert.equal(noPr.status, 'unknown', 'без номера проверять нечего');
+
+// Токен уходит заголовком, а без токена запрос остаётся анонимным.
+{
+  const api = makeVerify({ merged: true, merged_at: '2026-10-24T16:16:10Z' });
+  await api.verifyMergeClaim({ pr: 37 }, 'ghp_secret');
+  assert.equal(api.calls[0].headers.Authorization, 'Bearer ghp_secret', 'токен в заголовке');
+  assert.match(api.calls[0].url, /api\.github\.com\/repos\/example\/relay-fixture\/pulls\/37/, 'адрес PR');
+}
+{
+  const api = makeVerify({ merged: true, merged_at: '2026-10-24T16:16:10Z' });
+  await api.verifyMergeClaim({ pr: 37 });
+  assert.equal(api.calls[0].headers.Authorization, undefined, 'без токена — без заголовка');
+}
+
+// ── 4. claimMerge: сначала проверка, потом вера ────────────────────────────
+const claimFrom = src.indexOf('  async function claimMerge(task, result, key, note = "") {');
+const claimTo = src.indexOf('  /**\n   * PR закрыт.', claimFrom);
+assert.ok(claimFrom > 0 && claimTo > claimFrom, 'claimMerge на месте');
+const claimBlock = src.slice(claimFrom, claimTo);
+assert.ok(
+  claimBlock.indexOf('await verifyMergeClaim(result, ghToken())') < claimBlock.indexOf('GM_setValue(key, true)'),
+  'проверка идёт раньше, чем заявка принимается',
+);
+
+async function runClaim(check) {
+  const store = new Map();
+  const logged = [];
+  const fn = new Function(
+    'C', 'GM_getValue', 'GM_setValue', 'log', 'waitFor', 'mergedFlag', 'continueButton',
+    'finishMerge', 'patience', 'prLabelOf', 'verifyMergeClaim', 'ghToken', 'sleep',
+    `${claimBlock}\nreturn { claimMerge };`,
+  );
+  const api = fn(
+    { mergeGraceMs: 90000 },
+    (k, d) => (store.has(k) ? store.get(k) : d),
+    (k, v) => store.set(k, v),
+    (text, error, options) => logged.push({ text, error, options }),
+    async () => null, // бейджа Merged и Continue на странице нет
+    () => null,
+    () => null,
+    async () => 'merged',
+    (ms) => Math.min(ms, 0),
+    (r) => `PR #${r.pr}`,
+    async () => check,
+    () => 'ghp_secret',
+    async () => {},
+  );
+  const result = await api.claimMerge({ id: 'card-1' }, { pr: 37 }, 'cfn-merged:card-1');
+  return { result, store, logged };
+}
+
+{
+  const { result, store, logged } = await runClaim({ status: 'merged', why: 'PR #37 слит 2026-10-24T16:16:10Z' });
+  assert.equal(result, 'claimed', 'подтверждённый мерж принимается без бейджа');
+  assert.equal(store.get('cfn-merged:card-1'), true, 'карточка помечена слитой');
+  assert.ok(logged.some((l) => /GitHub подтвердил/.test(l.text)), 'в журнале сказано, кто подтвердил');
+}
+{
+  const { result, store, logged } = await runClaim({ status: 'open', why: 'PR #37 ещё открыт' });
+  assert.equal(result, 'claim-rejected', 'ложная заявка не принимается');
+  assert.equal(store.get('cfn-merged:card-1'), undefined, 'карточка не помечена слитой');
+  assert.ok(logged.some((l) => l.error && /не подтвердилась/.test(l.text)), 'ошибка названа в журнале');
+}
+{
+  const { result, logged } = await runClaim({ status: 'unknown', why: 'GitHub не ответил: таймаут запроса' });
+  assert.equal(result, 'claimed', 'без проверки остаётся прежнее правило');
+  assert.ok(
+    logged.some((l) => /проверить по GitHub не удалось/.test(l.text)),
+    'и об этом сказано прямо, а не молча',
+  );
+}
+{
+  // Приватный репозиторий без токена: это не повод для Rework, но и не тишина.
+  const { result, logged } = await runClaim({
+    status: 'unknown',
+    needsToken: true,
+    why: 'PR #37 анонимно не виден: example/relay-fixture приватный — нужен токен GitHub в «⚙ Подключения»',
+  });
+  assert.equal(result, 'claimed', 'без токена заявка не отклоняется');
+  assert.ok(logged.some((l) => /откройте «⚙ Подключения» и сохраните токен/.test(l.text)), 'сказано, как включить проверку');
+}
+
+// ── 5. Ложная заявка возвращает карточку в Rework ──────────────────────────
+const submitFrom = src.indexOf('  async function submitExecutor(role, expect, manual = false) {');
+const submitBlock = src.slice(submitFrom, src.indexOf('  // ───────────────────────────── цикл ─────────────────────────────', submitFrom));
+assert.match(submitBlock, /if \(merged === "claim-rejected"\) \{/, 'ветка ложной заявки на месте');
+const rejectedAt = submitBlock.indexOf('if (merged === "claim-rejected") {');
+const rework = submitBlock.slice(rejectedAt, rejectedAt + 1600);
+assert.match(rework, /"Dispatch State": \{ select: \{ name: "Rework" \} \}/, 'карточка уходит в Rework');
+assert.match(rework, /claim-rejected -->/, 'причина пишется в журнал попытки отдельным маркером');
+assert.match(rework, /нужна повторная выдача/, 'в причине сказано, что делать');
+assert.ok(
+  rejectedAt < submitBlock.indexOf('if ((merged === "closed" || merged === "unconfirmed")'),
+  'проверяется раньше прежней ветки «PR закрыт»',
+);
+
+// ── 6. Заявка запоминается для возврата карточки ───────────────────────────
+assert.match(submitBlock, /GM_setValue\(K\.lastResult, \{/, 'выдача запоминается до записи в Notion');
+assert.ok(
+  submitBlock.indexOf('GM_setValue(K.lastResult') < rejectedAt,
+  'запомненное состояние есть уже к моменту отказа',
+);
+assert.match(src, /K\.ghAsk/, 'после нехватки токена скрипт сам показывает, где его взять');
+
+console.log('OK: relay 1.4.63 — заявка о мерже проверяется по GitHub, 404 без токена не считается отказом');
