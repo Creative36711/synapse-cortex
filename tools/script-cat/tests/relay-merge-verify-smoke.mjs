@@ -26,7 +26,7 @@ const versionMatch = assertUserscriptVersionContract(src);
 assert.match(src, /\/\/ @connect\s+api\.github\.com/, 'api.github.com разрешён в @connect');
 
 // ── 2. Номер и репозиторий PR ──────────────────────────────────────────────
-const refFrom = src.indexOf('  function prRef(result) {');
+const refFrom = src.indexOf('  function prRef(result,');
 // До конца githubPr: он нужен проверке и живёт между prRef и verifyMergeClaim.
 const refTo = src.indexOf('  /**\n   * Проверка «PR слит» из маркера.');
 assert.ok(refFrom > 0 && refTo > refFrom, 'prRef на месте');
@@ -52,7 +52,7 @@ assert.equal(prRef({ pr: 'none' }), null, '«none» — тоже');
 assert.equal(prRef(null), null, 'без ответа — тоже');
 
 // ── 3. Состояние PR по GitHub ──────────────────────────────────────────────
-const verifyFrom = src.indexOf('  async function verifyMergeClaim(result, token = "") {');
+const verifyFrom = src.indexOf('  async function verifyMergeClaim(result, token = "",');
 // Границей служит следующая функция, а не её докблок: слова «вернуть карточку»
 // встречаются раньше, в комментарии про Ready.
 const verifyTo = src.indexOf('  async function recoverLastClaim(adopt = true) {');
@@ -147,7 +147,7 @@ const claimTo = src.indexOf('  /**\n   * PR закрыт.', claimFrom);
 assert.ok(claimFrom > 0 && claimTo > claimFrom, 'claimMerge на месте');
 const claimBlock = src.slice(claimFrom, claimTo);
 assert.ok(
-  claimBlock.indexOf('await verifyMergeClaim(result, ghToken())') < claimBlock.indexOf('GM_setValue(key, true)'),
+  claimBlock.indexOf('verifyMergeClaim(result') < claimBlock.indexOf('GM_setValue(key, true)'),
   'проверка идёт раньше, чем заявка принимается',
 );
 
@@ -156,7 +156,7 @@ async function runClaim(check) {
   const logged = [];
   const fn = new Function(
     'C', 'GM_getValue', 'GM_setValue', 'log', 'waitFor', 'mergedFlag', 'continueButton',
-    'finishMerge', 'patience', 'prLabelOf', 'verifyMergeClaim', 'ghToken', 'sleep',
+    'finishMerge', 'patience', 'prLabelOf', 'verifyMergeClaim', 'ghToken', 'dispatchTarget', 'sleep',
     `${claimBlock}\nreturn { claimMerge };`,
   );
   const api = fn(
@@ -172,6 +172,8 @@ async function runClaim(check) {
     (r) => `PR #${r.pr}`,
     async () => check,
     () => 'ghp_secret',
+    // dispatchTarget: цель выдачи в этой пробии не развёрнута — глобальный конфиг.
+    () => null,
     async () => {},
   );
   const result = await api.claimMerge({ id: 'card-1' }, { pr: 37 }, 'cfn-merged:card-1');

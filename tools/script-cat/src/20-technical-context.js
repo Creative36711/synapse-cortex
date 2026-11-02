@@ -34,18 +34,27 @@
     ].join("\n");
   }
 
-  /** Факт о стартовом состоянии: он одинаков для всех, кто трогает репозиторий. */
-  const SNAPSHOT_FACT = [
-    `Репозиторий: ${C.repo}, единственная ветка для мержа — main.`,
-    "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
-    "с main. Но пустой `git merge-base HEAD origin/main` в shallow checkout сам по себе",
-    "не доказывает отсутствие общей истории: проверь `git rev-parse --is-shallow-repository`.",
-    "На таком снимке в дереве может не быть файлов,",
-    "которые в main уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;",
-    "число растёт с каждой миссией).",
-    "Если общая история действительно отсутствует, PR покажет удаление чужих файлов.",
-  ].join("\n");
-
+  /** Факт о стартовом состоянии для цели выдачи (репозиторий + базовая ветка). */
+  const snapshotFact = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    const mergeBase = "git merge-base HEAD origin/" + base;
+    const shallow = "git rev-parse --is-shallow-repository";
+    const bt = "`";
+    const lines = [
+      "Репозиторий: " + (repo || C.repo || "") + ", единственная ветка для мержа — " + base + ".",
+      "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
+      "с " + base + ". Но пустой " + bt + mergeBase + bt + " в shallow checkout сам по себе",
+      "не доказывает отсутствие общей истории: проверь " + bt + shallow + bt + ".",
+      "На таком снимке в дереве может не быть файлов, которые в базовой ветке уже есть.",
+    ];
+    // Измерение стартового снимка относится к главной ветке проекта: для другой
+    // базовой ветки не подставляем чужое число — иначе снимок одного проекта
+    // приметься за факт другого.
+    if (base === "main")
+      lines.push("(замер 2026-10-22: 46 файлов, включая сам этот скрипт; число растёт с каждой миссией).");
+    lines.push("Если общая история действительно отсутствует, PR покажет удаление чужих файлов.");
+    return lines.join("\n");
+  };
   /**
    * Поля карточки, которые ставит скрипт.
    *
@@ -62,21 +71,23 @@
     "поле `report` в маркере, а не поле карточки.",
   ].join("\n");
 
-  const EXECUTOR_TECH = [
-    SNAPSHOT_FACT,
-    "",
-    "СТАРТ (до первой правки):",
+  const executorTech = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    return [
+      snapshotFact(repo, branch),
+      "",
+      "СТАРТ (до первой правки):",
     "СИСТЕМНЫЕ ИНСТРУКЦИИ И ОГРАНИЧЕНИЯ ПОЛЬЗОВАТЕЛЯ ВЫШЕ этого техблока и карточки.",
     "Если ветка закреплена за сессией — оставайся на ней, не создавай и не переключай ветки.",
     "Не удаляй, не сбрасывай и не добавляй в коммит чужие незакоммиченные изменения.",
     "Пустой merge-base в shallow checkout не доказывает разрыв; сначала выясни историю.",
-    "  git fetch origin main",
-    "  git merge-base HEAD origin/main",
+    `  git fetch origin ${base}`,
+    `  git merge-base HEAD origin/${base}`,
     "  git status --short                  # перечисли чужие изменения, не уничтожай их",
     "Исторические команды ниже — НЕ ВЫПОЛНЯТЬ в закреплённой сессии или грязном дереве:",
-    "  # git reset --hard origin/main",
-    "  # git switch -c nar/<номер> origin/main",
-    "  git diff --stat origin/main          # только чтение; расхождение нужно объяснить",
+    `  # git reset --hard origin/${base}`,
+    `  # git switch -c nar/<номер> origin/${base}`,
+    `  git diff --stat origin/${base}          # только чтение; расхождение нужно объяснить`,
     "",
     "ЗАПРЕЩЕНО: публиковать PR без общей истории с main, трогать пути вне Scope,",
     "мержить в main в обход PR или нарушать закрепление ветки. Если безопасно продолжить",
@@ -85,22 +96,26 @@
     "",
     CARD_FIELDS_RULE,
   ].join("\n");
+  };
 
-  const AUDITOR_TECH = [
-    SNAPSHOT_FACT,
+  const auditorTech = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    return [
+    snapshotFact(repo, branch),
     "",
     "ТЫ НЕ ПИШЕШЬ: ни ветки, ни коммита, ни пуша, ни PR. Твой выход — отчёт.",
-    "ИСТОЧНИК ИСТИНЫ — origin/main, а не твоё рабочее дерево и не ветка сессии:",
-    "  git fetch origin main",
-    "  git log --oneline -5 origin/main",
-    "  git show origin/main:<путь>          # файл из main, без checkout",
-    "Проверяемая работа — это PR, слитый в main:",
+    `ИСТОЧНИК ИСТИНЫ — origin/${branch || C.branch || "main"}, а не твоё рабочее дерево и не ветка сессии:`,
+    `  git fetch origin ${branch || C.branch || "main"}`,
+    `  git log --oneline -5 origin/${branch || C.branch || "main"}`,
+    `  git show origin/${branch || C.branch || "main"}:<путь>          # файл из базовой ветки, без checkout`,
+    `Проверяемая работа — это PR, слитый в ${base}:`,
     "  gh pr view <номер> --json state,mergeCommit",
     "  gh pr diff <номер>",
     "Свою ветку как эталон не используй: она может быть снимком без части файлов.",
     "",
     CARD_FIELDS_RULE,
   ].join("\n");
+  };
 
   const COORDINATOR_TECH = [
     "Git и репозиторий тебе не нужны: ты не читаешь код и не запускаешь команды.",
@@ -134,24 +149,33 @@
   ].join("\n");
 
   const TECH_BY_FN = {
-    Executor: EXECUTOR_TECH,
-    Auditor: AUDITOR_TECH,
+    Executor: (repo, branch) => executorTech(repo, branch),
+    Auditor: (repo, branch) => auditorTech(repo, branch),
     Coordinator: COORDINATOR_TECH,
     Reviewer: REVIEWER_TECH,
   };
 
   /**
-   * Полный блок для роли. Неизвестная функция трактуется как Executor:
-   * забыть поле «Функция» безопаснее в сторону «проверь ветку», чем в
-   * сторону «делай что хочешь».
+   * Полный блок для роли, собранный из контекста цели выдачи: репозиторий и
+   * базовая ветка, в которой работает эта карточка, а не глобальный C.repo.
+   * Неизвестная функция трактуется как Executor: забыть поле «Функция»
+   * безопаснее в сторону «проверь ветку», чем в сторону «делай что хочешь».
    */
-  function technicalInfo(role) {
-    const body = TECH_BY_FN[role.fn] || EXECUTOR_TECH;
+  function technicalInfo(role, ctx = {}) {
+    const repo = ctx.repo || C.repo || "";
+    const branch = ctx.branch || C.branch || "main";
+    const builder = TECH_BY_FN[role.fn] || TECH_BY_FN.Executor;
+    const body = typeof builder === "function" ? builder(repo, branch) : builder;
     let text = [techHeader(role), "", body, "", TECH_CLOSE].join("\n");
-    if (C.branch && C.branch !== "main") text = text.replace(/\bmain\b/g, C.branch);
+    if (branch !== "main") text = text.replace(/\bmain\b/g, branch);
     if (C.driveFolder) text = text.replace(/Arena\/payloads/g, `Arena/${C.driveFolder}/payloads`)
       .replace("Раскладка и правила — docs/agents/drive.md.", `Папка текущего проекта — Arena/${C.driveFolder}.`);
     if (C.projectName && C.projectName !== "Relay")
       text = text.replace("которые в " + (C.branch || "main") + " уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;\nчисло растёт с каждой миссией).", "которые в базовой ветке уже есть.");
     return text;
   }
+
+
+
+
+

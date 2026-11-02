@@ -32,7 +32,7 @@ function make({ ui = false, createOnly = false, store = new Map(), branch = 'mai
   const fn = new Function(
     'K', 'GM_getValue', 'GM_setValue', 'C', 'log', 'hasMergedClaim',
     'mergedFlag', 'closedFlag', 'continueButton', 'createPr', 'mergePr', 'finishMerge', 'finishClosed',
-    'hasPrUi', 'waitFor', 'prLabelOf', 'sleep', 'verifyMergeClaim', 'ghToken',
+    'hasPrUi', 'waitFor', 'prLabelOf', 'sleep', 'verifyMergeClaim', 'ghToken', 'dispatchTarget',
     // 1.4.78: память о мерже ведётся по выдаче, поэтому нужен разбор «Run ID».
     'rt',
     // Проба идёт в видимой вкладке: ожидание не растягивается.
@@ -71,6 +71,8 @@ function make({ ui = false, createOnly = false, store = new Map(), branch = 'mai
     // GitHub подтверждает заявку: проба про поведение страницы, не про проверку.
     async () => ({ status: 'merged', why: 'PR #35 слит' }),
     () => 'ghp_test',
+    // dispatchTarget: в этой пробии нет ожидания выдачи, цель — глобальный конфиг (C.repo/C.branch).
+    () => null,
     (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || '').join(''),
   );
   return { ensureMerged, logs, calls, store };

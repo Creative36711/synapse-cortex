@@ -39,6 +39,7 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
     'roles', 'roleRows', 'norm', 'rt', 'gateway', 'patch', 'taskLogEntry', 'executorPrompt',
     'log', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
     'notion', 'taskState', 'taskRole', 'GM_getValue', 'GM_setValue', 'pause', 'K',
+    'profileSessionRepo', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
     'answerStampKey', 'reworkKey', 'taskPreflight',
     `${src.slice(from, to)}; return dispatchTask;`,
@@ -78,6 +79,9 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
     },
     (text) => calls.push({ action: 'pause', text }),
     { pending: 'cfn-pending', expect: 'cfn-expect' },
+    // Цель выдачи в этой пробии — глобальный конфиг профиля.
+    (id) => 'example/relay-fixture',
+    (repo) => 'main',
     // 1.4.78: снятие следов повторной работы проверяется отдельной пробой
     // (relay-rework-return-smoke.mjs); здесь важно, что обычная выдача идёт
     // прежним путём.

@@ -114,8 +114,14 @@ function harness({ reviewRequired = true } = {}) {
   };
   const pause = (reason, context = {}) => pauses.push({ reason, ...context });
   const env = {
-    C: { minAnswerChars: 200, markerReminders: 2, reworkLimit: 3 }, Date: TestDate,
+    C: { minAnswerChars: 200, markerReminders: 2, reworkLimit: 3, repo: 'example/relay-fixture' }, Date: TestDate,
     K: { expect: 'expect', pending: 'pending', lastResult: 'lastResult', ghAsk: 'ghAsk' }, GM_getValue, GM_setValue,
+    prRef: (result, targetRepo) => {
+      const raw = String((result && result.pr) ?? '').trim();
+      if (!raw) return null;
+      const num = raw.replace(/^#/, '').match(/^(\d+)$/);
+      return num ? { repo: String(targetRepo || C.repo || ''), number: Number(num[1]) } : null;
+    },
     norm: (x) => String(x || '').replace(/-/g, '').toLowerCase(), rt: propText, taskState: state,
     taskTitle: (p) => propText(p?.properties?.['Запрос']),
     richText: (v) => [{ type: 'text', text: { content: String(v) } }],
@@ -145,7 +151,7 @@ function harness({ reviewRequired = true } = {}) {
       notion, patch, gateway, activeMission, lastClosedMission, queueOf, messagesAfter, messages,
       roleFromPath, isUserNode, nodeId, messageRaw, roles, goTo, log, pause, autoOn, autoSet,
       setStatus, missionKind, nowIso, oneLine, firstLine, questionInMarker, askQuestion,
-      ensureMerged, prDeclined, prUrl, hasMergedClaim, rememberAnswerStamp, lastMergeCheck,
+      ensureMerged, prDeclined, prUrl, prRef, hasMergedClaim, rememberAnswerStamp, lastMergeCheck,
       markerMissing, looseResult, stillWorking, staleBranchRefusal, retryStaleBranchHandoff,
       consumePending, returnMission } = env;
     ${parser}\n${ids}\n${missionMatch}\n${cardBinding}\n${retained}\n${report}\n${dispatch}\n${closeMission}\n${reviewStep}\n${adopt}\n${notice}\n${order}

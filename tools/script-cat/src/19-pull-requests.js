@@ -179,14 +179,17 @@
    * базовую ветку, а DOM-состояние повторно сверяется с GitHub.
    */
   async function ensureMerged(task, result) {
-    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result) : "";
+    const target = dispatchTarget();
+    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, target ? target.repo : null) : "";
     if (foreign) { lastMergeCheck = { status: "boundary", why: foreign }; return "boundary"; }
     const scopedProject = typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy;
     let projectCheck = null;
     if (scopedProject) {
       // И до запасных кнопок нужен конкретный PR, его репозиторий и base.
       // Бейдж Arena сам по себе не доказывает, что PR относится к проекту.
-      projectCheck = await verifyMergeClaim(result, ghToken());
+      // Проверяем именно цель выдачи (репозиторий + базовая ветка из снимка),
+      // а не всегда глобальный C.repo.
+      projectCheck = await verifyMergeClaim(result, ghToken(), target || undefined);
       if (projectCheck.status === "boundary" || projectCheck.status === "unknown") {
         lastMergeCheck = projectCheck;
         return "boundary";
@@ -355,7 +358,8 @@
     // 24.10 на экране Build/Release висела активная «Create PR» (Arena не
     // знает о PR, слитом через `gh`), и отличить сделанную работу от
     // выдуманной было нечем. Теперь состояние спрашиваем у GitHub.
-    const check = await verifyMergeClaim(result, ghToken());
+    const target = dispatchTarget();
+    const check = await verifyMergeClaim(result, ghToken(), target || undefined);
     lastMergeCheck = check;
     if (check.status === "boundary" || (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && check.status === "unknown"))
       return "boundary";
@@ -445,12 +449,12 @@
    */
   const ghToken = () => String(GM_getValue(K.ghToken, "") || "").trim();
 
-  /** Ссылка на PR: принимаем и номер, и готовый URL. */
-  function prUrl(pr) {
+  /** Ссылка на PR: принимаем и номер, и готовый URL. `repo` — репозиторий цели выдачи. */
+  function prUrl(pr, repo = C.repo) {
     const value = String(pr ?? "").trim().replace(/^#/, "");
     if (!value) return "";
     if (/^https?:\/\//.test(value)) return value;
-    return /^\d+$/.test(value) ? `https://github.com/${C.repo}/pull/${value}` : "";
+    return /^\d+$/.test(value) ? `https://github.com/${repo}/pull/${value}` : "";
   }
 
   /** Подпись PR для журнала: номер или ссылка из маркера. */
@@ -463,20 +467,36 @@
    * Номер и репозиторий PR из маркера.
    *
    * Принимаем и число, и «#37», и полный адрес: агент может сослаться на PR
-   * словами. Адрес важнее номера — он называет репозиторий, а номер без
-   * репозитория проверяется в нашем.
+   * словами. Адрес важнее номера — он называет репозиторий. Номер без
+   * репозитория проверяется в репозитории цели выдачи (`targetRepo`), а не
+   * всегда в `C.repo`.
    */
-  function prRef(result) {
+  function prRef(result, targetRepo = C.repo) {
     const raw = String((result && result.pr) ?? "").trim();
     if (!raw) return null;
     const url = raw.match(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i);
     if (url) return { repo: `${url[1]}/${url[2]}`, number: Number(url[3]) };
     const num = raw.replace(/^#/, "").match(/^(\d+)$/);
-    return num ? { repo: C.repo, number: Number(num[1]) } : null;
+    return num ? { repo: String(targetRepo || C.repo || ""), number: Number(num[1]) } : null;
+  }
+
+  /** Снимок цели выдачи из текущего ожидания: репозиторий и базовая ветка. */
+  function dispatchTarget() {
+    try {
+      const expect = GM_getValue(K.expect, null);
+      if (expect && (expect.targetRepo || expect.targetBranch)) {
+        return {
+          repo: String(expect.targetRepo || C.repo || ""),
+          branch: String(expect.targetBranch || C.branch || "main"),
+        };
+      }
+    } catch { /* ожидание недоступно — работаем с глобальным конфигом */ }
+    return null;
   }
 
   /** Явная чужая или некорректная ссылка не доказывает мерж нашего проекта. */
-  function projectPrBoundary(result) {
+  function projectPrBoundary(result, targetRepo = null) {
+    const repo = String(targetRepo || C.repo || "");
     const raw = String((result && result.pr) ?? "").trim();
     if (!raw || /^(none|null|no|нет|—|-)$/i.test(raw)) {
       return typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && hasMergedClaim(result)
@@ -492,9 +512,9 @@
           return "Ссылка PR не является адресом GitHub pull request.";
       } catch { return "Некорректная ссылка PR."; }
     }
-    const ref = prRef(result);
-    if (ref && ref.repo.toLowerCase() !== String(C.repo || "").toLowerCase())
-      return `PR относится к ${ref.repo}, а этот профиль работает с ${C.repo}.`;
+    const ref = prRef(result, repo);
+    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase())
+      return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
     return "";
   }
 
@@ -531,21 +551,23 @@
    * `needsToken` — проверка упёрлась в доступ, а не в состояние PR: приватный
    * репозиторий без токена отвечает 404, и это нельзя читать как «PR нет».
    */
-  async function verifyMergeClaim(result, token = "") {
-    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result) : "";
+  async function verifyMergeClaim(result, token = "", target = null) {
+    const repo = String((target && target.repo) || C.repo || "");
+    const branch = String((target && target.branch) || C.branch || "main");
+    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, repo) : "";
     if (foreign) return { status: "boundary", why: foreign };
-    const ref = prRef(result);
+    const ref = prRef(result, repo);
     if (!ref) return { status: "unknown", why: "в маркере нет номера PR" };
     try {
       const pr = await githubPr(ref.repo, ref.number, token);
       if (!pr || typeof pr !== "object") return { status: "unknown", why: "GitHub ответил пустым ответом" };
       if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy &&
-          String(pr.base?.repo?.full_name || "").toLowerCase() !== String(C.repo || "").toLowerCase())
-        return { status: "boundary", why: "GitHub не подтвердил репозиторий базовой ветки PR этого проекта." };
-      if (pr.base?.ref && C.branch && pr.base.ref !== C.branch)
-        return { status: "boundary", why: `PR направлен в ${pr.base.ref}, а базовая ветка проекта — ${C.branch}.` };
+          String(pr.base?.repo?.full_name || "").toLowerCase() !== repo.toLowerCase())
+        return { status: "boundary", why: `GitHub не подтвердил репозиторий базовой ветки PR цели выдачи (${repo}).` };
+      if (pr.base?.ref && branch && pr.base.ref !== branch)
+        return { status: "boundary", why: `PR направлен в ${pr.base.ref}, а базовая ветка цели выдачи — ${branch}.` };
       if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && !pr.base?.ref)
-        return { status: "boundary", why: "GitHub не подтвердил базовую ветку PR этого проекта." };
+        return { status: "boundary", why: "GitHub не подтвердил базовую ветку PR цели выдачи." };
       const merged = pr.merged === true || Boolean(pr.merged_at);
       if (merged) return { status: "merged", why: `PR #${ref.number} слит ${pr.merged_at || ""}`.trim(), pr };
       if (String(pr.state || "").toLowerCase() === "closed")
@@ -606,7 +628,9 @@
   async function recoverLastClaim(adopt = true) {
     const last = GM_getValue(K.lastResult, null);
     if (!last || !last.dispatch_id) return { ok: false, text: "Нет запомненной выдачи: возвращать нечего." };
-    const check = await verifyMergeClaim(last.result || last, ghToken());
+    const target = last && (last.targetRepo || last.targetBranch)
+      ? { repo: last.targetRepo, branch: last.targetBranch } : null;
+    const check = await verifyMergeClaim(last.result || last, ghToken(), target);
     if (check.status !== "merged")
       return { ok: false, text: `GitHub мерж не подтверждает: ${check.why}. Карточка не тронута.` };
     const page = await notion("GET", `pages/${last.dispatch_id}`);
@@ -719,7 +743,9 @@
     const last = GM_getValue(K.lastResult, null);
     if (!last || last.verdict !== "claim-rejected" || last.recoveredAt) return;
     healedThisPage = true;
-    const check = await verifyMergeClaim(last.result || last, ghToken());
+    const target = last && (last.targetRepo || last.targetBranch)
+      ? { repo: last.targetRepo, branch: last.targetBranch } : null;
+    const check = await verifyMergeClaim(last.result || last, ghToken(), target);
     if (check.status !== "merged") return;
     log(
       `Проверка ошиблась: GitHub подтвердил мерж ${prLabelOf(last.result || last)} — ` +

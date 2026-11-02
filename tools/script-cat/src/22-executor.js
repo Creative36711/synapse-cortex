@@ -347,6 +347,8 @@
     // Что решила проверка — запоминаем до записи в Notion. Если она ошиблась,
     // «Подключения» → «Вернуть карточку» перепроверит GitHub и вернёт Submitted, не гоняя
     // исполнителя по второму кругу.
+    const expectSnapshot = GM_getValue(K.expect, null);
+    const prRefResult = result && result.pr ? prRef(result, expectSnapshot && expectSnapshot.targetRepo ? expectSnapshot.targetRepo : C.repo) : null;
     GM_setValue(K.lastResult, {
       at: Date.now(),
       dispatch_id: result.dispatch_id,
@@ -359,6 +361,14 @@
       roleName: role.name,
       verdict: merged,
       why: (lastMergeCheck && lastMergeCheck.why) || "",
+      // Снимок цели выдачи: репозиторий сессии роли, целевой репозиторий и
+      // его базовая ветка. Восстановление и повторная проверка опираются на
+      // него, а не на текущий глобальный конфиг профиля.
+      sessionRepo: expectSnapshot && expectSnapshot.sessionRepo ? String(expectSnapshot.sessionRepo) : (C.repo || ""),
+      targetRepo: expectSnapshot && expectSnapshot.targetRepo ? String(expectSnapshot.targetRepo) : (C.repo || ""),
+      targetBranch: expectSnapshot && expectSnapshot.targetBranch ? String(expectSnapshot.targetBranch) : (C.branch || "main"),
+      prRepo: prRefResult ? prRefResult.repo : null,
+      prNumber: prRefResult ? prRefResult.number : null,
       result: {
         pr: result.pr ?? null,
         merged: result.merged === true,
@@ -420,10 +430,11 @@
     // различаем по маркеру. Без заявки о мерже работа в main не попала —
     // возвращаем карточку в Rework с причиной, решение остаётся за Координатором.
     if ((merged === "closed" || merged === "unconfirmed") && !hasMergedClaim(result)) {
+      const targetBranch = expect && expect.targetBranch ? expect.targetBranch : (C.branch || "main");
       const reason =
         merged === "closed"
-          ? `PR закрыт без мержа (Closed). Работа в ${(typeof C !== "undefined" && C.branch) || "main"} не попала — нужна повторная выдача.`
-          : `Исполнитель не заявил о мерже (нет merged: true) и PR не открыт. Работа в ${(typeof C !== "undefined" && C.branch) || "main"} не попала — нужна повторная выдача.`;
+          ? `PR закрыт без мержа (Closed). Работа в ${targetBranch} не попала — нужна повторная выдача.`
+          : `Исполнитель не заявил о мерже (нет merged: true) и PR не открыт. Работа в ${targetBranch} не попала — нужна повторная выдача.`;
       try {
         await gateway("append", logId, {
           marker: `<!-- CF_DISPATCH ${result.dispatch_id}:${result.run_id}:closed -->`,
@@ -460,7 +471,8 @@
     };
     if (typeof result.check === "number") props["Check"] = { select: { name: result.check === 0 ? "pass" : "fail" } };
     if (result.report) props["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
-    const link = prUrl(result.pr);
+    const targetRepo = expect && expect.targetRepo ? expect.targetRepo : C.repo;
+    const link = prUrl(result.pr, targetRepo);
     if (link) props["PR"] = { url: link };
     // Время записи ответа глазами Notion: по нему потом видно, трогал ли
     // карточку кто-то ещё (Rework → Ready). Часы браузера и Notion разные,

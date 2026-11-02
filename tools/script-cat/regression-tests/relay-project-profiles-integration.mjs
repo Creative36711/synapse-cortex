@@ -113,8 +113,8 @@ transport = gateway({ ...A, legacy: false }, async (action, _file, extra) => { s
 await assert.rejects(() => transport('read', 'file', {}), /не подтвердил этот проект/); assert.deepEqual(seen.map((r) => r.action), ['ping']);
 
 // Чужой PR не вызывает HTTP, не может стать подтверждением, не исправляет карточку.
-const pr = cut('  function prRef(result) {', '  /** Заголовки GitHub API.');
-const verify = cut('  async function verifyMergeClaim(result, token = "") {', '  /**\n   * Вернуть карточку');
+const pr = cut('  function prRef(result, targetRepo', '  /** Заголовки GitHub API.');
+const verify = cut('  async function verifyMergeClaim(result, token = "",', '  /**\n   * Вернуть карточку');
 let sent = [], response = { merged: true, base: { ref: A.branch, repo: { full_name: A.repo } } };
 const verifyFn = new Function('C', 'ACTIVE_PROFILE', 'URL', 'githubPr', 'request', 'githubHeaders', 'hasMergedClaim', `${pr}\n${verify}\nreturn { projectPrBoundary, verifyMergeClaim };`)(
   { repo: A.repo, branch: A.branch }, { legacy: false }, URL,
@@ -145,13 +145,13 @@ const ensureSource = cut('  async function ensureMerged(task, result) {', '  asy
 async function runEnsure(legacy, statuses, surface = 'merged', rememberedPr = null) {
   const checks = [], finishes = [];
   const sandbox = new Function('ACTIVE_PROFILE','projectPrBoundary','verifyMergeClaim','ghToken','hasMergedClaim',
-    'K','GM_getValue','rt','hasPrUi','waitFor','patience','C','mergedFlag','closedFlag','continueButton','finishMerge','finishClosed','prRef',
+    'K','GM_getValue','rt','hasPrUi','waitFor','patience','C','mergedFlag','closedFlag','continueButton','finishMerge','finishClosed','prRef', 'dispatchTarget',
     `let lastMergeCheck = null;\n${ensureSource}\nreturn { ensureMerged, check:()=>lastMergeCheck };`)(
     {legacy}, () => '', async () => { const status = statuses[Math.min(checks.length, statuses.length - 1)]; checks.push(status); return {status,why:'mock'}; },
-    ()=>'token', (r)=>r.merged===true, {merged:'m:'}, (key) => rememberedPr !== null && key === (legacy ? 'm:card:run' : `m:card:run:pr-${rememberedPr}`), () => '', () => true, async()=>null, (v)=>v,
+()=>'token', (r)=>r.merged===true, {merged:'m:'}, (key) => rememberedPr !== null && key === (legacy ? 'm:card:run' : `m:card:run:pr-${rememberedPr}`), () => '', () => true, async()=>null, (v)=>v,
     {prCardWaitMs:0,mergeGraceMs:0,prWaitMs:1000}, () => surface === 'merged', () => surface === 'closed',
     () => surface === 'continue' ? {} : null, async()=>{finishes.push('merged');return 'merged';}, async()=>{finishes.push('closed');return 'closed';},
-    (result)=>({repo:A.repo, number:Number(result.pr)}));
+    (result)=>({repo:A.repo, number:Number(result.pr)}), () => null);
   const result = await sandbox.ensureMerged({id:'card',properties:{}},{pr:2,merged:false,run_id:'run'});
   return {result, checks, finishes, detail:sandbox.check()};
 }

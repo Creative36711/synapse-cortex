@@ -66,7 +66,7 @@ const clickAt = ensureBlock.indexOf('const create = createPr();');
 assert.ok(claimAt > 0 && clickAt > claimAt, 'заявка о мерже проверяется раньше кликов');
 
 // ── 4. Промпт: работа без PR названа законной ──────────────────────────────
-const orderFrom = src.indexOf('  function executorOrder(task, runId) {');
+const orderFrom = src.indexOf('  function executorOrder(task, runId,');
 const orderTo = src.indexOf('  /** Порядок для аудитора', orderFrom);
 const order = src.slice(orderFrom, orderTo);
 assert.match(order, /PR не открывай/, 'сказано: без своих изменений PR не нужен');
