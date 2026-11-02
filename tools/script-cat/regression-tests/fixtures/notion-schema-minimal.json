@@ -1,7 +1,7 @@
 {
   "roles": {
     "fields": {"Роль":"title", "Функция":"select", "Статус":"select", "Agent URL":"url", "Зона записи":"rich_text", "Гейт":"rich_text", "Репозиторий":"rich_text"},
-    "options": {"Функция":["Coordinator","Executor","Auditor","Reviewer","Warden"], "Статус":["Активна"]}
+    "options": {"Функция":["Coordinator","Executor","Auditor","Reviewer"], "Статус":["Активна"]}
   },
   "missions": {
     "fields": {"Миссия":"title", "Состояние":"select", "Создана":"date", "Завершена":"date", "Возвращена":"date", "Круг":"number", "Замечания":"rich_text", "Итог":"rich_text", "ТЗ URL":"url"},

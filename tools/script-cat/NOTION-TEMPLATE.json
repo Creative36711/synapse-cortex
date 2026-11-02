@@ -37,10 +37,6 @@
               {
                 "name": "Reviewer",
                 "color": "blue"
-              },
-              {
-                "name": "Warden",
-                "color": "default"
               }
             ]
           }

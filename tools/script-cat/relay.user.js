@@ -1985,7 +1985,7 @@
     const headers = { Authorization: `Bearer ${settings.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
     const contracts = [
       ["Роли", C.roles, { "Роль": "title", "Функция": "select", "Статус": "select", "Agent URL": "url", "Зона записи": "rich_text", "Гейт": "rich_text", "Репозиторий": "rich_text" },
-        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer", "Warden"], "Статус": ["Активна"] }],
+        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer"], "Статус": ["Активна"] }],
       ["Миссии", C.missions, { "Миссия": "title", "Состояние": "select", "Создана": "date", "Завершена": "date", "Возвращена": "date", "Круг": "number", "Замечания": "rich_text", "Итог": "rich_text", "ТЗ URL": "url" },
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
