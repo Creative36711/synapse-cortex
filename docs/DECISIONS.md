@@ -54,7 +54,7 @@
 
 ## D-005 · Транспорт ScriptCat переносится без переписывания — 2026-11-02
 
-**Решение.** `tools/script-cat/` используется как есть (Relay 1.6.0); проект настраивается
+**Решение.** `tools/script-cat/` используется как есть (Relay 1.7.0); проект настраивается
 профилем (четыре источника Notion, регламент, репозиторий, ветка, папка Drive). Защищённая
 зона оракула — `tools/script-cat/tests/`, `regression-tests/`, `fixtures/`, `build.mjs`,
 `version-oracle.mjs`, `portability-guard.mjs`.
