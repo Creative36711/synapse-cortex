@@ -43,6 +43,7 @@
       status: sel(p.properties["Статус"]),
       zone: rt(p.properties["Зона записи"]),
       gate: rt(p.properties["Гейт"]),
+      repo: rt(p.properties["Репозиторий"]),
       pageId: p.id,
     };
   };

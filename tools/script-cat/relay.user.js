@@ -1984,8 +1984,8 @@
   async function validateProjectSchema(settings) {
     const headers = { Authorization: `Bearer ${settings.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
     const contracts = [
-      ["Роли", C.roles, { "Роль": "title", "Функция": "select", "Статус": "select", "Agent URL": "url", "Зона записи": "rich_text", "Гейт": "rich_text" },
-        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer"], "Статус": ["Активна"] }],
+      ["Роли", C.roles, { "Роль": "title", "Функция": "select", "Статус": "select", "Agent URL": "url", "Зона записи": "rich_text", "Гейт": "rich_text", "Репозиторий": "rich_text" },
+        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer", "Warden"], "Статус": ["Активна"] }],
       ["Миссии", C.missions, { "Миссия": "title", "Состояние": "select", "Создана": "date", "Завершена": "date", "Возвращена": "date", "Круг": "number", "Замечания": "rich_text", "Итог": "rich_text", "ТЗ URL": "url" },
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
@@ -2180,6 +2180,7 @@
             <div style="color:#aab4c3;font-size:12px">Каждой роли ставится в соответствие репозиторий, в котором она работает (ID роли — UUID страницы в базе «Роли», а не её имя). Executor Core → synapse, Executor Cortex → synapse-cortex, аудит из сессии Cortex — явный маршрут или полная ссылка на PR. Роли без маршрута работают в главном репозитории.</div>
             <div id="cfn-project-routes-list"></div>
             <button id="cfn-project-route-add" type="button" style="${action};margin-top:7px">Добавить маршрут роли</button>
+            <button id="cfn-project-roles-autofill" type="button" style="${action};margin-top:7px;margin-left:7px">Автозаполнить маршруты ролей</button>
           </div>
           <button id="cfn-project-save" style="${action};margin-top:12px;background:#285638">Создать профиль</button>
         </div>
@@ -2443,6 +2444,61 @@
     find("route-add").onclick = () => {
       routes.push({ roleId: "", repo: "" });
       renderRoutes();
+    };
+    find("roles-autofill").onclick = async () => {
+      if (checking) { say("Дождитесь окончания операции.", true); return; }
+      checking = true;
+      try {
+        const notionToken = String(GM_getValue(K.notion, "") || "").trim();
+        if (!notionToken) throw new Error("Токен Notion не задан. Укажите его в «Подключениях».");
+        const headers = { Authorization: `Bearer ${notionToken}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
+        const rows = [];
+        let cursor = "";
+        while (true) {
+          const page = await request("POST", `https://api.notion.com/v1/data_sources/${C.roles}/query`, headers,
+            { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }, { retry: false });
+          if (!page || !Array.isArray(page.results) || typeof page.has_more !== "boolean") throw new Error("База «Роли» вернула неполный список.");
+          rows.push(...page.results);
+          if (!page.has_more) break;
+          cursor = String(page.next_cursor || "");
+          if (!cursor) break;
+        }
+        const roles = rows.map((p) => {
+          const url = p.properties["Agent URL"]?.url || "";
+          const m = String(url).match(/\/agent\/([\w-]+)/);
+          return {
+            id: m ? m[1] : "",
+            name: rt(p.properties["Роль"]),
+            fn: sel(p.properties["Функция"]),
+            status: sel(p.properties["Статус"]),
+            repo: rt(p.properties["Репозиторий"]),
+          };
+        });
+        const active = roles.filter((r) => r.status === "Активна");
+        if (!active.length) throw new Error("Нет активных ролей в базе «Роли».");
+        const warden = active.find((r) => r.fn === "Warden");
+        if (!warden || !warden.repo) throw new Error("Роль Warden не найдена или у неё не указан репозиторий в поле «Репозиторий».");
+        const mainRepo = warden.repo;
+        const uniqueRepos = [];
+        for (const r of active) {
+          if (r.repo && !uniqueRepos.some((u) => u.repo === r.repo)) {
+            uniqueRepos.push({ repo: r.repo, branch: "main", main: r.repo === mainRepo });
+          }
+        }
+        if (!uniqueRepos.some((u) => u.main)) {
+          uniqueRepos[0].main = true;
+        }
+        repos = uniqueRepos;
+        ensureMain();
+        renderRepos();
+        routes = active.map((r) => ({ roleId: r.id, repo: r.repo || mainRepo })).filter((rt) => rt.roleId && rt.repo);
+        renderRoutes();
+        say(`Автозаполнено: главный репозиторий ${mainRepo} (по роли Warden), ${routes.length} маршрутов ролей.`);
+      } catch (e) {
+        say(`Ошибка автозаполнения: ${e.message}`, true);
+      } finally {
+        checking = false;
+      }
     };
     find("switch").onclick = () => {
       const target = chosen();
@@ -3076,6 +3132,7 @@
       status: sel(p.properties["Статус"]),
       zone: rt(p.properties["Зона записи"]),
       gate: rt(p.properties["Гейт"]),
+      repo: rt(p.properties["Репозиторий"]),
       pageId: p.id,
     };
   };
