@@ -90,24 +90,27 @@ Contents: Read-only, Pull requests: Read-only) — его вводит Маст�
 
 ## 5. Что уже лежит в базах
 
-### «Роли» — 7 строк; 5 активны (Agent URL заполнены 2026-11-02), 2 ждут активации
+### «Роли» — 7 строк; все `Активна`, Agent URL заполнены (2026-11-02)
 
-| Роль | Функция | Agent URL |
-|---|---|---|
-| Coordinator | Coordinator | заполняет Мастер |
-| Executor Core | Executor | заполняет Мастер (доступ к `synapse`) |
-| Executor Platform | Executor | заполняет Мастер (доступ к `synapse-cortex`) |
-| Spec Auditor | Auditor | заполняет Мастер |
-| Warden | Reviewer | заполняет Мастер (этот агент) |
+| Роль | Функция | Репозиторий | Agent URL |
+|---|---|---|---|
+| Warden | Reviewer | `synapse-cortex` | `https://arena.ai/agent/01a19d0e-839f-7a23-89dc-93e4f2884cbb` |
+| Coordinator | Coordinator | `synapse-cortex` | `https://arena.ai/agent/01a19d29-b5c1-7368-8eba-1492816dda30` |
+| Executor Core | Executor | `synapse` | `https://arena.ai/agent/01a19d2b-bd07-722f-bbdb-20ba2f90028b` |
+| Executor Platform | Executor | `synapse-cortex` | `https://arena.ai/agent/01a19db7-c1d2-7898-bf38-ff9eff301088` |
+| Contract Architect | Executor | `synapse` | `https://arena.ai/agent/01a19df0-4045-7f32-aa69-c6a1687da26d` |
+| Spec Auditor | Auditor | `synapse-cortex` | `https://arena.ai/agent/01a19db6-fa65-7081-8bc9-787ce08ec3b6` |
+| Locale Auditor | Auditor | `synapse` | `https://arena.ai/agent/01a19df0-ea36-7726-9b51-580a3dbe56e8` |
 
 Опции `Кому` в «Запросах»: `Executor Core`, `Executor Platform`, `Spec Auditor`, `Contract Architect`,
 `Locale Auditor` — ровно как `Роль`.
-Все строки в статусе `Ждёт`, пока нет реальных URL: цикл не должен стартовать на
-недонастроенных ролях (D-008).
+Все семь строк переведены в `Активна` 2026-11-02, реальные URL вписаны: цикл не стартует
+на недонастроенных ролях (D-008), и это условие выполнено. Поле `Устав` у всех строк — ссылка на
+полную страницу регламента; вход агента с 1.8.0 приходит в промпте (D-023), читать страницу не нужно.
 
-### «Миссии» — 1 строка, `Состояние = Черновик`
+### «Миссии» — 1 строка, `Состояние = Активна`
 
-`SYN-1 · Фаза 1 — локальный каркас ядра`, `Круг = 0`.
+`SYN-1 · Фаза 1 — локальный каркас ядра`, `Круг = 0`, `Замечания` — очередь передана Coordinator.
 ТЗ: https://app.notion.com/p/SYN-1-1-40c6f0cf570581aeab6cefac6bad62f0
 Копия в репозитории: `docs/missions/SYN-1.md`.
 
@@ -123,4 +126,5 @@ Contents: Read-only, Pull requests: Read-only) — его вводит Маст�
 3. Установить `tools/script-cat/relay.user.js`, создать профиль (ID из §2).
 4. Зарегистрировать проект в Gateway (§3), получить проектный ключ, вставить в ScriptCat.
 5. «Проверить всё» → «Сохранить» → «Проверить подключения и разрешить работу».
-6. Сказать Warden: «роли активны, профиль зелёный» — тогда миссия SYN-1 переводится в `Активна`.
+6. [x] Сказать Warden: «роли активны, профиль зелёный» — миссия SYN-1 переведена в `Активна`
+   (2026-11-02).
