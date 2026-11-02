@@ -19,7 +19,7 @@ const schemas = {
 };
 const options = { roles: { 'Функция':['Coordinator','Executor','Auditor','Reviewer'],'Статус':['Активна'] }, missions: { 'Состояние':['Активна','Возвращена','Завершена','Провалена'] }, requests:{ 'Dispatch State':['Draft','Ready','Running','Submitted','Accepted','Rework','Blocked'],'Check':['pass','fail'],'Кому':['Builder'] }, questions:{ 'Статус':['Ждёт','Решено','Принят дефолт','Отменён'] } };
 const sources = Object.fromEntries(Object.entries(schemas).map(([k, fields]) => [ids[k], { object:'data_source', properties: Object.fromEntries(Object.entries(fields).map(([name, type]) => [name, { type, ...(type === 'select' ? {select: {options:(options[k]?.[name] || []).map(name => ({name}))}} : {}) }])) }]));
-const role = (name, fn, agent) => ({ id:id(agent), properties:{ 'Роль':{title:[{plain_text:name}]}, 'Функция':{select:{name:fn}}, 'Статус':{select:{name:'Активна'}}, 'Agent URL':{url:`https://arena.ai/agent/agent-${agent}`}, 'Репозиторий':{rich_text:[{plain_text:'team/synapse'}]} } });
+const role = (name, fn, agent) => ({ id:id(agent), properties:{ 'Роль':{title:[{plain_text:name}]}, 'Функция':{select:{name:fn}}, 'Статус':{select:{name:'Активна'}}, 'Agent URL':{url:`https://arena.ai/agent/agent-${agent}`}, 'Репозиторий':{rich_text:[{plain_text:name === 'Builder' ? 'synapse' : 'synapse-cortex'}]} } });
 const roles = [role('Coordinator','Coordinator',31),role('Warden','Reviewer',32),role('Builder','Executor',33)];
 const browser = await chromium.launch({ executablePath: await chromiumBin.executablePath(), args: chromiumBin.args, headless:true });
 const ctx = await browser.newContext({ viewport:{width:1000,height:900} });
@@ -92,6 +92,8 @@ await page.waitForFunction(() => document.querySelector('#cfn-panel-project')?.t
 const autofilled = await page.evaluate(() => JSON.parse(localStorage.getItem('gm:cfn-project-profiles-v1'))[0]);
 assert.equal(autofilled.roleRepos.length,3);
 assert.ok(autofilled.roleRepos.every((route) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(route.roleId)));
+assert.deepEqual(autofilled.repos.map((entry) => entry.repo).sort(), ['team/synapse','team/synapse-cortex']);
+assert.equal(autofilled.repo, 'team/synapse-cortex', 'главные поля синхронизированы с репозиторием Warden');
 // Смоделирован оставшийся после прежней навигации отложенный автоматический шаг.
 await page.evaluate((id) => localStorage.setItem(`gm:project:${id}:cfn-step-request`, JSON.stringify(true)), project.id);
 await page.locator('#cfn-project-switch').click();
