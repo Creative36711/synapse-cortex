@@ -34,8 +34,8 @@
 
 | Поле | Значение |
 |---|---|
-| Страница регламента | URL страницы «Регламент команды Synapse» в Notion (создаётся Warden, см. ниже) |
-| Ссылка на обратную связь | URL базы `SYN Обратная связь` |
+| Страница регламента | `https://app.notion.com/p/Synapse-40c6f0cf57058141b415cc19309bc412` |
+| Ссылка на обратную связь | `https://app.notion.com/p/16b895518b9b492eac8b6948faa1d69c` |
 
 ---
 
@@ -67,8 +67,12 @@
 
 Шлюз создаст: `Arena/synapse/logs` и `Arena/synapse/payloads`.
 
-Отдельно от шлюза Warden создаёт папку для общих документов проекта `Synapse` в корне Диска —
-см. `docs/process/DRIVE-LAYOUT.md`.
+Отдельно от шлюза Warden создаёт папку для общих документов проекта `Synapse` в корне Диска:
+`1frm1IMUrRbDYH3fLFLvTipcUFiCMWSTZ`. Подпапка `Synapse/docs` — `1S5SupACHHvnwGuP6e7SxfaRkbTMh6jck`
+(там лежат копии ROADMAP, DECISIONS, METRICS, COST_MODEL, RISK_REGISTER, SYN-REGLAMENT).
+Полная раскладка и идентификаторы — в `docs/process/DRIVE-LAYOUT.md`.
+
+Эти папки **не** являются хранилищем ScriptCat и не подменяют `Arena/synapse`.
 
 ---
 

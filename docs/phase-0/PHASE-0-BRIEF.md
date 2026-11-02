@@ -14,9 +14,14 @@
 | Несекретные поля профиля ScriptCat + эталон UUID | `docs/process/SCRIPTCAT-PROFILE.md` | Готово |
 | Ручные шаги Мастера | `docs/process/MASTER-MANUAL-STEPS.md` | Готово |
 | Раскладка Drive | `docs/process/DRIVE-LAYOUT.md` | Готово |
-| Пространство Notion: страница верхнего уровня + 4 базы `SYN …` | Notion | Готово |
+| Пространство Notion: страница верхнего уровня + 4 базы `SYN …` | Notion | Готово, на уровне пространства, не внутри Narthex |
 | Схема баз по эталону `NOTION-TEMPLATE.json`, формула `Тип` | Notion | Готово |
 | Варианты `Кому` в `SYN Запросы` | Notion | Готово |
+| Страница устава «Регламент команды Synapse» | Notion | Готово, URL вписан в роли и в `SCRIPTCAT-PROFILE.md` §2 |
+| 5 страниц ролей в `SYN Роли` | Notion | Готово, статус «Ждёт», `Agent URL` пуст |
+| Миссия SYN-0 с полным ТЗ и оракулом | Notion | Готово, состояние «Черновик», круг 1 |
+| Папка `Synapse` на Диске + 4 подпапки + копии 6 документов | Drive | Готово, ID в `docs/process/DRIVE-LAYOUT.md` |
+| Документы Фазы 0 зафиксированы в git и запушены | `synapse-cortex` | Готово, ветка `arena/3b449c64-synapse-cortex` |
 | Гайд интервью | `docs/phase-0/INTERVIEW-GUIDE.md` | Готово |
 | Открытые вопросы Мастеру | `docs/phase-0/OPEN-QUESTIONS.md` | Вынесены |
 
