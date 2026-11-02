@@ -44,8 +44,8 @@ node --test tests/*.mjs
 node --test regression-tests/*.mjs
 ```
 
-Состояние на момент подготовки (2026-11-02, ветка `arena/f2884cbb-synapse-cortex`,
-Node v22.22.3): `build --check` — OK, `portability-guard` — OK, 72/72 smoke, 14/14 regression.
+Состояние на момент подготовки (2026-11-02, ветка `arena/96f1c455-synapse-cortex`,
+Node v22.22.3): `build --check` — OK, `portability-guard` — OK, 72/72 smoke, 15/15 regression.
 
 ## 4. Что эти проверки НЕ доказывают
 

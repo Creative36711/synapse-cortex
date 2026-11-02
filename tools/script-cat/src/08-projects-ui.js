@@ -222,6 +222,18 @@
             <label>Базовая ветка<input id="cfn-project-branch" style="${field}" value="main"></label>
             <label>Папка проекта внутри Arena (латиница)<input id="cfn-project-driveFolder" style="${field}" placeholder="synapse"></label>
           </div>
+          <div id="cfn-project-repos" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:14px;display:none">
+            <h4 style="margin:0 0 6px">Репозитории профиля</h4>
+            <div style="color:#aab4c3;font-size:12px">Один профиль может работать с несколькими репозиториями (одна история, очередь и Gateway на профиль, но разные цели выдачи). Ровно один репозиторий — главный: он совпадает с полями «Репозиторий» и «Ветка» выше.</div>
+            <div id="cfn-project-repos-list"></div>
+            <button id="cfn-project-repo-add" type="button" style="${action};margin-top:7px">Добавить репозиторий</button>
+          </div>
+          <div id="cfn-project-routes" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:10px;display:none">
+            <h4 style="margin:0 0 6px">Маршрутизация ролей к репозиториям</h4>
+            <div style="color:#aab4c3;font-size:12px">Каждой роли ставится в соответствие репозиторий, в котором она работает (ID роли — UUID страницы в базе «Роли», а не её имя). Executor Core → synapse, Executor Cortex → synapse-cortex, аудит из сессии Cortex — явный маршрут или полная ссылка на PR. Роли без маршрута работают в главном репозитории.</div>
+            <div id="cfn-project-routes-list"></div>
+            <button id="cfn-project-route-add" type="button" style="${action};margin-top:7px">Добавить маршрут роли</button>
+          </div>
           <button id="cfn-project-save" style="${action};margin-top:12px;background:#285638">Создать профиль</button>
         </div>
         <div id="cfn-project-note" role="status" style="white-space:pre-wrap;color:#bfe6c4;margin-top:12px"></div>
@@ -234,7 +246,126 @@
     let checking = false;
     let editingId = "";
     let migrationPlan = null;
+    // Репозитории и маршруты ролей редактируются отдельными списками; поля
+    // «Репозиторий» и «Ветка» выше дублируют главную запись.
+    let repos = [{ repo: "", branch: "main", main: true }];
+    let routes = []; // {roleId, repo}
+    const reposList = find("repos-list");
+    const routesList = find("routes-list");
     let openingRevision = JSON.stringify(profileRegistry());
+
+    const escHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
+    const ensureMain = () => { if (repos.length && !repos.some((r) => r.main)) repos[0].main = true; };
+    const onlyOneMain = (i) => { repos.forEach((r, k) => { r.main = k === i; }); };
+
+    const renderRepos = () => {
+      reposList.textContent = "";
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:#aab4c3;font-size:12px;margin:0 0 6px";
+      hint.textContent = repos.length ? "Ровно один репозиторий должен быть главным — он совпадает с полями «Репозиторий» и «Ветка» выше." : "Добавьте хотя бы один репозиторий.";
+      reposList.appendChild(hint);
+      for (let i = 0; i < repos.length; i++) {
+        const r = repos[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 120px auto auto;gap:7px;align-items:center;border:1px solid #343b48;border-radius:7px;padding:7px;margin:6px 0";
+        const inpRepo = document.createElement("input");
+        inpRepo.id = `cfn-repo-${i}`; inpRepo.style.cssText = field; inpRepo.placeholder = "owner/repository"; inpRepo.value = r.repo;
+        inpRepo.oninput = () => { r.repo = inpRepo.value.trim(); };
+        const inpBranch = document.createElement("input");
+        inpBranch.id = `cfn-repo-branch-${i}`; inpBranch.style.cssText = field; inpBranch.placeholder = "main"; inpBranch.value = r.branch;
+        inpBranch.oninput = () => { r.branch = inpBranch.value.trim() || "main"; };
+        const mainLabel = document.createElement("label");
+        mainLabel.style.cssText = "display:flex;align-items:center;gap:5px;cursor:pointer";
+        const mainRadio = document.createElement("input");
+        mainRadio.type = "radio"; mainRadio.name = "cfn-repo-main"; mainRadio.value = i; mainRadio.checked = r.main;
+        mainRadio.onchange = () => { onlyOneMain(i); };
+        mainLabel.appendChild(mainRadio); mainLabel.append(document.createTextNode("Главный"));
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button"; removeBtn.textContent = "Удалить";
+        removeBtn.style.cssText = `${action};padding:6px 8px;font-size:12px`;
+        removeBtn.onclick = () => { repos.splice(i, 1); ensureMain(); renderRepos(); };
+        row.appendChild(inpRepo); row.appendChild(inpBranch); row.appendChild(mainLabel); row.appendChild(removeBtn);
+        reposList.appendChild(row);
+      }
+    };
+
+    const renderRoutes = () => {
+      routesList.textContent = "";
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:#aab4c3;font-size:12px;margin:0 0 6px";
+      hint.textContent = "ID роли — UUID страницы роли в базе «Роли» (имя столбца «Роль» — заголовок, а не ID). Роли без маршрута работают в главном репозитории.";
+      routesList.appendChild(hint);
+      const repoSelectHtml = (selected) => repos.map((r) => `<option value="${escHtml(r.repo)}" ${r.repo === selected ? "selected" : ""}>${escHtml(r.repo)} (${escHtml(r.branch)})</option>`).join("") || '<option value="">(добавьте репозиторий выше)</option>';
+      for (let i = 0; i < routes.length; i++) {
+        const rt = routes[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 1fr auto;gap:7px;align-items:center;border:1px solid #343b48;border-radius:7px;padding:7px;margin:6px 0";
+        const inpRole = document.createElement("input");
+        inpRole.id = `cfn-route-role-${i}`; inpRole.style.cssText = field; inpRole.placeholder = "UUID роли"; inpRole.value = rt.roleId;
+        inpRole.oninput = () => { rt.roleId = inpRole.value.trim(); };
+        const selRepo = document.createElement("select");
+        selRepo.id = `cfn-route-repo-${i}`; selRepo.style.cssText = field; selRepo.innerHTML = repoSelectHtml(rt.repo);
+        selRepo.onchange = () => { rt.repo = selRepo.value; };
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button"; removeBtn.textContent = "Удалить";
+        removeBtn.style.cssText = `${action};padding:6px 8px;font-size:12px`;
+        removeBtn.onclick = () => { routes.splice(i, 1); renderRoutes(); };
+        row.appendChild(inpRole); row.appendChild(selRepo); row.appendChild(removeBtn);
+        routesList.appendChild(row);
+      }
+    };
+
+    const loadProfileUi = (p) => {
+      repos = (Array.isArray(p.repos) && p.repos.length ? p.repos : [{ repo: p.repo || "", branch: p.branch || "main", main: true }])
+        .map((r) => ({ repo: String(r.repo || "").trim(), branch: String(r.branch || "main").trim() || "main", main: Boolean(r.main) }));
+      ensureMain();
+      routes = (Array.isArray(p.roleRepos) ? p.roleRepos : []).map((rt) => ({ roleId: String(rt.roleId || "").trim(), repo: String(rt.repo || "").trim() })).filter((rt) => rt.roleId || rt.repo);
+      renderRepos(); renderRoutes();
+    };
+
+    const saveProfileUi = () => {
+      if (checking) { say("Дождитесь окончания поиска или проверки.", true); return; }
+      const p = { id: editingId || crypto.randomUUID() };
+      for (const field of fields) p[field] = find(field).value.trim();
+      p.driveFolder = p.driveFolder.toLowerCase();
+      p.repos = repos.map((r) => ({ repo: r.repo, branch: r.branch, main: r.main })).filter((r) => r.repo);
+      if (!p.repos.length) p.repos = [{ repo: p.repo || "", branch: p.branch || "main", main: true }];
+      const mains = p.repos.filter((r) => r.main).length;
+      if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
+      p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
+      if (!validProfile(p)) {
+        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
+        return;
+      }
+      const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
+      const sourceIds = new Set(known.flatMap((item) => [item.roles, item.missions, item.requests, item.questions]).map((id) => id.toLowerCase()));
+      if ([p.roles, p.missions, p.requests, p.questions].some((id) => sourceIds.has(id.toLowerCase()))) {
+        say("Один из источников уже используется другим профилем. Создайте отдельные копии всех четырёх баз, чтобы не смешать очереди и роли.", true); return;
+      }
+      const usedRepos = new Set(known.filter((item) => !item.legacy).flatMap((item) =>
+        Array.isArray(item.repos) ? item.repos.map((r) => String(r.repo || "").toLowerCase()) : [String(item.repo || "").toLowerCase()]));
+      const clashRepo = p.repos.find((r) => usedRepos.has(String(r.repo).toLowerCase()));
+      if (clashRepo &&
+          !confirm(`Репозиторий ${clashRepo.repo} уже используется другим профилем. Проекты смогут видеть и изменять один репозиторий. Продолжить?`)) return;
+      if (JSON.stringify(profileRegistry()) !== openingRevision ||
+          (editingId && (projectApproved() || GM_getValue("cfn-project-ever-approved", false)))) {
+        say("Профиль или его допуск изменился во время подтверждения. Откройте окно заново.", true); return;
+      }
+      try {
+        if (editingId) {
+          // Сначала ставим удержание, останавливаем автоцикл, затем меняем реестр и перезагружаем вкладку.
+          autoSet(false);
+          sessionStorage.setItem(PROJECT_HOLD_PREFIX + p.id, "1");
+          rawSet(PROFILE_REGISTRY_KEY, profileRegistry().map((item) => item.id === editingId ? p : item));
+          location.reload();
+          return;
+        }
+        rawSet(PROFILE_REGISTRY_KEY, [...profileRegistry(), p]);
+        openingRevision = JSON.stringify(profileRegistry());
+      } catch { say("Не удалось сохранить профиль или перезагрузить вкладку. Проверьте настройки и обновите страницу вручную.", true); return; }
+      form.style.display = "none"; render(p.id);
+      say(`Профиль создан. ID: ${p.id}\nТеперь зарегистрируйте его в шлюзе Drive, откройте этот профиль и сохраните отдельные подключения.`);
+    };
     const profiles = () => [LEGACY_PROFILE, ...profileRegistry().filter(validProfile)];
     const chosen = () => profiles().find((p) => p.id === list.value);
     const render = (selected = ACTIVE_PROFILE.id) => {
@@ -248,7 +379,11 @@
       list.value = profiles().some((p) => p.id === selected) ? selected : LEGACY_PROFILE_ID;
       find("current").textContent = ACTIVE_PROFILE.name;
       const p = chosen();
-      find("info").textContent = p ? `ID: ${p.id}\nGitHub: ${p.repo} · ветка ${p.branch}\nDrive: ${p.legacy ? "Arena/logs и Arena/payloads (совместимость)" : `Arena/${p.driveFolder}/{logs,payloads}`}` : "Профиль не найден.";
+      const repos = Array.isArray(p?.repos) && p.repos.length ? p.repos : [{ repo: p.repo || "", branch: p.branch || "main", main: true }];
+      const main = repos.find((r) => r.main) || repos[0];
+      find("info").textContent = p
+        ? `ID: ${p.id}\nРепозитории: ${repos.map((r) => `${r.repo || p.repo} (${r.branch || "main"}${r.main ? ", главный" : ""}`).join("; ") || p.repo}\nМаршрутов ролей: ${Array.isArray(p.roleRepos) ? p.roleRepos.length : 0}\nDrive: ${p.legacy ? "Arena/logs и Arena/payloads (совместимость)" : `Arena/${p.driveFolder}/{logs,payloads}`}`
+        : "Профиль не найден.";
       find("enable").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !projectApproved() ? "inline-block" : "none";
       const everApproved = !ACTIVE_PROFILE.legacy && (GM_getValue("cfn-project-ever-approved", false) || projectApproved());
       find("edit").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !everApproved ? "inline-block" : "none";
@@ -274,6 +409,9 @@
       editingId = "";
       find("save").textContent = "Создать профиль";
       find("form-title").textContent = "Новый профиль";
+      repos = [{ repo: "", branch: "main", main: true }];
+      routes = [];
+      renderRepos(); renderRoutes();
       for (const field of fields) find(field).value = field === "branch" ? "main" : "";
       form.style.display = "block"; say("Заполните настройки. Ничего в сервисах не создаётся автоматически.");
       find("name").focus();
@@ -285,6 +423,7 @@
       const p = chosen(); if (!p) return;
       for (const field of fields) find(field).value = p[field] || (field === "branch" ? "main" : "");
       find("name").value = `${p.name} — новая настройка`;
+      loadProfileUi(p);
       form.style.display = "block";
       say("Будет создан новый профиль с пустым состоянием и отдельными доступами; старый профиль не изменится.");
       find("name").focus();
@@ -298,6 +437,7 @@
       }
       editingId = ACTIVE_PROFILE.id;
       for (const field of fields) find(field).value = ACTIVE_PROFILE[field] || (field === "branch" ? "main" : "");
+      loadProfileUi(ACTIVE_PROFILE);
       find("save").textContent = "Сохранить исправления и перезагрузить вкладку";
       find("form-title").textContent = "Исправить текущий профиль";
       form.style.display = "block";
@@ -341,51 +481,7 @@
         checking = false;
       }
     };
-    find("save").onclick = () => {
-      if (checking) { say("Дождитесь окончания поиска или проверки.", true); return; }
-      if (JSON.stringify(profileRegistry()) !== openingRevision) {
-        say("Список проектов изменился в другой вкладке. Закройте окно и откройте его заново.", true); return;
-      }
-      if (editingId && (editingId !== ACTIVE_PROFILE.id || profileRegistry().filter((item) => item.id === editingId).length !== 1 ||
-          projectApproved() || GM_getValue("cfn-project-ever-approved", false) || checking || autoOn() || busy || projectAsyncWork > 0)) {
-        say("Исправление доступно только текущему неиспользованному профилю и после окончания операций.", true); return;
-      }
-      const p = { id: editingId || crypto.randomUUID() };
-      for (const field of fields) p[field] = find(field).value.trim();
-      p.driveFolder = p.driveFolder.toLowerCase();
-      if (!validProfile(p)) {
-        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true); return;
-      }
-      const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
-      const sourceIds = new Set(known.flatMap((item) => [item.roles, item.missions, item.requests, item.questions]).map((id) => id.toLowerCase()));
-      if ([p.roles, p.missions, p.requests, p.questions].some((id) => sourceIds.has(id.toLowerCase()))) {
-        say("Один из источников уже используется другим профилем. Создайте отдельные копии всех четырёх баз, чтобы не смешать очереди и роли.", true); return;
-      }
-      if (known.some((item) => !item.legacy && item.driveFolder === p.driveFolder)) {
-        say("Имя папки Drive уже занято другим профилем. Выберите отдельное имя.", true); return;
-      }
-      if (known.some((item) => item.repo.toLowerCase() === p.repo.toLowerCase()) &&
-          !confirm("Этот GitHub-репозиторий уже используется другим профилем. Проекты смогут видеть и изменять один репозиторий. Продолжить?")) return;
-      // Пока было открыто подтверждение, другая вкладка могла допустить
-      // профиль или изменить реестр. Не записываем старый снимок поверх него.
-      if (JSON.stringify(profileRegistry()) !== openingRevision ||
-          (editingId && (projectApproved() || GM_getValue("cfn-project-ever-approved", false)))) {
-        say("Профиль или его допуск изменился во время подтверждения. Откройте окно заново.", true); return;
-      }
-      try {
-        if (editingId) {
-          // Сначала ставим удержание, затем меняем реестр и перезагружаем closure.
-          sessionStorage.setItem(PROJECT_HOLD_PREFIX + p.id, "1");
-          rawSet(PROFILE_REGISTRY_KEY, profileRegistry().map((item) => item.id === editingId ? p : item));
-          location.reload();
-          return;
-        }
-        rawSet(PROFILE_REGISTRY_KEY, [...profileRegistry(), p]);
-        openingRevision = JSON.stringify(profileRegistry());
-      } catch { say("Не удалось сохранить профиль или перезагрузить вкладку. Проверьте настройки и обновите страницу вручную.", true); return; }
-      form.style.display = "none"; render(p.id);
-      say(`Профиль создан. ID: ${p.id}\nТеперь зарегистрируйте его в шлюзе Drive, откройте этот профиль и сохраните отдельные подключения.`);
-    };
+    find("save").onclick = saveProfileUi;
     find("switch").onclick = () => {
       const target = chosen();
       if (!target || target.id === ACTIVE_PROFILE.id) { say("Этот проект уже выбран."); return; }
@@ -502,3 +598,4 @@
     render();
     find("close").focus();
   }
+

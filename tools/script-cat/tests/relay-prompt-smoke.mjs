@@ -14,12 +14,12 @@ import { strict as assert } from 'node:assert';
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 
 // ── 1. Технический блок: ни кнопок, ни Continue ─────────────────────────────
-const techFrom = src.indexOf('  const SNAPSHOT_FACT = [');
-const techTo = src.indexOf('  /**\n   * Полный блок для роли.');
+const techFrom = src.indexOf('  const snapshotFact = (repo, branch) => {');
+const techTo = src.indexOf('  /**\n   * Полный блок для роли, собранный из контекста цели выдачи');
 assert.ok(techFrom > 0 && techTo > techFrom, 'блок технической информации на месте');
 const tech = new Function(
   'C',
-  `${src.slice(techFrom, techTo)}; return { EXECUTOR_TECH, AUDITOR_TECH, COORDINATOR_TECH };`,
+  `${src.slice(techFrom, techTo)}; return { executorTech: executorTech(C.repo, C.branch), auditorTech: auditorTech(C.repo, C.branch), COORDINATOR_TECH };`,
 )({ repo: 'example/relay-fixture' });
 const FORBIDDEN = /кнопк|Continue|интерфейс/i;
 for (const [name, text] of Object.entries(tech)) {

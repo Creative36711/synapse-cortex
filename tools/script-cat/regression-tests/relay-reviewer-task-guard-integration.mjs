@@ -86,6 +86,8 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
     taskTitle: (p) => rt(p.properties['Запрос']),
     taskState: (p) => p.properties['Dispatch State']?.select?.name || '',
     taskRole: (p) => p.properties['Кому']?.select?.name || '',
+    profileSessionRepo: () => 'example/relay-fixture',
+    profileRepoBranch: () => 'main',
     redispatchClearProps: (p) => p.properties['Submitted At']?.date?.start ? { 'Submitted At': { date: null } } : null,
     redispatchWhy: () => 'ранее отвечена', noteRedispatch: () => 1, REDISPATCH_LIMIT: 3,
     answerStampKey: (id) => `stamp:${id}`, reworkKey: (id) => `rework:${id}`,
@@ -101,7 +103,8 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
   };
   const make = new Function('env', `
     const {roles, roleRows, norm, rt, K, GM_getValue, GM_setValue, notion, patch, gateway,
-      taskTitle, taskState, taskRole, redispatchClearProps, redispatchWhy, noteRedispatch, REDISPATCH_LIMIT,
+      taskTitle, taskState, taskRole, profileSessionRepo, profileRepoBranch,
+      redispatchClearProps, redispatchWhy, noteRedispatch, REDISPATCH_LIMIT,
       answerStampKey, reworkKey, pause, log, uid, nowIso, taskLogEntry, executorPrompt,
       releaseUndelivered, taskPreflight, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location} = env;
     ${send}\n${dispatch}\nreturn { sendToRole, dispatchTask };`);

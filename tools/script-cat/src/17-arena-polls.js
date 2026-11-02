@@ -1049,6 +1049,14 @@
       text,
       at: Date.now(),
     });
+    // Снимок цели выдачи: репозиторий сессии роли, целевой репозиторий работы
+    // или проверки и его базовая ветка. По умолчанию цель — репозиторий сессии
+    // роли (Executor работает в своём, аудитор может проверять чужой через
+    // extra.targetRepo/extra.targetBranch; полный URL PR тоже называет репозиторий).
+    const sessionRepo = profileSessionRepo(role.id);
+    const targetRepo = (payload && payload.targetRepo) || sessionRepo || C.repo;
+    const targetBranch = (payload && payload.targetBranch) || profileRepoBranch(targetRepo);
+
     GM_setValue(K.expect, {
       roleId: role.id,
       roleName: role.name,
@@ -1067,6 +1075,9 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       ...payload,
+      sessionRepo,
+      targetRepo,
+      targetBranch,
     });
     dbg("sendToRole: задание в очереди", { role: role.name, kind, ref, длина: text.length });
     GM_setValue("cfn-me", role.name);

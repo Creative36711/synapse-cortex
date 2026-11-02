@@ -76,15 +76,15 @@ assert.equal(unknown, technicalInfo(role('Executor', 'Никто')).replace('Exe
 // ── 6. Блок реально попадает в промпты и стоит ДО задания ───────────────────
 const executorPrompt = src.slice(src.indexOf('function executorPrompt('), src.indexOf('function coordinatorPrompt('));
 assert.ok(
-  executorPrompt.indexOf('technicalInfo(role)') < executorPrompt.indexOf('"ЗАДАНИЕ"'),
+  executorPrompt.indexOf('technicalInfo(role, ctx') < executorPrompt.indexOf('"ЗАДАНИЕ"'),
   'в промпте исполнителя блок идёт раньше задания',
 );
-assert.match(executorPrompt, /role\.fn === "Auditor"\s*\? auditorOrder\(task, runId\)/, 'аудитор получает свой порядок');
+assert.match(executorPrompt, /role\.fn === "Auditor"\s*\? auditorOrder\(task, runId, ctx\)/, 'аудитор получает свой порядок');
 assert.match(executorPrompt, /role\.fn === "Reviewer"\s*\? reviewerOrder\(task, runId, missionId\)/, 'рецензент получает свой порядок');
 
 const coordinatorPrompt = src.slice(src.indexOf('function coordinatorPrompt('), src.indexOf('// ───────────────────────────── ход исполнителя'));
 assert.ok(
-  coordinatorPrompt.indexOf('technicalInfo(role)') < coordinatorPrompt.indexOf('Миссия:'),
+  coordinatorPrompt.indexOf('technicalInfo(role, ctx') < coordinatorPrompt.indexOf('Миссия:'),
   'координатор получает блок раньше текста задания',
 );
 

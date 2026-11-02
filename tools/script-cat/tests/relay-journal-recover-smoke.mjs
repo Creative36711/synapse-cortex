@@ -199,8 +199,8 @@ for (const stalePage of [page({ state: 'Ready', runId: 'r-1' }), page({ state: '
   const rule = src.slice(src.indexOf('const CARD_FIELDS_RULE'), src.indexOf('const EXECUTOR_TECH'));
   assert.match(rule, /Output Drive File ID/, 'поле названо');
   assert.match(rule, /report/, 'сказано, куда девать отчёт');
-  const executor = src.slice(src.indexOf('const EXECUTOR_TECH'), src.indexOf('const AUDITOR_TECH'));
-  const auditor = src.slice(src.indexOf('const AUDITOR_TECH'), src.indexOf('const COORDINATOR_TECH'));
+  const executor = src.slice(src.indexOf('const executorTech'), src.indexOf('const auditorTech'));
+  const auditor = src.slice(src.indexOf('const auditorTech'), src.indexOf('const COORDINATOR_TECH'));
   assert.match(executor, /CARD_FIELDS_RULE/, 'исполнителю сказано');
   assert.match(auditor, /CARD_FIELDS_RULE/, 'аудитору сказано');
 }

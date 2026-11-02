@@ -340,6 +340,13 @@
     if (confirmed.length !== 1 || confirmed[0].fn !== role.fn || !["Executor", "Auditor"].includes(confirmed[0].fn))
       return "роль или её функция изменились перед выдачей; перечитай базу «Роли» и выбери активного исполнителя или аудитора";
 
+    // Цель выдачи — репозиторий сессии роли (карта route репозиториев профиля)
+    // и его базовая ветка. Техблок, команды gh и проверка PR берутся из этого
+    // контекста, а не из глобального C.repo/C.branch, чтобы один профиль
+    // обслуживал несколько репозиториев без смены UUID.
+    const sessionRepo = profileSessionRepo(role.id);
+    const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
+
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10
     // NAR-1.7 выдали второй раз с новым run — она была в списке Ready уже
@@ -471,10 +478,13 @@
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
-    const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || ""), "dispatch", card.id, {
+    const dispatchCtx = { repo: sessionRepo, branch: targetBranch };
+    const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
       logId,
+      targetRepo: sessionRepo,
+      targetBranch: targetBranch,
       title: taskTitle(fresh),
       // Ссылка нужна минимальному повтору: «прочитай карточку сам».
       url: fresh.url || "",

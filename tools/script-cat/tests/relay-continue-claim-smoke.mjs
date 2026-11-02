@@ -31,7 +31,7 @@ function make({ mergedAfter = 0, continueAfter = 0 } = {}) {
   let reads = 0;
   const fn = new Function(
     'K', 'C', 'GM_getValue', 'GM_setValue', 'log', 'waitFor', 'mergedFlag',
-    'continueButton', 'finishMerge', 'prLabelOf', 'patience', 'verifyMergeClaim', 'ghToken',
+    'continueButton', 'finishMerge', 'prLabelOf', 'patience', 'verifyMergeClaim', 'ghToken', 'dispatchTarget',
     `${claimBlock}; return claimMerge;`,
   );
   const claimMerge = fn(
@@ -66,6 +66,8 @@ function make({ mergedAfter = 0, continueAfter = 0 } = {}) {
     async () => ({ status: 'merged', why: 'PR #35 слит' }),
     // Токен нужен проверке; в пробе он не ходит в сеть.
     () => 'ghp_test',
+    // dispatchTarget: ожидание выдачи в этой пробии не развёрнуто — цель из глобального конфига.
+    () => null,
   );
   return { claimMerge, logs, calls, store };
 }

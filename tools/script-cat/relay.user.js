@@ -114,8 +114,55 @@
   const LEGACY_PROFILE = Object.freeze({
     id: LEGACY_PROFILE_ID, name: "Проект не настроен", legacy: true, invalid: true,
     roles: "", missions: "", requests: "", questions: "", pageUrl: "", questionsUrl: "", repo: "",
-    branch: "main", driveFolder: "",
+    branch: "main", driveFolder: "", repos: [], roleRepos: [],
   });
+
+  /** Один репозиторий профиля и его базовая ветка. */
+  const REPO_ENTRY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  const BRANCH_ENTRY = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
+
+  /**
+   * Привести профиль к единой форме без смены UUID и без сброса состояния.
+   * У старых профилей (без `repos`) единственный репозиторий из `repo`/`branch`
+   * становится главным; у новых `repo`/`branch` всегда дублируют главную запись.
+   */
+  function normalizeProfile(profile) {
+    if (!profile || typeof profile !== "object") return profile;
+    const p = { ...profile };
+    const repos = Array.isArray(p.repos) ? p.repos.slice() : [];
+    if (repos.length === 0 && (p.repo || p.branch)) {
+      repos.push({ repo: p.repo || "", branch: p.branch || "main", main: true });
+    }
+    let main = repos.find((r) => r && r.main === true);
+    if (!main && repos.length) main = repos[0];
+    if (main) {
+      p.repo = String(main.repo || "");
+      p.branch = String(main.branch || "main");
+    }
+    if (repos.length) p.repos = repos;
+    if (!Array.isArray(p.roleRepos)) p.roleRepos = [];
+    return p;
+  }
+
+  function profileMainEntry(profile = ACTIVE_PROFILE) {
+    const repos = Array.isArray(profile?.repos) ? profile.repos : [];
+    const main = repos.find((r) => r && r.main === true);
+    return main || repos[0] || null;
+  }
+
+  function profileRepoBranch(repo, profile = ACTIVE_PROFILE) {
+    const entry = (Array.isArray(profile?.repos) ? profile.repos : []).find(
+      (r) => r && String(r.repo || "").toLowerCase() === String(repo || "").toLowerCase(),
+    );
+    return entry ? String(entry.branch || "main") : String(profile?.branch || "main");
+  }
+
+  function profileSessionRepo(roleId) {
+    if (!roleId) return String(C.repo || "");
+    const map = Array.isArray(C.roleRepos) ? C.roleRepos : [];
+    const hit = map.find((m) => m && String(m.roleId || "").toLowerCase() === String(roleId).toLowerCase());
+    return hit ? String(hit.repo || "") : String(C.repo || "");
+  }
 
   function profileRegistry() {
     const value = rawGet(PROFILE_REGISTRY_KEY, []);
@@ -134,14 +181,33 @@
             !["app.notion.com", "notion.so", "www.notion.so"].includes(url.hostname)) return false;
       }
     } catch { return false; }
-    const repo = String(profile.repo || "");
-    const branch = String(profile.branch || "");
-    const folder = String(profile.driveFolder || "");
-    return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) && !repo.includes("..") &&
-      /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(branch) && !branch.includes("..") &&
-      !branch.includes("//") && !branch.includes("/.") && !branch.endsWith("/") &&
-      !branch.endsWith(".") && !branch.endsWith(".lock") &&
-      /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
+    const p = normalizeProfile(profile);
+    const repos = Array.isArray(p.repos) ? p.repos : [];
+    if (!repos.length) return false;
+    let mainSeen = 0;
+    const repoSet = new Set();
+    for (const entry of repos) {
+      if (!entry || typeof entry !== "object" || !REPO_ENTRY.test(String(entry.repo || "")) ||
+          String(entry.repo).includes("..") ||
+          !BRANCH_ENTRY.test(String(entry.branch || "")) || String(entry.branch).includes("..") ||
+          String(entry.branch).includes("//") || String(entry.branch).includes("/.") ||
+          String(entry.branch).endsWith("/") || String(entry.branch).endsWith(".") ||
+          String(entry.branch).endsWith(".lock"))
+        return false;
+      const key = String(entry.repo).toLowerCase();
+      if (repoSet.has(key)) return false;
+      repoSet.add(key);
+      if (entry.main === true) mainSeen += 1;
+    }
+    if (mainSeen !== 1) return false;
+    const roleRepos = Array.isArray(p.roleRepos) ? p.roleRepos : [];
+    const reposLower = new Set(repos.map((r) => String(r.repo).toLowerCase()));
+    for (const m of roleRepos) {
+      if (!m || typeof m !== "object" || !PROJECT_UUID.test(String(m.roleId || "")) ||
+          !reposLower.has(String(m.repo || "").toLowerCase())) return false;
+    }
+    const folder = String(p.driveFolder || "");
+    return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
       !["logs", "payloads"].includes(folder);
   }
   function selectedProfileId() {
@@ -163,15 +229,18 @@
     // Копия и closure неизменяемы до полной перезагрузки вкладки.
     return Object.freeze({ ...matches[0], legacy: false, invalid: false });
   }
-  const ACTIVE_PROFILE = resolveProfile(selectedProfileId());
+  const ACTIVE_PROFILE = Object.freeze(normalizeProfile(resolveProfile(selectedProfileId())));
   const projectStorageKey = (id, key) => `project:${id}:${String(key)}`;
   GM_getValue = (key, fallback) => rawGet(projectStorageKey(ACTIVE_PROFILE.id, key), fallback);
   GM_setValue = (key, value) => rawSet(projectStorageKey(ACTIVE_PROFILE.id, key), value);
+  const mainEntry = profileMainEntry(ACTIVE_PROFILE);
   Object.assign(C, {
     roles: ACTIVE_PROFILE.roles, missions: ACTIVE_PROFILE.missions, requests: ACTIVE_PROFILE.requests,
     questions: ACTIVE_PROFILE.questions, pageUrl: ACTIVE_PROFILE.pageUrl, questionsUrl: ACTIVE_PROFILE.questionsUrl,
-    repo: ACTIVE_PROFILE.repo, branch: ACTIVE_PROFILE.branch, projectName: ACTIVE_PROFILE.name,
-    driveFolder: ACTIVE_PROFILE.driveFolder,
+    repo: (mainEntry && mainEntry.repo) || "", branch: (mainEntry && mainEntry.branch) || "main",
+    projectName: ACTIVE_PROFILE.name, driveFolder: ACTIVE_PROFILE.driveFolder,
+    repos: Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : [],
+    roleRepos: Array.isArray(ACTIVE_PROFILE.roleRepos) ? ACTIVE_PROFILE.roleRepos : [],
   });
   Object.freeze(C);
   const projectApproved = () => !ACTIVE_PROFILE.invalid && !ACTIVE_PROFILE.legacy &&
@@ -2100,6 +2169,18 @@
             <label>Базовая ветка<input id="cfn-project-branch" style="${field}" value="main"></label>
             <label>Папка проекта внутри Arena (латиница)<input id="cfn-project-driveFolder" style="${field}" placeholder="synapse"></label>
           </div>
+          <div id="cfn-project-repos" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:14px;display:none">
+            <h4 style="margin:0 0 6px">Репозитории профиля</h4>
+            <div style="color:#aab4c3;font-size:12px">Один профиль может работать с несколькими репозиториями (одна история, очередь и Gateway на профиль, но разные цели выдачи). Ровно один репозиторий — главный: он совпадает с полями «Репозиторий» и «Ветка» выше.</div>
+            <div id="cfn-project-repos-list"></div>
+            <button id="cfn-project-repo-add" type="button" style="${action};margin-top:7px">Добавить репозиторий</button>
+          </div>
+          <div id="cfn-project-routes" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:10px;display:none">
+            <h4 style="margin:0 0 6px">Маршрутизация ролей к репозиториям</h4>
+            <div style="color:#aab4c3;font-size:12px">Каждой роли ставится в соответствие репозиторий, в котором она работает (ID роли — UUID страницы в базе «Роли», а не её имя). Executor Core → synapse, Executor Cortex → synapse-cortex, аудит из сессии Cortex — явный маршрут или полная ссылка на PR. Роли без маршрута работают в главном репозитории.</div>
+            <div id="cfn-project-routes-list"></div>
+            <button id="cfn-project-route-add" type="button" style="${action};margin-top:7px">Добавить маршрут роли</button>
+          </div>
           <button id="cfn-project-save" style="${action};margin-top:12px;background:#285638">Создать профиль</button>
         </div>
         <div id="cfn-project-note" role="status" style="white-space:pre-wrap;color:#bfe6c4;margin-top:12px"></div>
@@ -2112,7 +2193,126 @@
     let checking = false;
     let editingId = "";
     let migrationPlan = null;
+    // Репозитории и маршруты ролей редактируются отдельными списками; поля
+    // «Репозиторий» и «Ветка» выше дублируют главную запись.
+    let repos = [{ repo: "", branch: "main", main: true }];
+    let routes = []; // {roleId, repo}
+    const reposList = find("repos-list");
+    const routesList = find("routes-list");
     let openingRevision = JSON.stringify(profileRegistry());
+
+    const escHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
+    const ensureMain = () => { if (repos.length && !repos.some((r) => r.main)) repos[0].main = true; };
+    const onlyOneMain = (i) => { repos.forEach((r, k) => { r.main = k === i; }); };
+
+    const renderRepos = () => {
+      reposList.textContent = "";
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:#aab4c3;font-size:12px;margin:0 0 6px";
+      hint.textContent = repos.length ? "Ровно один репозиторий должен быть главным — он совпадает с полями «Репозиторий» и «Ветка» выше." : "Добавьте хотя бы один репозиторий.";
+      reposList.appendChild(hint);
+      for (let i = 0; i < repos.length; i++) {
+        const r = repos[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 120px auto auto;gap:7px;align-items:center;border:1px solid #343b48;border-radius:7px;padding:7px;margin:6px 0";
+        const inpRepo = document.createElement("input");
+        inpRepo.id = `cfn-repo-${i}`; inpRepo.style.cssText = field; inpRepo.placeholder = "owner/repository"; inpRepo.value = r.repo;
+        inpRepo.oninput = () => { r.repo = inpRepo.value.trim(); };
+        const inpBranch = document.createElement("input");
+        inpBranch.id = `cfn-repo-branch-${i}`; inpBranch.style.cssText = field; inpBranch.placeholder = "main"; inpBranch.value = r.branch;
+        inpBranch.oninput = () => { r.branch = inpBranch.value.trim() || "main"; };
+        const mainLabel = document.createElement("label");
+        mainLabel.style.cssText = "display:flex;align-items:center;gap:5px;cursor:pointer";
+        const mainRadio = document.createElement("input");
+        mainRadio.type = "radio"; mainRadio.name = "cfn-repo-main"; mainRadio.value = i; mainRadio.checked = r.main;
+        mainRadio.onchange = () => { onlyOneMain(i); };
+        mainLabel.appendChild(mainRadio); mainLabel.append(document.createTextNode("Главный"));
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button"; removeBtn.textContent = "Удалить";
+        removeBtn.style.cssText = `${action};padding:6px 8px;font-size:12px`;
+        removeBtn.onclick = () => { repos.splice(i, 1); ensureMain(); renderRepos(); };
+        row.appendChild(inpRepo); row.appendChild(inpBranch); row.appendChild(mainLabel); row.appendChild(removeBtn);
+        reposList.appendChild(row);
+      }
+    };
+
+    const renderRoutes = () => {
+      routesList.textContent = "";
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:#aab4c3;font-size:12px;margin:0 0 6px";
+      hint.textContent = "ID роли — UUID страницы роли в базе «Роли» (имя столбца «Роль» — заголовок, а не ID). Роли без маршрута работают в главном репозитории.";
+      routesList.appendChild(hint);
+      const repoSelectHtml = (selected) => repos.map((r) => `<option value="${escHtml(r.repo)}" ${r.repo === selected ? "selected" : ""}>${escHtml(r.repo)} (${escHtml(r.branch)})</option>`).join("") || '<option value="">(добавьте репозиторий выше)</option>';
+      for (let i = 0; i < routes.length; i++) {
+        const rt = routes[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid;grid-template-columns:1fr 1fr auto;gap:7px;align-items:center;border:1px solid #343b48;border-radius:7px;padding:7px;margin:6px 0";
+        const inpRole = document.createElement("input");
+        inpRole.id = `cfn-route-role-${i}`; inpRole.style.cssText = field; inpRole.placeholder = "UUID роли"; inpRole.value = rt.roleId;
+        inpRole.oninput = () => { rt.roleId = inpRole.value.trim(); };
+        const selRepo = document.createElement("select");
+        selRepo.id = `cfn-route-repo-${i}`; selRepo.style.cssText = field; selRepo.innerHTML = repoSelectHtml(rt.repo);
+        selRepo.onchange = () => { rt.repo = selRepo.value; };
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button"; removeBtn.textContent = "Удалить";
+        removeBtn.style.cssText = `${action};padding:6px 8px;font-size:12px`;
+        removeBtn.onclick = () => { routes.splice(i, 1); renderRoutes(); };
+        row.appendChild(inpRole); row.appendChild(selRepo); row.appendChild(removeBtn);
+        routesList.appendChild(row);
+      }
+    };
+
+    const loadProfileUi = (p) => {
+      repos = (Array.isArray(p.repos) && p.repos.length ? p.repos : [{ repo: p.repo || "", branch: p.branch || "main", main: true }])
+        .map((r) => ({ repo: String(r.repo || "").trim(), branch: String(r.branch || "main").trim() || "main", main: Boolean(r.main) }));
+      ensureMain();
+      routes = (Array.isArray(p.roleRepos) ? p.roleRepos : []).map((rt) => ({ roleId: String(rt.roleId || "").trim(), repo: String(rt.repo || "").trim() })).filter((rt) => rt.roleId || rt.repo);
+      renderRepos(); renderRoutes();
+    };
+
+    const saveProfileUi = () => {
+      if (checking) { say("Дождитесь окончания поиска или проверки.", true); return; }
+      const p = { id: editingId || crypto.randomUUID() };
+      for (const field of fields) p[field] = find(field).value.trim();
+      p.driveFolder = p.driveFolder.toLowerCase();
+      p.repos = repos.map((r) => ({ repo: r.repo, branch: r.branch, main: r.main })).filter((r) => r.repo);
+      if (!p.repos.length) p.repos = [{ repo: p.repo || "", branch: p.branch || "main", main: true }];
+      const mains = p.repos.filter((r) => r.main).length;
+      if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
+      p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
+      if (!validProfile(p)) {
+        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true);
+        return;
+      }
+      const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
+      const sourceIds = new Set(known.flatMap((item) => [item.roles, item.missions, item.requests, item.questions]).map((id) => id.toLowerCase()));
+      if ([p.roles, p.missions, p.requests, p.questions].some((id) => sourceIds.has(id.toLowerCase()))) {
+        say("Один из источников уже используется другим профилем. Создайте отдельные копии всех четырёх баз, чтобы не смешать очереди и роли.", true); return;
+      }
+      const usedRepos = new Set(known.filter((item) => !item.legacy).flatMap((item) =>
+        Array.isArray(item.repos) ? item.repos.map((r) => String(r.repo || "").toLowerCase()) : [String(item.repo || "").toLowerCase()]));
+      const clashRepo = p.repos.find((r) => usedRepos.has(String(r.repo).toLowerCase()));
+      if (clashRepo &&
+          !confirm(`Репозиторий ${clashRepo.repo} уже используется другим профилем. Проекты смогут видеть и изменять один репозиторий. Продолжить?`)) return;
+      if (JSON.stringify(profileRegistry()) !== openingRevision ||
+          (editingId && (projectApproved() || GM_getValue("cfn-project-ever-approved", false)))) {
+        say("Профиль или его допуск изменился во время подтверждения. Откройте окно заново.", true); return;
+      }
+      try {
+        if (editingId) {
+          // Сначала ставим удержание, останавливаем автоцикл, затем меняем реестр и перезагружаем вкладку.
+          autoSet(false);
+          sessionStorage.setItem(PROJECT_HOLD_PREFIX + p.id, "1");
+          rawSet(PROFILE_REGISTRY_KEY, profileRegistry().map((item) => item.id === editingId ? p : item));
+          location.reload();
+          return;
+        }
+        rawSet(PROFILE_REGISTRY_KEY, [...profileRegistry(), p]);
+        openingRevision = JSON.stringify(profileRegistry());
+      } catch { say("Не удалось сохранить профиль или перезагрузить вкладку. Проверьте настройки и обновите страницу вручную.", true); return; }
+      form.style.display = "none"; render(p.id);
+      say(`Профиль создан. ID: ${p.id}\nТеперь зарегистрируйте его в шлюзе Drive, откройте этот профиль и сохраните отдельные подключения.`);
+    };
     const profiles = () => [LEGACY_PROFILE, ...profileRegistry().filter(validProfile)];
     const chosen = () => profiles().find((p) => p.id === list.value);
     const render = (selected = ACTIVE_PROFILE.id) => {
@@ -2126,7 +2326,11 @@
       list.value = profiles().some((p) => p.id === selected) ? selected : LEGACY_PROFILE_ID;
       find("current").textContent = ACTIVE_PROFILE.name;
       const p = chosen();
-      find("info").textContent = p ? `ID: ${p.id}\nGitHub: ${p.repo} · ветка ${p.branch}\nDrive: ${p.legacy ? "Arena/logs и Arena/payloads (совместимость)" : `Arena/${p.driveFolder}/{logs,payloads}`}` : "Профиль не найден.";
+      const repos = Array.isArray(p?.repos) && p.repos.length ? p.repos : [{ repo: p.repo || "", branch: p.branch || "main", main: true }];
+      const main = repos.find((r) => r.main) || repos[0];
+      find("info").textContent = p
+        ? `ID: ${p.id}\nРепозитории: ${repos.map((r) => `${r.repo || p.repo} (${r.branch || "main"}${r.main ? ", главный" : ""}`).join("; ") || p.repo}\nМаршрутов ролей: ${Array.isArray(p.roleRepos) ? p.roleRepos.length : 0}\nDrive: ${p.legacy ? "Arena/logs и Arena/payloads (совместимость)" : `Arena/${p.driveFolder}/{logs,payloads}`}`
+        : "Профиль не найден.";
       find("enable").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !projectApproved() ? "inline-block" : "none";
       const everApproved = !ACTIVE_PROFILE.legacy && (GM_getValue("cfn-project-ever-approved", false) || projectApproved());
       find("edit").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !everApproved ? "inline-block" : "none";
@@ -2152,6 +2356,9 @@
       editingId = "";
       find("save").textContent = "Создать профиль";
       find("form-title").textContent = "Новый профиль";
+      repos = [{ repo: "", branch: "main", main: true }];
+      routes = [];
+      renderRepos(); renderRoutes();
       for (const field of fields) find(field).value = field === "branch" ? "main" : "";
       form.style.display = "block"; say("Заполните настройки. Ничего в сервисах не создаётся автоматически.");
       find("name").focus();
@@ -2163,6 +2370,7 @@
       const p = chosen(); if (!p) return;
       for (const field of fields) find(field).value = p[field] || (field === "branch" ? "main" : "");
       find("name").value = `${p.name} — новая настройка`;
+      loadProfileUi(p);
       form.style.display = "block";
       say("Будет создан новый профиль с пустым состоянием и отдельными доступами; старый профиль не изменится.");
       find("name").focus();
@@ -2176,6 +2384,7 @@
       }
       editingId = ACTIVE_PROFILE.id;
       for (const field of fields) find(field).value = ACTIVE_PROFILE[field] || (field === "branch" ? "main" : "");
+      loadProfileUi(ACTIVE_PROFILE);
       find("save").textContent = "Сохранить исправления и перезагрузить вкладку";
       find("form-title").textContent = "Исправить текущий профиль";
       form.style.display = "block";
@@ -2219,51 +2428,7 @@
         checking = false;
       }
     };
-    find("save").onclick = () => {
-      if (checking) { say("Дождитесь окончания поиска или проверки.", true); return; }
-      if (JSON.stringify(profileRegistry()) !== openingRevision) {
-        say("Список проектов изменился в другой вкладке. Закройте окно и откройте его заново.", true); return;
-      }
-      if (editingId && (editingId !== ACTIVE_PROFILE.id || profileRegistry().filter((item) => item.id === editingId).length !== 1 ||
-          projectApproved() || GM_getValue("cfn-project-ever-approved", false) || checking || autoOn() || busy || projectAsyncWork > 0)) {
-        say("Исправление доступно только текущему неиспользованному профилю и после окончания операций.", true); return;
-      }
-      const p = { id: editingId || crypto.randomUUID() };
-      for (const field of fields) p[field] = find(field).value.trim();
-      p.driveFolder = p.driveFolder.toLowerCase();
-      if (!validProfile(p)) {
-        say("Проверьте четыре разных UUID источников, HTTPS-ссылки Notion, owner/repository, допустимую ветку и имя папки из латинских букв, цифр, . _ -.", true); return;
-      }
-      const known = [LEGACY_PROFILE, ...profileRegistry().filter((item) => validProfile(item) && item.id !== editingId)];
-      const sourceIds = new Set(known.flatMap((item) => [item.roles, item.missions, item.requests, item.questions]).map((id) => id.toLowerCase()));
-      if ([p.roles, p.missions, p.requests, p.questions].some((id) => sourceIds.has(id.toLowerCase()))) {
-        say("Один из источников уже используется другим профилем. Создайте отдельные копии всех четырёх баз, чтобы не смешать очереди и роли.", true); return;
-      }
-      if (known.some((item) => !item.legacy && item.driveFolder === p.driveFolder)) {
-        say("Имя папки Drive уже занято другим профилем. Выберите отдельное имя.", true); return;
-      }
-      if (known.some((item) => item.repo.toLowerCase() === p.repo.toLowerCase()) &&
-          !confirm("Этот GitHub-репозиторий уже используется другим профилем. Проекты смогут видеть и изменять один репозиторий. Продолжить?")) return;
-      // Пока было открыто подтверждение, другая вкладка могла допустить
-      // профиль или изменить реестр. Не записываем старый снимок поверх него.
-      if (JSON.stringify(profileRegistry()) !== openingRevision ||
-          (editingId && (projectApproved() || GM_getValue("cfn-project-ever-approved", false)))) {
-        say("Профиль или его допуск изменился во время подтверждения. Откройте окно заново.", true); return;
-      }
-      try {
-        if (editingId) {
-          // Сначала ставим удержание, затем меняем реестр и перезагружаем closure.
-          sessionStorage.setItem(PROJECT_HOLD_PREFIX + p.id, "1");
-          rawSet(PROFILE_REGISTRY_KEY, profileRegistry().map((item) => item.id === editingId ? p : item));
-          location.reload();
-          return;
-        }
-        rawSet(PROFILE_REGISTRY_KEY, [...profileRegistry(), p]);
-        openingRevision = JSON.stringify(profileRegistry());
-      } catch { say("Не удалось сохранить профиль или перезагрузить вкладку. Проверьте настройки и обновите страницу вручную.", true); return; }
-      form.style.display = "none"; render(p.id);
-      say(`Профиль создан. ID: ${p.id}\nТеперь зарегистрируйте его в шлюзе Drive, откройте этот профиль и сохраните отдельные подключения.`);
-    };
+    find("save").onclick = saveProfileUi;
     find("switch").onclick = () => {
       const target = chosen();
       if (!target || target.id === ACTIVE_PROFILE.id) { say("Этот проект уже выбран."); return; }
@@ -2380,6 +2545,7 @@
     render();
     find("close").focus();
   }
+
 
   // ───────────────────────────── ntfy-настройка ─────────────────────────────
   function ntfyDialog() {
@@ -6278,6 +6444,14 @@
       text,
       at: Date.now(),
     });
+    // Снимок цели выдачи: репозиторий сессии роли, целевой репозиторий работы
+    // или проверки и его базовая ветка. По умолчанию цель — репозиторий сессии
+    // роли (Executor работает в своём, аудитор может проверять чужой через
+    // extra.targetRepo/extra.targetBranch; полный URL PR тоже называет репозиторий).
+    const sessionRepo = profileSessionRepo(role.id);
+    const targetRepo = (payload && payload.targetRepo) || sessionRepo || C.repo;
+    const targetBranch = (payload && payload.targetBranch) || profileRepoBranch(targetRepo);
+
     GM_setValue(K.expect, {
       roleId: role.id,
       roleName: role.name,
@@ -6296,6 +6470,9 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       ...payload,
+      sessionRepo,
+      targetRepo,
+      targetBranch,
     });
     dbg("sendToRole: задание в очереди", { role: role.name, kind, ref, длина: text.length });
     GM_setValue("cfn-me", role.name);
@@ -7081,14 +7258,17 @@
    * базовую ветку, а DOM-состояние повторно сверяется с GitHub.
    */
   async function ensureMerged(task, result) {
-    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result) : "";
+    const target = dispatchTarget();
+    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, target ? target.repo : null) : "";
     if (foreign) { lastMergeCheck = { status: "boundary", why: foreign }; return "boundary"; }
     const scopedProject = typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy;
     let projectCheck = null;
     if (scopedProject) {
       // И до запасных кнопок нужен конкретный PR, его репозиторий и base.
       // Бейдж Arena сам по себе не доказывает, что PR относится к проекту.
-      projectCheck = await verifyMergeClaim(result, ghToken());
+      // Проверяем именно цель выдачи (репозиторий + базовая ветка из снимка),
+      // а не всегда глобальный C.repo.
+      projectCheck = await verifyMergeClaim(result, ghToken(), target || undefined);
       if (projectCheck.status === "boundary" || projectCheck.status === "unknown") {
         lastMergeCheck = projectCheck;
         return "boundary";
@@ -7257,7 +7437,8 @@
     // 24.10 на экране Build/Release висела активная «Create PR» (Arena не
     // знает о PR, слитом через `gh`), и отличить сделанную работу от
     // выдуманной было нечем. Теперь состояние спрашиваем у GitHub.
-    const check = await verifyMergeClaim(result, ghToken());
+    const target = dispatchTarget();
+    const check = await verifyMergeClaim(result, ghToken(), target || undefined);
     lastMergeCheck = check;
     if (check.status === "boundary" || (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && check.status === "unknown"))
       return "boundary";
@@ -7347,12 +7528,12 @@
    */
   const ghToken = () => String(GM_getValue(K.ghToken, "") || "").trim();
 
-  /** Ссылка на PR: принимаем и номер, и готовый URL. */
-  function prUrl(pr) {
+  /** Ссылка на PR: принимаем и номер, и готовый URL. `repo` — репозиторий цели выдачи. */
+  function prUrl(pr, repo = C.repo) {
     const value = String(pr ?? "").trim().replace(/^#/, "");
     if (!value) return "";
     if (/^https?:\/\//.test(value)) return value;
-    return /^\d+$/.test(value) ? `https://github.com/${C.repo}/pull/${value}` : "";
+    return /^\d+$/.test(value) ? `https://github.com/${repo}/pull/${value}` : "";
   }
 
   /** Подпись PR для журнала: номер или ссылка из маркера. */
@@ -7365,20 +7546,36 @@
    * Номер и репозиторий PR из маркера.
    *
    * Принимаем и число, и «#37», и полный адрес: агент может сослаться на PR
-   * словами. Адрес важнее номера — он называет репозиторий, а номер без
-   * репозитория проверяется в нашем.
+   * словами. Адрес важнее номера — он называет репозиторий. Номер без
+   * репозитория проверяется в репозитории цели выдачи (`targetRepo`), а не
+   * всегда в `C.repo`.
    */
-  function prRef(result) {
+  function prRef(result, targetRepo = C.repo) {
     const raw = String((result && result.pr) ?? "").trim();
     if (!raw) return null;
     const url = raw.match(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i);
     if (url) return { repo: `${url[1]}/${url[2]}`, number: Number(url[3]) };
     const num = raw.replace(/^#/, "").match(/^(\d+)$/);
-    return num ? { repo: C.repo, number: Number(num[1]) } : null;
+    return num ? { repo: String(targetRepo || C.repo || ""), number: Number(num[1]) } : null;
+  }
+
+  /** Снимок цели выдачи из текущего ожидания: репозиторий и базовая ветка. */
+  function dispatchTarget() {
+    try {
+      const expect = GM_getValue(K.expect, null);
+      if (expect && (expect.targetRepo || expect.targetBranch)) {
+        return {
+          repo: String(expect.targetRepo || C.repo || ""),
+          branch: String(expect.targetBranch || C.branch || "main"),
+        };
+      }
+    } catch { /* ожидание недоступно — работаем с глобальным конфигом */ }
+    return null;
   }
 
   /** Явная чужая или некорректная ссылка не доказывает мерж нашего проекта. */
-  function projectPrBoundary(result) {
+  function projectPrBoundary(result, targetRepo = null) {
+    const repo = String(targetRepo || C.repo || "");
     const raw = String((result && result.pr) ?? "").trim();
     if (!raw || /^(none|null|no|нет|—|-)$/i.test(raw)) {
       return typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && hasMergedClaim(result)
@@ -7394,9 +7591,9 @@
           return "Ссылка PR не является адресом GitHub pull request.";
       } catch { return "Некорректная ссылка PR."; }
     }
-    const ref = prRef(result);
-    if (ref && ref.repo.toLowerCase() !== String(C.repo || "").toLowerCase())
-      return `PR относится к ${ref.repo}, а этот профиль работает с ${C.repo}.`;
+    const ref = prRef(result, repo);
+    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase())
+      return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
     return "";
   }
 
@@ -7433,21 +7630,23 @@
    * `needsToken` — проверка упёрлась в доступ, а не в состояние PR: приватный
    * репозиторий без токена отвечает 404, и это нельзя читать как «PR нет».
    */
-  async function verifyMergeClaim(result, token = "") {
-    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result) : "";
+  async function verifyMergeClaim(result, token = "", target = null) {
+    const repo = String((target && target.repo) || C.repo || "");
+    const branch = String((target && target.branch) || C.branch || "main");
+    const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, repo) : "";
     if (foreign) return { status: "boundary", why: foreign };
-    const ref = prRef(result);
+    const ref = prRef(result, repo);
     if (!ref) return { status: "unknown", why: "в маркере нет номера PR" };
     try {
       const pr = await githubPr(ref.repo, ref.number, token);
       if (!pr || typeof pr !== "object") return { status: "unknown", why: "GitHub ответил пустым ответом" };
       if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy &&
-          String(pr.base?.repo?.full_name || "").toLowerCase() !== String(C.repo || "").toLowerCase())
-        return { status: "boundary", why: "GitHub не подтвердил репозиторий базовой ветки PR этого проекта." };
-      if (pr.base?.ref && C.branch && pr.base.ref !== C.branch)
-        return { status: "boundary", why: `PR направлен в ${pr.base.ref}, а базовая ветка проекта — ${C.branch}.` };
+          String(pr.base?.repo?.full_name || "").toLowerCase() !== repo.toLowerCase())
+        return { status: "boundary", why: `GitHub не подтвердил репозиторий базовой ветки PR цели выдачи (${repo}).` };
+      if (pr.base?.ref && branch && pr.base.ref !== branch)
+        return { status: "boundary", why: `PR направлен в ${pr.base.ref}, а базовая ветка цели выдачи — ${branch}.` };
       if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && !pr.base?.ref)
-        return { status: "boundary", why: "GitHub не подтвердил базовую ветку PR этого проекта." };
+        return { status: "boundary", why: "GitHub не подтвердил базовую ветку PR цели выдачи." };
       const merged = pr.merged === true || Boolean(pr.merged_at);
       if (merged) return { status: "merged", why: `PR #${ref.number} слит ${pr.merged_at || ""}`.trim(), pr };
       if (String(pr.state || "").toLowerCase() === "closed")
@@ -7508,7 +7707,9 @@
   async function recoverLastClaim(adopt = true) {
     const last = GM_getValue(K.lastResult, null);
     if (!last || !last.dispatch_id) return { ok: false, text: "Нет запомненной выдачи: возвращать нечего." };
-    const check = await verifyMergeClaim(last.result || last, ghToken());
+    const target = last && (last.targetRepo || last.targetBranch)
+      ? { repo: last.targetRepo, branch: last.targetBranch } : null;
+    const check = await verifyMergeClaim(last.result || last, ghToken(), target);
     if (check.status !== "merged")
       return { ok: false, text: `GitHub мерж не подтверждает: ${check.why}. Карточка не тронута.` };
     const page = await notion("GET", `pages/${last.dispatch_id}`);
@@ -7621,7 +7822,9 @@
     const last = GM_getValue(K.lastResult, null);
     if (!last || last.verdict !== "claim-rejected" || last.recoveredAt) return;
     healedThisPage = true;
-    const check = await verifyMergeClaim(last.result || last, ghToken());
+    const target = last && (last.targetRepo || last.targetBranch)
+      ? { repo: last.targetRepo, branch: last.targetBranch } : null;
+    const check = await verifyMergeClaim(last.result || last, ghToken(), target);
     if (check.status !== "merged") return;
     log(
       `Проверка ошиблась: GitHub подтвердил мерж ${prLabelOf(last.result || last)} — ` +
@@ -7771,18 +7974,27 @@
     ].join("\n");
   }
 
-  /** Факт о стартовом состоянии: он одинаков для всех, кто трогает репозиторий. */
-  const SNAPSHOT_FACT = [
-    `Репозиторий: ${C.repo}, единственная ветка для мержа — main.`,
-    "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
-    "с main. Но пустой `git merge-base HEAD origin/main` в shallow checkout сам по себе",
-    "не доказывает отсутствие общей истории: проверь `git rev-parse --is-shallow-repository`.",
-    "На таком снимке в дереве может не быть файлов,",
-    "которые в main уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;",
-    "число растёт с каждой миссией).",
-    "Если общая история действительно отсутствует, PR покажет удаление чужих файлов.",
-  ].join("\n");
-
+  /** Факт о стартовом состоянии для цели выдачи (репозиторий + базовая ветка). */
+  const snapshotFact = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    const mergeBase = "git merge-base HEAD origin/" + base;
+    const shallow = "git rev-parse --is-shallow-repository";
+    const bt = "`";
+    const lines = [
+      "Репозиторий: " + (repo || C.repo || "") + ", единственная ветка для мержа — " + base + ".",
+      "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
+      "с " + base + ". Но пустой " + bt + mergeBase + bt + " в shallow checkout сам по себе",
+      "не доказывает отсутствие общей истории: проверь " + bt + shallow + bt + ".",
+      "На таком снимке в дереве может не быть файлов, которые в базовой ветке уже есть.",
+    ];
+    // Измерение стартового снимка относится к главной ветке проекта: для другой
+    // базовой ветки не подставляем чужое число — иначе снимок одного проекта
+    // приметься за факт другого.
+    if (base === "main")
+      lines.push("(замер 2026-10-22: 46 файлов, включая сам этот скрипт; число растёт с каждой миссией).");
+    lines.push("Если общая история действительно отсутствует, PR покажет удаление чужих файлов.");
+    return lines.join("\n");
+  };
   /**
    * Поля карточки, которые ставит скрипт.
    *
@@ -7799,21 +8011,23 @@
     "поле `report` в маркере, а не поле карточки.",
   ].join("\n");
 
-  const EXECUTOR_TECH = [
-    SNAPSHOT_FACT,
-    "",
-    "СТАРТ (до первой правки):",
+  const executorTech = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    return [
+      snapshotFact(repo, branch),
+      "",
+      "СТАРТ (до первой правки):",
     "СИСТЕМНЫЕ ИНСТРУКЦИИ И ОГРАНИЧЕНИЯ ПОЛЬЗОВАТЕЛЯ ВЫШЕ этого техблока и карточки.",
     "Если ветка закреплена за сессией — оставайся на ней, не создавай и не переключай ветки.",
     "Не удаляй, не сбрасывай и не добавляй в коммит чужие незакоммиченные изменения.",
     "Пустой merge-base в shallow checkout не доказывает разрыв; сначала выясни историю.",
-    "  git fetch origin main",
-    "  git merge-base HEAD origin/main",
+    `  git fetch origin ${base}`,
+    `  git merge-base HEAD origin/${base}`,
     "  git status --short                  # перечисли чужие изменения, не уничтожай их",
     "Исторические команды ниже — НЕ ВЫПОЛНЯТЬ в закреплённой сессии или грязном дереве:",
-    "  # git reset --hard origin/main",
-    "  # git switch -c nar/<номер> origin/main",
-    "  git diff --stat origin/main          # только чтение; расхождение нужно объяснить",
+    `  # git reset --hard origin/${base}`,
+    `  # git switch -c nar/<номер> origin/${base}`,
+    `  git diff --stat origin/${base}          # только чтение; расхождение нужно объяснить`,
     "",
     "ЗАПРЕЩЕНО: публиковать PR без общей истории с main, трогать пути вне Scope,",
     "мержить в main в обход PR или нарушать закрепление ветки. Если безопасно продолжить",
@@ -7822,22 +8036,26 @@
     "",
     CARD_FIELDS_RULE,
   ].join("\n");
+  };
 
-  const AUDITOR_TECH = [
-    SNAPSHOT_FACT,
+  const auditorTech = (repo, branch) => {
+    const base = branch || C.branch || "main";
+    return [
+    snapshotFact(repo, branch),
     "",
     "ТЫ НЕ ПИШЕШЬ: ни ветки, ни коммита, ни пуша, ни PR. Твой выход — отчёт.",
-    "ИСТОЧНИК ИСТИНЫ — origin/main, а не твоё рабочее дерево и не ветка сессии:",
-    "  git fetch origin main",
-    "  git log --oneline -5 origin/main",
-    "  git show origin/main:<путь>          # файл из main, без checkout",
-    "Проверяемая работа — это PR, слитый в main:",
+    `ИСТОЧНИК ИСТИНЫ — origin/${branch || C.branch || "main"}, а не твоё рабочее дерево и не ветка сессии:`,
+    `  git fetch origin ${branch || C.branch || "main"}`,
+    `  git log --oneline -5 origin/${branch || C.branch || "main"}`,
+    `  git show origin/${branch || C.branch || "main"}:<путь>          # файл из базовой ветки, без checkout`,
+    `Проверяемая работа — это PR, слитый в ${base}:`,
     "  gh pr view <номер> --json state,mergeCommit",
     "  gh pr diff <номер>",
     "Свою ветку как эталон не используй: она может быть снимком без части файлов.",
     "",
     CARD_FIELDS_RULE,
   ].join("\n");
+  };
 
   const COORDINATOR_TECH = [
     "Git и репозиторий тебе не нужны: ты не читаешь код и не запускаешь команды.",
@@ -7871,27 +8089,36 @@
   ].join("\n");
 
   const TECH_BY_FN = {
-    Executor: EXECUTOR_TECH,
-    Auditor: AUDITOR_TECH,
+    Executor: (repo, branch) => executorTech(repo, branch),
+    Auditor: (repo, branch) => auditorTech(repo, branch),
     Coordinator: COORDINATOR_TECH,
     Reviewer: REVIEWER_TECH,
   };
 
   /**
-   * Полный блок для роли. Неизвестная функция трактуется как Executor:
-   * забыть поле «Функция» безопаснее в сторону «проверь ветку», чем в
-   * сторону «делай что хочешь».
+   * Полный блок для роли, собранный из контекста цели выдачи: репозиторий и
+   * базовая ветка, в которой работает эта карточка, а не глобальный C.repo.
+   * Неизвестная функция трактуется как Executor: забыть поле «Функция»
+   * безопаснее в сторону «проверь ветку», чем в сторону «делай что хочешь».
    */
-  function technicalInfo(role) {
-    const body = TECH_BY_FN[role.fn] || EXECUTOR_TECH;
+  function technicalInfo(role, ctx = {}) {
+    const repo = ctx.repo || C.repo || "";
+    const branch = ctx.branch || C.branch || "main";
+    const builder = TECH_BY_FN[role.fn] || TECH_BY_FN.Executor;
+    const body = typeof builder === "function" ? builder(repo, branch) : builder;
     let text = [techHeader(role), "", body, "", TECH_CLOSE].join("\n");
-    if (C.branch && C.branch !== "main") text = text.replace(/\bmain\b/g, C.branch);
+    if (branch !== "main") text = text.replace(/\bmain\b/g, branch);
     if (C.driveFolder) text = text.replace(/Arena\/payloads/g, `Arena/${C.driveFolder}/payloads`)
       .replace("Раскладка и правила — docs/agents/drive.md.", `Папка текущего проекта — Arena/${C.driveFolder}.`);
     if (C.projectName && C.projectName !== "Relay")
       text = text.replace("которые в " + (C.branch || "main") + " уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;\nчисло растёт с каждой миссией).", "которые в базовой ветке уже есть.");
     return text;
   }
+
+
+
+
+
 
   // ───────────────────────────── промпты ─────────────────────────────
   /** Правило поведения зависит от функции: аудитору и координатору мерж не положен. */
@@ -7960,8 +8187,9 @@
     ].join("\n");
   }
 
-  /** Порядок работы для того, кто пишет код: коммит, пуш, PR, мерж. */
-  function executorOrder(task, runId) {
+  /** Порядок работы для того, кто пишет код: коммит, пуш, PR, мерж. `ctx` — цель выдачи (репозиторий и базовая ветка). */
+  function executorOrder(task, runId, ctx = {}) {
+    const branch = ctx.branch || (typeof C !== "undefined" && C.branch) || "main";
     return [
       "ПОРЯДОК (с учётом системных ограничений и прямого запроса пользователя)",
       "Порядок ниже не разрешает сброс дерева, смену закреплённой ветки или публикацию чужих изменений.",
@@ -7969,7 +8197,7 @@
       "2. Коммит, если разрешён: git add -A && git commit -m \"<номер>: <суть>\" — ТОЛЬКО когда в дереве нет чужих изменений; иначе укажи свои пути явно.",
       "3. Пуш — только в разрешённую ветку и если он действительно запрошен.",
       "4. PR и мерж — только если разрешены; проверяй, что PR содержит лишь твою работу:",
-      `   gh pr create --fill --base ${(typeof C !== "undefined" && C.branch) || "main"}   # если PR уже есть — пропусти`,
+      `   gh pr create --fill --base ${branch}   # если PR уже есть — пропусти`,
       "   # Исторический пример НЕ выполнять: gh pr merge --squash --delete-branch",
       "   Вместо него — gh pr merge <номер> --squash без удаления закреплённой ветки; номер указывай явно.",
       "   Своих изменений в репозитории нет (отчёт, аудит-справка, запись решения): PR не открывай,",
@@ -7985,12 +8213,13 @@
     ];
   }
 
-  /** Порядок для аудитора: ничего не менять, только проверить и вынести вердикт. */
-  function auditorOrder(task, runId) {
+  /** Порядок для аудитора: ничего не менять, только проверить и вынести вердикт. `ctx` — цель проверки (репозиторий и базовая ветка). */
+  function auditorOrder(task, runId, ctx = {}) {
+    const branch = ctx.branch || (typeof C !== "undefined" && C.branch) || "main";
     return [
       "ПОРЯДОК (каждый ход, обязательно)",
       "1. В репозитории ничего не менять: ни ветки, ни коммита, ни пуша, ни PR.",
-      `2. Собрать факты из origin/${(typeof C !== "undefined" && C.branch) || "main"} и из слитого PR (команды — в блоке выше).`,
+      `2. Собрать факты из origin/${branch} и из слитого PR (команды — в блоке выше).`,
       "3. Вердикт: pass или fail, каждое утверждение — с командой, которой его проверить.",
       "4. Находки — в отчёт; чинить их будет исполнитель, а не ты.",
       "5. Последней строкой ответа — ровно один маркер:",
@@ -8076,9 +8305,9 @@
     ].join("\n");
   }
 
-  function executorPrompt(task, role, payload, logId, runId, missionId = "") {
+  function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {
     return [
-      technicalInfo(role),
+      technicalInfo(role, ctx),
       "",
       `Задача ${taskTitle(task)} (dispatch ${task.id}, run ${runId}).`,
       "",
@@ -8093,10 +8322,10 @@
       assignmentBody(task, payload),
       "",
       ...(role.fn === "Auditor"
-        ? auditorOrder(task, runId)
+        ? auditorOrder(task, runId, ctx)
         : role.fn === "Reviewer"
           ? reviewerOrder(task, runId, missionId)
-          : executorOrder(task, runId)),
+          : executorOrder(task, runId, ctx)),
       "",
       roleContext(role),
     ].join("\n");
@@ -8135,9 +8364,10 @@
     rework = "",
     openQuestions = "",
     answers = "",
+    ctx = {},
   ) {
     return [
-      technicalInfo(role),
+      technicalInfo(role, ctx),
       "",
       `Миссия: ${rt(mission.properties["Миссия"])}.`,
       `Mission ID: ${mission.id} (UUID страницы миссии, скопируй точно в каждую карточку).`,
@@ -8164,7 +8394,7 @@
       "Если роль не может получить работу («Ждёт», пустой Agent URL, нет в «Ролях») — назначь в «Кому» активную роль или оставь Draft и назови, кого он ждёт. Статус роли и Agent URL — зона Мастера, не меняй их.",
       "Роли Reviewer (Warden) обычные рабочие карточки не выдавай: аудит поручай независимому Auditor или подходящему Executor. Reviewer отдельно принимает миссию по next: done и отвечает на вопросы и предложения; оба канала сохраняются.",
       "Проверки промежуточной карточки выбирай по её рискам и Scope, но выполни все проверки, прямо требуемые её Acceptance и ТЗ: не запускай повторно полный миссионный набор без требования или риска. Accepted означает обработку карточки, а не pass её проверки и не выполнение всей миссии; явно учитывай Check=fail и остатки.",
-      `Если ТЗ требует финальные проверки на одном SHA: после последней обязательной правки зафиксируй финальный ${(typeof C !== "undefined" && C.branch) || "main"} SHA, выполни все требуемые команды и CI именно на нём, а отчёт/ссылки сохрани в Notion или Drive, когда это разрешено ТЗ. Отчётный коммит после проверок меняет SHA; если код или обязательный файл изменился, зафиксируй новый SHA и повтори требуемые проверки. Требование отчёта конкретной карточки не отменяется.`,
+      `Если ТЗ требует финальные проверки на одном SHA: после последней обязательной правки зафиксируй финальный ${ctx.branch || (typeof C !== "undefined" && C.branch) || "main"} SHA, выполни все требуемые команды и CI именно на нём, а отчёт/ссылки сохрани в Notion или Drive, когда это разрешено ТЗ. Отчётный коммит после проверок меняет SHA; если код или обязательный файл изменился, зафиксируй новый SHA и повтори требуемые проверки. Требование отчёта конкретной карточки не отменяется.`,
       "Оракул миссии (ТЗ §2/§3) и инварианты миссии менять нельзя: другой смысл требует процесса ТЗ — предложения ADR через вопрос в Notion и фактического решения приёмки или Мастера в пределах его полномочий. Acceptance карточки — не оракул миссии: ошибочную формулировку ты исправляешь сам, но так, чтобы смысл проверки миссии не изменился.",
       "Новые предложения ADR передавай через question в том же маркере: полная суть, ссылка на материал при наличии, три варианта, default = «оставить как есть». Они попадают в «Обратную связь»; по существу отвечает Reviewer, Мастер нужен только при физической необходимости. Старые файлы ADR proposed и их историю сохраняй, включая ссылку на файл в вопросе; не удаляй их до безопасного переноса и фактического рассмотрения. Только фактический ответ приёмки или Мастера разрешает исполнителю оформить существующий файл как `accepted`/`rejected` с датой. Сам default или истёкший срок не являются ответом и не разрешают менять оракул. Нерешённое предложение — долг, а не состояние: если оно висит, назови его в Итоге миссии.",
       "",
@@ -8535,6 +8765,8 @@
     // Что решила проверка — запоминаем до записи в Notion. Если она ошиблась,
     // «Подключения» → «Вернуть карточку» перепроверит GitHub и вернёт Submitted, не гоняя
     // исполнителя по второму кругу.
+    const expectSnapshot = GM_getValue(K.expect, null);
+    const prRefResult = result && result.pr ? prRef(result, expectSnapshot && expectSnapshot.targetRepo ? expectSnapshot.targetRepo : C.repo) : null;
     GM_setValue(K.lastResult, {
       at: Date.now(),
       dispatch_id: result.dispatch_id,
@@ -8547,6 +8779,14 @@
       roleName: role.name,
       verdict: merged,
       why: (lastMergeCheck && lastMergeCheck.why) || "",
+      // Снимок цели выдачи: репозиторий сессии роли, целевой репозиторий и
+      // его базовая ветка. Восстановление и повторная проверка опираются на
+      // него, а не на текущий глобальный конфиг профиля.
+      sessionRepo: expectSnapshot && expectSnapshot.sessionRepo ? String(expectSnapshot.sessionRepo) : (C.repo || ""),
+      targetRepo: expectSnapshot && expectSnapshot.targetRepo ? String(expectSnapshot.targetRepo) : (C.repo || ""),
+      targetBranch: expectSnapshot && expectSnapshot.targetBranch ? String(expectSnapshot.targetBranch) : (C.branch || "main"),
+      prRepo: prRefResult ? prRefResult.repo : null,
+      prNumber: prRefResult ? prRefResult.number : null,
       result: {
         pr: result.pr ?? null,
         merged: result.merged === true,
@@ -8608,10 +8848,11 @@
     // различаем по маркеру. Без заявки о мерже работа в main не попала —
     // возвращаем карточку в Rework с причиной, решение остаётся за Координатором.
     if ((merged === "closed" || merged === "unconfirmed") && !hasMergedClaim(result)) {
+      const targetBranch = expect && expect.targetBranch ? expect.targetBranch : (C.branch || "main");
       const reason =
         merged === "closed"
-          ? `PR закрыт без мержа (Closed). Работа в ${(typeof C !== "undefined" && C.branch) || "main"} не попала — нужна повторная выдача.`
-          : `Исполнитель не заявил о мерже (нет merged: true) и PR не открыт. Работа в ${(typeof C !== "undefined" && C.branch) || "main"} не попала — нужна повторная выдача.`;
+          ? `PR закрыт без мержа (Closed). Работа в ${targetBranch} не попала — нужна повторная выдача.`
+          : `Исполнитель не заявил о мерже (нет merged: true) и PR не открыт. Работа в ${targetBranch} не попала — нужна повторная выдача.`;
       try {
         await gateway("append", logId, {
           marker: `<!-- CF_DISPATCH ${result.dispatch_id}:${result.run_id}:closed -->`,
@@ -8648,7 +8889,8 @@
     };
     if (typeof result.check === "number") props["Check"] = { select: { name: result.check === 0 ? "pass" : "fail" } };
     if (result.report) props["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
-    const link = prUrl(result.pr);
+    const targetRepo = expect && expect.targetRepo ? expect.targetRepo : C.repo;
+    const link = prUrl(result.pr, targetRepo);
     if (link) props["PR"] = { url: link };
     // Время записи ответа глазами Notion: по нему потом видно, трогал ли
     // карточку кто-то ещё (Rework → Ready). Часы браузера и Notion разные,
@@ -11698,6 +11940,13 @@
     if (confirmed.length !== 1 || confirmed[0].fn !== role.fn || !["Executor", "Auditor"].includes(confirmed[0].fn))
       return "роль или её функция изменились перед выдачей; перечитай базу «Роли» и выбери активного исполнителя или аудитора";
 
+    // Цель выдачи — репозиторий сессии роли (карта route репозиториев профиля)
+    // и его базовая ветка. Техблок, команды gh и проверка PR берутся из этого
+    // контекста, а не из глобального C.repo/C.branch, чтобы один профиль
+    // обслуживал несколько репозиториев без смены UUID.
+    const sessionRepo = profileSessionRepo(role.id);
+    const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
+
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10
     // NAR-1.7 выдали второй раз с новым run — она была в списке Ready уже
@@ -11829,10 +12078,13 @@
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
-    const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || ""), "dispatch", card.id, {
+    const dispatchCtx = { repo: sessionRepo, branch: targetBranch };
+    const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
       logId,
+      targetRepo: sessionRepo,
+      targetBranch: targetBranch,
       title: taskTitle(fresh),
       // Ссылка нужна минимальному повтору: «прочитай карточку сам».
       url: fresh.url || "",

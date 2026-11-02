@@ -10,8 +10,55 @@
   const LEGACY_PROFILE = Object.freeze({
     id: LEGACY_PROFILE_ID, name: "Проект не настроен", legacy: true, invalid: true,
     roles: "", missions: "", requests: "", questions: "", pageUrl: "", questionsUrl: "", repo: "",
-    branch: "main", driveFolder: "",
+    branch: "main", driveFolder: "", repos: [], roleRepos: [],
   });
+
+  /** Один репозиторий профиля и его базовая ветка. */
+  const REPO_ENTRY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+  const BRANCH_ENTRY = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
+
+  /**
+   * Привести профиль к единой форме без смены UUID и без сброса состояния.
+   * У старых профилей (без `repos`) единственный репозиторий из `repo`/`branch`
+   * становится главным; у новых `repo`/`branch` всегда дублируют главную запись.
+   */
+  function normalizeProfile(profile) {
+    if (!profile || typeof profile !== "object") return profile;
+    const p = { ...profile };
+    const repos = Array.isArray(p.repos) ? p.repos.slice() : [];
+    if (repos.length === 0 && (p.repo || p.branch)) {
+      repos.push({ repo: p.repo || "", branch: p.branch || "main", main: true });
+    }
+    let main = repos.find((r) => r && r.main === true);
+    if (!main && repos.length) main = repos[0];
+    if (main) {
+      p.repo = String(main.repo || "");
+      p.branch = String(main.branch || "main");
+    }
+    if (repos.length) p.repos = repos;
+    if (!Array.isArray(p.roleRepos)) p.roleRepos = [];
+    return p;
+  }
+
+  function profileMainEntry(profile = ACTIVE_PROFILE) {
+    const repos = Array.isArray(profile?.repos) ? profile.repos : [];
+    const main = repos.find((r) => r && r.main === true);
+    return main || repos[0] || null;
+  }
+
+  function profileRepoBranch(repo, profile = ACTIVE_PROFILE) {
+    const entry = (Array.isArray(profile?.repos) ? profile.repos : []).find(
+      (r) => r && String(r.repo || "").toLowerCase() === String(repo || "").toLowerCase(),
+    );
+    return entry ? String(entry.branch || "main") : String(profile?.branch || "main");
+  }
+
+  function profileSessionRepo(roleId) {
+    if (!roleId) return String(C.repo || "");
+    const map = Array.isArray(C.roleRepos) ? C.roleRepos : [];
+    const hit = map.find((m) => m && String(m.roleId || "").toLowerCase() === String(roleId).toLowerCase());
+    return hit ? String(hit.repo || "") : String(C.repo || "");
+  }
 
   function profileRegistry() {
     const value = rawGet(PROFILE_REGISTRY_KEY, []);
@@ -30,14 +77,33 @@
             !["app.notion.com", "notion.so", "www.notion.so"].includes(url.hostname)) return false;
       }
     } catch { return false; }
-    const repo = String(profile.repo || "");
-    const branch = String(profile.branch || "");
-    const folder = String(profile.driveFolder || "");
-    return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) && !repo.includes("..") &&
-      /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(branch) && !branch.includes("..") &&
-      !branch.includes("//") && !branch.includes("/.") && !branch.endsWith("/") &&
-      !branch.endsWith(".") && !branch.endsWith(".lock") &&
-      /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
+    const p = normalizeProfile(profile);
+    const repos = Array.isArray(p.repos) ? p.repos : [];
+    if (!repos.length) return false;
+    let mainSeen = 0;
+    const repoSet = new Set();
+    for (const entry of repos) {
+      if (!entry || typeof entry !== "object" || !REPO_ENTRY.test(String(entry.repo || "")) ||
+          String(entry.repo).includes("..") ||
+          !BRANCH_ENTRY.test(String(entry.branch || "")) || String(entry.branch).includes("..") ||
+          String(entry.branch).includes("//") || String(entry.branch).includes("/.") ||
+          String(entry.branch).endsWith("/") || String(entry.branch).endsWith(".") ||
+          String(entry.branch).endsWith(".lock"))
+        return false;
+      const key = String(entry.repo).toLowerCase();
+      if (repoSet.has(key)) return false;
+      repoSet.add(key);
+      if (entry.main === true) mainSeen += 1;
+    }
+    if (mainSeen !== 1) return false;
+    const roleRepos = Array.isArray(p.roleRepos) ? p.roleRepos : [];
+    const reposLower = new Set(repos.map((r) => String(r.repo).toLowerCase()));
+    for (const m of roleRepos) {
+      if (!m || typeof m !== "object" || !PROJECT_UUID.test(String(m.roleId || "")) ||
+          !reposLower.has(String(m.repo || "").toLowerCase())) return false;
+    }
+    const folder = String(p.driveFolder || "");
+    return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
       !["logs", "payloads"].includes(folder);
   }
   function selectedProfileId() {
@@ -59,15 +125,18 @@
     // Копия и closure неизменяемы до полной перезагрузки вкладки.
     return Object.freeze({ ...matches[0], legacy: false, invalid: false });
   }
-  const ACTIVE_PROFILE = resolveProfile(selectedProfileId());
+  const ACTIVE_PROFILE = Object.freeze(normalizeProfile(resolveProfile(selectedProfileId())));
   const projectStorageKey = (id, key) => `project:${id}:${String(key)}`;
   GM_getValue = (key, fallback) => rawGet(projectStorageKey(ACTIVE_PROFILE.id, key), fallback);
   GM_setValue = (key, value) => rawSet(projectStorageKey(ACTIVE_PROFILE.id, key), value);
+  const mainEntry = profileMainEntry(ACTIVE_PROFILE);
   Object.assign(C, {
     roles: ACTIVE_PROFILE.roles, missions: ACTIVE_PROFILE.missions, requests: ACTIVE_PROFILE.requests,
     questions: ACTIVE_PROFILE.questions, pageUrl: ACTIVE_PROFILE.pageUrl, questionsUrl: ACTIVE_PROFILE.questionsUrl,
-    repo: ACTIVE_PROFILE.repo, branch: ACTIVE_PROFILE.branch, projectName: ACTIVE_PROFILE.name,
-    driveFolder: ACTIVE_PROFILE.driveFolder,
+    repo: (mainEntry && mainEntry.repo) || "", branch: (mainEntry && mainEntry.branch) || "main",
+    projectName: ACTIVE_PROFILE.name, driveFolder: ACTIVE_PROFILE.driveFolder,
+    repos: Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : [],
+    roleRepos: Array.isArray(ACTIVE_PROFILE.roleRepos) ? ACTIVE_PROFILE.roleRepos : [],
   });
   Object.freeze(C);
   const projectApproved = () => !ACTIVE_PROFILE.invalid && !ACTIVE_PROFILE.legacy &&

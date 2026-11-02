@@ -20,7 +20,7 @@ const versionMatch = assertUserscriptVersionContract(src);
 assert.match(src, /gatewayIsOld/, 'есть проверка версии шлюза: старый пишет мимо Arena');
 assert.match(src, /major === 1 && minor < 5/, 'порог — шлюз 1.5');
 assert.match(src, /repo:\s*""/, 'новая установка не содержит встроенного репозитория');
-assert.match(src, /repo: ACTIVE_PROFILE.repo/, 'repo берётся из выбранного профиля');
+assert.match(src, /\(mainEntry && mainEntry\.repo\)/, 'репозиторий профиля — главная запись списка репозиториев');
 
 // 2. Бейджи взяты ровно те, что в интерфейсе Arena, и только среди видимых:
 //    в DOM остаются скрытые бейджи прошлых состояний.
@@ -50,7 +50,7 @@ assert.ok(closedEnd > 0, 'конец ветки закрытого PR найде
 const block = closedPath.slice(0, closedEnd);
 assert.match(block, /:closed -->/, 'в лог пишется отдельный маркер закрытия');
 assert.match(block, /name: "Rework"/, 'карточка уходит в Rework');
-assert.match(block, /Работа в \$\{\(typeof C[\s\S]*?C\.branch[\s\S]*?не попала/, 'причина называет базовую ветку проекта в «Ответе»');
+assert.match(block, /Работа в .{1,60}не попала/, 'причина называет базовую ветку проекта в «Ответе»');
 assert.match(block, /goTo\(coord\)/, 'ход возвращается Координатору');
 
 // 6. Continue нажимается и в закрытом состоянии — иначе цикл встанет.
