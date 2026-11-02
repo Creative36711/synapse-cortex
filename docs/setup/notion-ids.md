@@ -74,17 +74,18 @@ Contents: Read-only, Pull requests: Read-only) — его вводит Маст�
 
 ## 5. Что уже лежит в базах
 
-### «Роли» — 5 строк, `Статус = Ждёт` (агенты ещё не привязаны)
+### «Роли» — 7 строк; 5 активны (Agent URL заполнены 2026-11-02), 2 ждут активации
 
 | Роль | Функция | Agent URL |
 |---|---|---|
 | Coordinator | Coordinator | заполняет Мастер |
 | Executor Core | Executor | заполняет Мастер (доступ к `synapse`) |
-| Executor Cortex | Executor | заполняет Мастер (доступ к `synapse-cortex`) |
-| Auditor | Auditor | заполняет Мастер |
+| Executor Platform | Executor | заполняет Мастер (доступ к `synapse-cortex`) |
+| Spec Auditor | Auditor | заполняет Мастер |
 | Warden | Reviewer | заполняет Мастер (этот агент) |
 
-Опции `Кому` в «Запросах»: `Executor Core`, `Executor Cortex`, `Auditor` — ровно как `Роль`.
+Опции `Кому` в «Запросах»: `Executor Core`, `Executor Platform`, `Spec Auditor`, `Contract Architect`,
+`Locale Auditor` — ровно как `Роль`.
 Все строки в статусе `Ждёт`, пока нет реальных URL: цикл не должен стартовать на
 недонастроенных ролях (D-008).
 
