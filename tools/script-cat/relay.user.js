@@ -2476,7 +2476,7 @@
         });
         const active = roles.filter((r) => r.status === "Активна");
         if (!active.length) throw new Error("Нет активных ролей в базе «Роли».");
-        const warden = active.find((r) => r.fn === "Warden");
+        const warden = active.find((r) => r.name === "Warden");
         if (!warden || !warden.repo) throw new Error("Роль Warden не найдена или у неё не указан репозиторий в поле «Репозиторий».");
         const mainRepo = warden.repo;
         const uniqueRepos = [];
