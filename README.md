@@ -32,6 +32,7 @@ npm run verify        # сборка ScriptCat + guard + 72 smoke + 14 regressio
 | [`docs/RISK_REGISTER.md`](docs/RISK_REGISTER.md) | Риски, их владельцы и триггеры пересмотра |
 | [`docs/COST_MODEL.md`](docs/COST_MODEL.md) | Бюджетные лимиты по фазам и что считается расходом |
 | [`docs/METRICS.md`](docs/METRICS.md) | Метрики фаз и способ их фактического замера |
+| [`docs/I18N.md`](docs/I18N.md) | Мультиязычность: четыре слоя, правила, шрифты, проверки CI |
 | [`docs/setup/notion-ids.md`](docs/setup/notion-ids.md) | ID баз Notion для профиля ScriptCat |
 | [`docs/scriptcat-update.md`](docs/scriptcat-update.md) | Что перенесено в ScriptCat и как это проверять |
 | [`docs/handoff/`](docs/handoff/) | Черновики для передачи в открытый репозиторий и в ToS |
