@@ -1,9 +1,11 @@
 // Склеивает части в одну closure. Изменение метаданных может создать новую
 // установку и новое хранилище; см. порядок переноса в INSTALL.md.
 import { readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertUserscriptVersionContract } from './version-oracle.mjs';
+import { assertDigestVersionMatches, inlineDigest, normalizeDigest } from './regulation-oracle.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const header = '00-header.js';
@@ -16,8 +18,25 @@ const parts = [
   '25-legacy-adr.js', '26-review.js', '27-review-answers.js', '28-cycle.js', '29-boot.js',
 ];
 const read = (name) => readFile(join(here, 'src', name), 'utf8');
-const source = (await read(header)) + '\n((GM_getValue, GM_setValue) => {\n  "use strict";\n\n' +
-  (await Promise.all(parts.map(read))).join('\n') + '})(GM_getValue, GM_setValue);\n';
+// Каталог docs ищем вверх от комплекта: так сборка работает и в репозитории,
+// и в изолированной временной копии, где docs лежит рядом с build.mjs.
+const findDocs = () => {
+  let dir = here;
+  for (let depth = 0; depth < 5; depth += 1) {
+    const candidate = join(dir, 'docs');
+    if (existsSync(join(candidate, 'regulation-digest.md'))) return candidate;
+    dir = dirname(dir);
+  }
+  throw new Error('docs/regulation-digest.md не найден: сборка без краткого регламента невозможна');
+};
+const docs = findDocs();
+const digest = normalizeDigest(await readFile(join(docs, 'regulation-digest.md'), 'utf8'));
+assertDigestVersionMatches(digest, await readFile(join(docs, 'REGULATION.md'), 'utf8'));
+const source = inlineDigest(
+  (await read(header)) + '\n((GM_getValue, GM_setValue) => {\n  "use strict";\n\n' +
+    (await Promise.all(parts.map(read))).join('\n') + '})(GM_getValue, GM_setValue);\n',
+  digest,
+);
 assertUserscriptVersionContract(source);
 const output = join(here, 'relay.user.js');
 if (process.argv.slice(2).some((arg) => arg !== '--check')) throw new Error('Usage: node build.mjs [--check]');
