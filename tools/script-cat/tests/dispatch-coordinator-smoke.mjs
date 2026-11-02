@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 72, 'the 71 existing ScriptCat tests and portability probe remain in the suite');
+assert.equal(tests.length, 73, 'the 72 existing ScriptCat tests and portability probe remain in the suite');
 const currentContractCompanions = [
   'relay-auto-run-smoke.mjs',
   'relay-send-safety-smoke.mjs',

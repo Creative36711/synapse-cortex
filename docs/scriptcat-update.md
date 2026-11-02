@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat версии 1.6.0: userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.8.0**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -22,6 +22,11 @@
 - `package.json` в корне — воспроизводимые команды проверки транспорта (см. §3). В исходном
   комплекте эти алиасы жили в `package.json` другого проекта и вместе с папкой не переносились.
 - Этот файл `docs/scriptcat-update.md` — то, что ожидает `portability-guard.mjs`.
+- **1.7.0** — переход на мультирепозиторный профиль (несколько репозиториев, `roleRepos`).
+- **1.8.0 (D-023)** — краткий регламент вшивается в промпт: сборка подставляет
+  `docs/regulation-digest.md` вместо плейсхолдера `@@REGULATION_DIGEST@@`, блок
+  `=== CF_REGULATION ===` в каждом промпте, оракул `regulation-oracle.mjs`. Агент больше не
+  обязан читать страницу регламента в каждом ходе.
 
 ## 3. Проверки транспорта (локальные, без сети)
 
@@ -30,8 +35,8 @@
 ```bash
 npm run scriptcat:check     # relay.user.js соответствует src/ (node build.mjs --check)
 npm run scriptcat:guard     # переносимый комплект не содержит прежнего имени проекта
-npm run test                # 72 smoke-пробы транспорта
-npm run test:regression     # 15 интеграционных проб (включая схему Notion в фикстуре)
+npm run test                # 73 smoke-пробы транспорта
+npm run test:regression     # 14 интеграционных проб (включая схему Notion в фикстуре)
 npm run verify              # всё вышеперечисленное подряд
 ```
 

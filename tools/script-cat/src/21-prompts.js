@@ -25,12 +25,30 @@
     ].join(" ");
   }
 
+  // Текст краткого регламента живёт в C.regulationDigest и вшивается сборкой из
+  // docs/regulation-digest.md (см. regulation-oracle.mjs). Если его нет — промпт
+  // остаётся со ссылкой: усечённый или выдуманный регламент хуже ссылки.
+  const digestBlock = () => {
+    const text = typeof C.regulationDigest === "string" ? C.regulationDigest.trim() : "";
+    if (!text) return [];
+    return [
+      "",
+      "КРАТКИЙ РЕГЛАМЕНТ — действует в этом ходе, читать страницу для него не нужно.",
+      "Полная версия по ссылке выше — справочник для деталей; при расхождении верна полная.",
+      "=== CF_REGULATION ===",
+      text,
+      "=== /CF_REGULATION ===",
+    ];
+  };
+
   function roleContext(role) {
     return [
       `Ты — ${role.name}.`,
       role.zone ? `Твоя зона записи: ${role.zone}.` : "",
       role.gate ? `Гейт: ${role.gate}.` : "",
-      `Регламент: ${C.pageUrl}`,
+      `Регламент (полная версия): ${C.pageUrl}`,
+      ...digestBlock(),
+      "",
       roleRule(role),
       workRules(role),
     ].filter(Boolean).join("\n");
