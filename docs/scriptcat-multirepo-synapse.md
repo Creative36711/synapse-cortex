@@ -7,7 +7,7 @@
 
 - ScriptCat/Relay userscript — версия **1.7.0** (`@version 1.7.0`, `SCRIPT_VERSION`, проверка `version-oracle.mjs`).
 - SHA-256 собранного `tools/script-cat/relay.user.js`:
-  `e6b1fce67d19acfbe8cfe7b288a6811778401acbd0dabd351b710bb5be00b4ea`
+  `940562a858204f83d69bbca900884ac82dbc49e955f027ba61036440ab47a11d`
 - Бандл собирается из 30 исходных файлов `src/` через `npm run scriptcat:build` (`node build.mjs`); `relay.user.js` сверен с исходниками (`npm run scriptcat:build` / `build.mjs --check` — OK).
 
 ## 2. Что изменилось

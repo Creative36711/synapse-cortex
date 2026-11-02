@@ -488,6 +488,15 @@
       }
     };
     find("save").onclick = saveProfileUi;
+    find("repo-add").onclick = () => {
+      repos.push({ repo: "", branch: "main", main: false });
+      ensureMain();
+      renderRepos();
+    };
+    find("route-add").onclick = () => {
+      routes.push({ roleId: "", repo: "" });
+      renderRoutes();
+    };
     find("switch").onclick = () => {
       const target = chosen();
       if (!target || target.id === ACTIVE_PROFILE.id) { say("Этот проект уже выбран."); return; }
