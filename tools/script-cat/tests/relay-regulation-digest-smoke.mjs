@@ -93,6 +93,30 @@ assert.match(bare, /Регламент \(полная версия\): https:\/\/
 
 // 3.2. Версия в шапке скрипта соответствует поведению 1.8.x (вшитый регламент менялся).
 assert.match(bundle, /\/\/ @version\s+1\.8\.\d+/, 'версия бандла поднята вместе с изменением промпта');
+
+// 3.3. Регламент не должен стоять ПОСЛЕ маркера: агент читает конец задания
+// внимательнее, и в первом ходе Координатора служебная строка «потерялась»
+// в середине промпта под блоком регламента. Порядок — часть контракта.
+const funcBody = (name, endMarker) => {
+  const from = bundle.indexOf(`function ${name}(`);
+  const to = bundle.indexOf(endMarker, from);
+  assert.ok(from > 0 && to > from, `функция ${name} на месте`);
+  return bundle.slice(from, to);
+};
+const executorFn = funcBody('executorPrompt', 'function answerLogLine');
+assert.ok(
+  executorFn.indexOf('roleContext(role)') < executorFn.indexOf('executorOrder('),
+  'в промпте исполнителя регламент идёт до блока с маркером: маркер остаётся в конце',
+);
+const orderFn = funcBody('executorOrder', 'function auditorOrder');
+assert.match(orderFn, /CF_AGENT_RESULT/, 'маркер исполнителя собирается в его блоке порядка');
+const coordinatorFn = funcBody('coordinatorPrompt', '\n})(');
+assert.ok(
+  coordinatorFn.indexOf('roleContext(role)') < coordinatorFn.indexOf('CF_COORDINATOR_RESULT'),
+  'в промпте Координатора регламент идёт до маркера: маркер остаётся в конце',
+);
+assert.match(digest, /Формат финальной строки всегда стоит в самом конце задания/,
+  'правило «формат ответа — в конце задания» вшито в регламент');
 assert.equal(digestVersion(digest), digestVersion(regulation), 'версии копий совпадают');
 
 console.log('OK: краткий регламент вшит в промпт, копии и версии совпадают');

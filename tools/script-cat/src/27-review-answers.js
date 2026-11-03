@@ -56,6 +56,8 @@
     return [
       technicalInfo(role),
       "",
+      roleContext(role),
+      "",
       `Миссия: ${name}`,
       `ТЗ и оракул: ${tz}`,
       `Вопрос задал: ${item.role || "агент"}${item.card ? ` · карточка «${item.card}»` : ""}`,
@@ -81,8 +83,6 @@
       `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"answer","answer":"<решение: что делать и по какому признаку считать сделанным>"}`,
       "или, если без Мастера физически нельзя:",
       `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"master","reason":"<чего именно не хватает: роль, доступ, решение по ТЗ>"}`,
-      "",
-      roleContext(role),
     ]
       .filter(Boolean)
       .join("\n");
