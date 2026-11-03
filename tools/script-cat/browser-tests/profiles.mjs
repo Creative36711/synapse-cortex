@@ -193,6 +193,34 @@ await page.locator('#cfn-project-switch').click();
 assert.match(await page.locator('#cfn-project-note').innerText(), /Остановите автоцикл/);
 await page.locator('#cfn-project-close').click(); await page.locator('#cfn-setup').click();
 await page.locator('#cfn-connection-stop-auto').click(); await page.locator('#cfn-connection-projects').click();
+// Portable config export contains no credentials/runtime state; import validates
+// and stores only whitelisted profile metadata without approving the project.
+await page.locator('#cfn-project-list').selectOption(project.id);
+const [configDownload] = await Promise.all([
+  page.waitForEvent('download'), page.locator('#cfn-project-export-config').click(),
+]);
+const exportedConfig = JSON.parse(await (await import('node:fs/promises')).readFile(await configDownload.path(), 'utf8'));
+assert.equal(exportedConfig.format, 'scriptcat-project-config');
+assert.equal(exportedConfig.profile.id, project.id);
+assert.equal(exportedConfig.profile.roleRepos.length, 3);
+assert.equal(Object.hasOwn(exportedConfig.profile, 'notionToken'), false, 'экспорт не содержит credentials');
+const importProfile = {
+  ...exportedConfig.profile,
+  id: id(701), name: 'Imported profile',
+  roles: id(702), missions: id(703), requests: id(704), questions: id(705),
+  notionToken: 'must-not-import', githubToken: 'must-not-import', gatewayKey: 'must-not-import',
+};
+await page.locator('#cfn-project-import-file').setInputFiles({
+  name: 'scriptcat-test.json', mimeType: 'application/json',
+  buffer: Buffer.from(JSON.stringify({format:'scriptcat-project-config',version:1,profile:importProfile})),
+});
+await page.waitForFunction(() => document.querySelector('#cfn-project-note')?.textContent.includes('Импортирован проект'));
+const importedRegistry = await page.evaluate(() => JSON.parse(localStorage.getItem('gm:cfn-project-profiles-v1')));
+const imported = importedRegistry.find((entry) => entry.id === id(701));
+assert.ok(imported, 'импортированный профиль добавлен');
+assert.equal(Object.hasOwn(imported, 'notionToken'), false);
+assert.equal(await page.evaluate((id) => localStorage.getItem(`gm:project:${id}:cfn-notion-token`),id(701)), null, 'секреты не импортируются');
+assert.equal(await page.evaluate((id) => localStorage.getItem(`gm:project:${id}:cfn-project-approved`),id(701)), null, 'допуск надо выполнить заново');
 await page.locator('#cfn-project-list').selectOption('unconfigured'); await page.locator('#cfn-project-switch').click();
 await page.waitForFunction(() => sessionStorage.getItem('cfn-active-project-v1') === 'unconfigured');
 await page.waitForFunction(() => document.querySelector('#cfn-panel-project')?.textContent === 'Проект не настроен');

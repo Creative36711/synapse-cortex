@@ -193,6 +193,12 @@
           <button id="cfn-project-copy" style="${action}">Создать на основе выбранного</button>
           <button id="cfn-project-edit" style="${action}">Исправить текущий до первого допуска</button>
         </div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;margin:8px 0">
+          <button id="cfn-project-export-config" type="button" style="${action}">Экспортировать конфигурацию</button>
+          <button id="cfn-project-import-config" type="button" style="${action}">Импортировать конфигурацию</button>
+          <input id="cfn-project-import-file" type="file" accept="application/json,.json" style="display:none">
+        </div>
+        <div style="color:#aab4c3;font-size:12px;margin-bottom:8px">Переносит только настройки проекта — без ключей, очереди и состояния автоцикла. На новом компьютере сохраните подключения заново и повторно разрешите проект.</div>
         <div id="cfn-project-info" style="color:#aab4c3;white-space:pre-wrap"></div>
         <button id="cfn-project-enable" style="${action};margin-top:8px;background:#285638">Проверить подключения и разрешить работу</button>
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px">
@@ -393,6 +399,78 @@
       find("enable").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !projectApproved() ? "inline-block" : "none";
       const everApproved = !ACTIVE_PROFILE.legacy && (GM_getValue("cfn-project-ever-approved", false) || projectApproved());
       find("edit").style.display = !ACTIVE_PROFILE.legacy && !ACTIVE_PROFILE.invalid && !everApproved ? "inline-block" : "none";
+    };
+    const transferProfile = (profile) => ({
+      id: String(profile.id), name: String(profile.name),
+      roles: String(profile.roles), missions: String(profile.missions),
+      requests: String(profile.requests), questions: String(profile.questions),
+      pageUrl: String(profile.pageUrl), questionsUrl: String(profile.questionsUrl),
+      repo: String(profile.repo), branch: String(profile.branch), driveFolder: String(profile.driveFolder),
+      repos: (Array.isArray(profile.repos) ? profile.repos : []).map((entry) => ({
+        repo: String(entry.repo || ""), branch: String(entry.branch || "main"), main: entry.main === true,
+      })),
+      roleRepos: (Array.isArray(profile.roleRepos) ? profile.roleRepos : []).map((route) => ({
+        roleId: String(route.roleId || ""), repo: String(route.repo || ""),
+      })),
+    });
+    find("export-config").onclick = () => {
+      const profile = chosen();
+      if (!profile || profile.legacy || !validProfile(profile)) { say("Выберите корректный проект для экспорта.", true); return; }
+      try {
+        const backup = { format: "scriptcat-project-config", version: 1, profile: transferProfile(profile) };
+        const blob = new Blob([JSON.stringify(backup, null, 2) + "\n"], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `scriptcat-${profile.name.replace(/[^A-Za-z0-9._-]+/g, "-")}-${profile.id}.json`;
+        document.body.appendChild(anchor); anchor.click(); anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        say("Конфигурация экспортирована. В файле только метаданные проекта: секреты, подключения и состояние работы не включены.");
+      } catch { say("Не удалось экспортировать конфигурацию проекта.", true); }
+    };
+    find("import-config").onclick = () => {
+      if (checking || autoOn() || busy || projectAsyncWork > 0) {
+        say("Остановите автоцикл и дождитесь завершения текущих операций перед импортом.", true); return;
+      }
+      find("import-file").value = "";
+      find("import-file").click();
+    };
+    find("import-file").onchange = async () => {
+      const file = find("import-file").files?.[0];
+      if (!file) return;
+      if (checking || autoOn() || busy || projectAsyncWork > 0) {
+        say("Остановите автоцикл и дождитесь завершения текущих операций перед импортом.", true); return;
+      }
+      checking = true;
+      try {
+        if (file.size > 128 * 1024) throw new Error("Файл больше 128 КБ; выберите экспорт ScriptCat конфигурации проекта.");
+        const parsed = JSON.parse(await file.text());
+        if (!parsed || parsed.format !== "scriptcat-project-config" || parsed.version !== 1 ||
+            !parsed.profile || typeof parsed.profile !== "object" || Array.isArray(parsed.profile))
+          throw new Error("Формат файла не распознан. Импортируйте экспорт конфигурации ScriptCat.");
+        // Whitelist deliberately excludes connection credentials and runtime state.
+        const profile = transferProfile(parsed.profile);
+        if (!validProfile(profile)) throw new Error("Профиль не прошёл проверку: проверьте UUID, HTTPS-ссылки, репозитории, ветки и папку проекта.");
+        const registry = profileRegistry();
+        if (registry.some((item) => item?.id === profile.id)) throw new Error("Профиль с таким ID уже существует на этом компьютере.");
+        if (JSON.stringify(registry) !== openingRevision) throw new Error("Реестр проектов изменился в другой вкладке. Закройте окно и повторите импорт.");
+        const known = [LEGACY_PROFILE, ...registry.filter(validProfile)];
+        const usedSources = new Set(known.flatMap((item) => [item.roles, item.missions, item.requests, item.questions]).map((id) => String(id || "").toLowerCase()));
+        if ([profile.roles, profile.missions, profile.requests, profile.questions].some((id) => usedSources.has(id.toLowerCase())))
+          throw new Error("Один из источников уже используется другим профилем на этом компьютере.");
+        const usedRepos = new Set(known.filter((item) => !item.legacy).flatMap((item) =>
+          Array.isArray(item.repos) ? item.repos.map((entry) => String(entry.repo || "").toLowerCase()) : [String(item.repo || "").toLowerCase()]));
+        const clash = profile.repos.find((entry) => usedRepos.has(entry.repo.toLowerCase()));
+        if (clash && !confirm(`Репозиторий ${clash.repo} уже используется другим профилем. Продолжить импорт?`)) return;
+        if (JSON.stringify(profileRegistry()) !== openingRevision || autoOn() || busy || projectAsyncWork > 0)
+          throw new Error("Проект или активность изменились во время импорта; операция отменена.");
+        rawSet(PROFILE_REGISTRY_KEY, [...registry, profile]);
+        openingRevision = JSON.stringify(profileRegistry());
+        form.style.display = "none";
+        render(profile.id);
+        say(`Импортирован проект «${profile.name}». Ключи и локальное состояние не импортируются. Откройте проект, заново сохраните подключения и проверьте его перед разрешением работы. Автоцикл выключен.`);
+      } catch (e) { say(`Импорт не выполнен: ${e.message}`, true); }
+      finally { checking = false; find("import-file").value = ""; }
     };
     const close = () => {
       if (checking) { say("Дождитесь завершения проверки проекта.", true); return; }
