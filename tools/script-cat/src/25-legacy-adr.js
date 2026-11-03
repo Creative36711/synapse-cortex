@@ -380,11 +380,14 @@
     const shown = rows.slice(0, C.readyLineMax).map((card) => {
       const seq = card.properties?.["Sequence"]?.number;
       const stale = staleMarks(card);
-      const warn = stale.length
-        ? ` — остались ${stale.join(", ")}: это повторная работа, следы прошлого ответа снимет транспорт. ` +
-          "Если повторять её не надо — убери карточку из Ready"
-        : "";
-      return `${taskTitle(card)} (${taskRole(card) || "роль не задана"}, Sequence ${seq ?? "—"})${warn}`;
+      const checkFail = card.properties?.["Check"]?.select?.name === "fail";
+      const warn = [
+        stale.length
+          ? `остались ${stale.join(", ")}: это повторная работа; следы снимет транспорт после разрешённого возврата, если повторять её не надо — убери карточку из Ready`
+          : "",
+        checkFail ? "Check=fail: результат не принят, сначала нужен Rework/разбор Warden" : "",
+      ].filter(Boolean).join("; ");
+      return `${taskTitle(card)} (${taskRole(card) || "роль не задана"}, Sequence ${seq ?? "—"})${warn ? ` — ${warn}.` : ""}`;
     });
     const more = rows.length > shown.length ? `; и ещё ${rows.length - shown.length}` : "";
     return `Готовы к выдаче: ${shown.join("; ")}${more}.`;
