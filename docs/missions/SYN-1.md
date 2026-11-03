@@ -113,7 +113,7 @@
 - Журнал решений карточки (если нужен): `docs/decisions/SYN-1.md` в `synapse`.
 - Черновики `LICENSE`/`NOTICE` для переноса: `docs/handoff/core-license-notice.md` в cortex.
 - Перенос контрактов и i18n-политики в `synapse`: `docs/handoff/core-contracts-i18n.md` в cortex.
-- Очередь карточек для Coordinator: `docs/handoff/syn-1-card-queue.md` в cortex (K-1…K-12);
+- Очередь карточек для Coordinator: `docs/handoff/syn-1-card-queue.md` в cortex (K-1…K-13);
   Notion-копия для исполнителей — дочерняя страница миссии «SYN-1 · очередь карточек».
 
 **Внимание по доступам (D-022).** Исполнитель миссии видит только `synapse`. Требования из

@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.8.0**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.8.1**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -27,6 +27,12 @@
   `docs/regulation-digest.md` вместо плейсхолдера `@@REGULATION_DIGEST@@`, блок
   `=== CF_REGULATION ===` в каждом промпте, оракул `regulation-oracle.mjs`. Агент больше не
   обязан читать страницу регламента в каждом ходе.
+- **1.8.1 (D-025)** — регламент 1.4: в промпте явно названы оба репозитория
+  (`Creative36711/synapse` — ядро и инструменты, `synapse-cortex` — закрытая часть) и добавлен
+  раздел «Инструменты уже в репозитории»: `tools/godot/install.sh --check`,
+  `tools/godot/agent_bridge/`, `tools/modeling/setup_bpy.sh --check`, `tools/media/setup.sh --check`,
+  `AGENTS.md`. Агент больше не ставит Godot с нуля и не ищет файлы платформы. Проба
+  `relay-regulation-digest-smoke.mjs` требует эти имена и команды в тексте.
 
 ## 3. Проверки транспорта (локальные, без сети)
 
