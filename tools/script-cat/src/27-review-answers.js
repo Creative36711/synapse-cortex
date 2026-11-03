@@ -348,7 +348,7 @@
     // profile map is a compatibility fallback for older role rows without a
     // repository field; it must not route Executor Core into the profile's
     // default cortex repo when Notion explicitly assigns it to synapse.
-    const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
+    const sessionRepo = canonicalTargetRepository(confirmed[0].repo || profileSessionRepo(role.id) || "", C.repo);
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10

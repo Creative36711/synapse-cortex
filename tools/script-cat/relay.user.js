@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.6
+// @version      1.8.7
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -507,7 +507,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.6";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.7";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7748,7 +7748,7 @@
       const expect = GM_getValue(K.expect, null);
       if (expect && (expect.targetRepo || expect.targetBranch)) {
         return {
-          repo: String(expect.targetRepo || C.repo || ""),
+          repo: canonicalTargetRepository(expect.targetRepo || C.repo || "", C.repo),
           branch: String(expect.targetBranch || C.branch || "main"),
         };
       }
@@ -7756,11 +7756,25 @@
     return null;
   }
 
+  /**
+   * Разрешить короткий slug из старых Notion-полей в owner/repo профиля.
+   * Role rows давно допускали значение `synapse`, хотя GitHub API требует
+   * `Creative36711/synapse`; приоритет — точное уникальное совпадение профиля.
+   */
+  function canonicalTargetRepository(value, fallback = C.repo) {
+    const raw = String(value || fallback || C.repo || "").trim().replace(/^https?:\/\/github\.com\//i, "").replace(/\/$/, "");
+    if (!raw || raw.includes("/")) return raw;
+    const repos = typeof ACTIVE_PROFILE !== "undefined" && Array.isArray(ACTIVE_PROFILE.repos)
+      ? ACTIVE_PROFILE.repos : [];
+    const matches = repos.filter((entry) => entry && String(entry.repo || "").split("/").at(-1).toLowerCase() === raw.toLowerCase());
+    return matches.length === 1 ? String(matches[0].repo) : raw;
+  }
+
   /** Целевой repo карточки; старые карточки наследуют repo активной роли. */
   function taskTargetRepository(card, fallback = C.repo) {
     const props = card && card.properties || {};
     const value = rt(props.Repository).trim() || rt(props["Репозиторий"]).trim();
-    return value || String(fallback || C.repo || "").trim();
+    return canonicalTargetRepository(value || fallback);
   }
 
   /** Явная чужая или некорректная ссылка не доказывает мерж нашего проекта. */
@@ -7845,7 +7859,7 @@
    * репозиторий без токена отвечает 404, и это нельзя читать как «PR нет».
    */
   async function verifyMergeClaim(result, token = "", target = null) {
-    let repo = String((target && target.repo) || C.repo || "");
+    let repo = canonicalTargetRepository((target && target.repo) || C.repo || "", C.repo);
     let branch = String((target && target.branch) || C.branch || "main");
     const ref = prRef(result, repo);
     // A full PR URL is authoritative when it points to another repository
@@ -7865,6 +7879,8 @@
     const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, repo) : "";
     if (foreign) return { status: "boundary", why: foreign };
     if (!ref) return { status: "unknown", why: "в маркере нет номера PR" };
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(ref.repo))
+      return { status: "boundary", why: `Целевой репозиторий «${ref.repo}» задан не как owner/repo; GitHub-запрос не отправлял.` };
     try {
       const pr = await githubPr(ref.repo, ref.number, token);
       if (!pr || typeof pr !== "object") return { status: "unknown", why: "GitHub ответил пустым ответом" };
@@ -12240,7 +12256,7 @@
     // profile map is a compatibility fallback for older role rows without a
     // repository field; it must not route Executor Core into the profile's
     // default cortex repo when Notion explicitly assigns it to synapse.
-    const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
+    const sessionRepo = canonicalTargetRepository(confirmed[0].repo || profileSessionRepo(role.id) || "", C.repo);
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10

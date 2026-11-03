@@ -31,9 +31,14 @@ const refFrom = src.indexOf('  function prRef(result,');
 const refTo = src.indexOf('  /**\n   * Проверка «PR слит» из маркера.');
 assert.ok(refFrom > 0 && refTo > refFrom, 'prRef на месте');
 const refApi = new Function(
-  'C', 'rt',
-  `${src.slice(refFrom, refTo)}\nreturn { prRef, taskTargetRepository };`,
-)({ repo: 'example/relay-fixture' }, (p) => (p?.rich_text || []).map((x) => x.plain_text || '').join(''));
+  'C', 'rt', 'ACTIVE_PROFILE',
+  `${src.slice(refFrom, refTo)}\nreturn { prRef, taskTargetRepository, canonicalTargetRepository };`,
+)({ repo: 'example/relay-fixture' }, (p) => (p?.rich_text || []).map((x) => x.plain_text || '').join(''), {
+  legacy: false, repos: [
+    { repo: 'Creative36711/synapse-cortex', branch: 'main' },
+    { repo: 'Creative36711/synapse', branch: 'main' },
+  ],
+});
 const { prRef, taskTargetRepository } = refApi;
 
 assert.deepEqual(prRef({ pr: 37 }), { repo: 'example/relay-fixture', number: 37 }, 'число');
@@ -53,6 +58,8 @@ assert.equal(prRef({ pr: 'none' }), null, '«none» — тоже');
 assert.equal(prRef(null), null, 'без ответа — тоже');
 assert.equal(taskTargetRepository({ properties: { Repository: { rich_text: [{ plain_text: 'Creative36711/synapse' }] } }, }, 'Creative36711/synapse-cortex'), 'Creative36711/synapse', 'явный repo карточки приоритетнее профиля');
 assert.equal(taskTargetRepository({ properties: {} }, 'Creative36711/synapse'), 'Creative36711/synapse', 'старые карточки наследуют repo роли');
+assert.equal(taskTargetRepository({ properties: { Repository: { rich_text: [{ plain_text: 'synapse' }] } }, }, 'Creative36711/synapse-cortex'), 'Creative36711/synapse', 'bare slug карточки разрешается в единственный репозиторий профиля');
+assert.equal(taskTargetRepository({ properties: {} }, 'synapse'), 'Creative36711/synapse', 'bare slug роли разрешается в репозиторий профиля');
 
 // ensureMerged calls this fast boundary guard before verifyMergeClaim. It must
 // resolve the same configured cross-repository URL, or it masks the later fix.
@@ -152,6 +159,25 @@ assert.equal(closed.status, 'closed', 'закрытый без мержа — т
   const check = await api.verifyMergeClaim({ pr: crossRepoUrl }, 'ghp_token', { repo: 'example/relay-fixture', branch: 'main' });
   assert.equal(check.status, 'merged', 'разрешённый URL repo переопределяет неверный repo ожидания');
   assert.match(api.calls[0].url, /repos\/Creative36711\/synapse\/pulls\/5/, 'GitHub запрошен по репозиторию URL');
+}
+{
+  const api = makeVerify({
+    merged: true,
+    merged_at: '2026-11-03T11:40:26Z',
+    base: { repo: { full_name: 'Creative36711/synapse' }, ref: 'main' },
+  }, undefined, { legacy: false, repos: [
+    { repo: 'Creative36711/synapse-cortex', branch: 'main' },
+    { repo: 'Creative36711/synapse', branch: 'main' },
+  ] });
+  const check = await api.verifyMergeClaim({ pr: 5 }, 'ghp_token', { repo: 'synapse', branch: 'main' });
+  assert.equal(check.status, 'merged', 'старое targetRepo со slug нормализуется перед проверкой');
+  assert.match(api.calls[0].url, /repos\/Creative36711\/synapse\/pulls\/5/, 'slug никогда не уходит в GitHub API как owner/repo');
+}
+{
+  const api = makeVerify({ merged: true }, undefined, { legacy: false, repos: [{ repo: 'Creative36711/synapse-cortex', branch: 'main' }] });
+  const check = await api.verifyMergeClaim({ pr: 5 }, '', { repo: 'synapse', branch: 'main' });
+  assert.equal(check.status, 'boundary', 'неразрешимый bare slug отвергается до сети');
+  assert.equal(api.calls.length, 0, 'не отправляется ошибочный /repos/synapse запрос');
 }
 {
   const api = makeVerify({ merged: true, base: { repo: { full_name: 'unknown/repo' }, ref: 'main' } }, undefined, { legacy: false, repos: [
