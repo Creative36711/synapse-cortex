@@ -1009,6 +1009,23 @@
     // Вопросы к Мастеру и его ответы: ответы доставляются ровно один раз —
     // отметка ставится после того, как промпт действительно ушёл.
     const briefing = await questionBriefing(mission);
+    // Keep a purpose-built recovery prompt with the same turn identities and
+    // queue evidence; the full coordinator prompt can be rejected by Arena.
+    const fallbackText = [
+      `Продолжи ход Координатора по миссии ${mission.id}; turn_id ${turnId}.`,
+      `Миссия: ${mission.properties["Миссия"]?.title || mission.id}.`,
+      `ТЗ: ${mission.properties["ТЗ URL"]?.url || "не задано"}`,
+      `Текущий снимок очереди: ${summary}`,
+      readyLine(queue.ready),
+      reworkLine(queue.rework),
+      drafts,
+      answerLine,
+      briefing.openLine,
+      briefing.answersLine,
+      note ? `Комментарий: ${note}` : "",
+      "Разбери этот снимок и продолжи работу Coordinator: обработай Submitted/Rework и выдай следующий Ready/Draft по правилам миссии. Не оформляй это как задание исполнителю.",
+      `CF_COORDINATOR_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
+    ].filter(Boolean).join("\n");
     const sent = await sendToRole(
       role,
       coordinatorPrompt(
@@ -1030,6 +1047,7 @@
         missionId: mission.id,
         turnId,
         title: "план Координатора",
+        fallbackText,
         // Снимок очереди на момент вопроса: по нему видно, устарел ли ответ.
         readyKey: readyKeyOf(queue.ready),
         runningIds: (queue.running || []).map((card) => card.id),
