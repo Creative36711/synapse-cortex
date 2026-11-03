@@ -94,6 +94,29 @@ const expect = {
   assert.ok(!logs.some((l) => l.ntfy === 'loud'), 'громкого пуша нет: цикл не остановлен');
 }
 
+// ── Coordinator plan: отказ Arena повторяет план, а не фиктивный dispatch ──
+{
+  const { retryRejectedHandoff, store } = makeRequeue();
+  const plan = {
+    roleId: 'coordinator', roleName: 'Coordinator', roleFn: 'Coordinator',
+    kind: 'plan', ref: 'mission-123', missionId: 'mission-123', turnId: 'turn-456',
+    title: 'план Координатора', sentAt: Date.now(), arenaResend: 0,
+    fallbackText: 'Продолжи ход Координатора.\nОчередь: 1 Ready, 1 Rework.\nCF_COORDINATOR_RESULT {"mission_id":"mission-123","turn_id":"turn-456","status":"completed","next":"<роль|done>"}',
+  };
+  assert.equal(retryRejectedHandoff(plan, { messageId: 'plan-error' }, 'Something went wrong'), true);
+  const pending = store.get('k-pending');
+  assert.equal(pending.text, plan.fallbackText, 'Coordinator получает подготовленный короткий снимок плана');
+  assert.match(pending.text, /1 Ready, 1 Rework/, 'текущий контекст очереди сохранён');
+  assert.match(pending.text, /CF_COORDINATOR_RESULT/, 'используется маркер Coordinator');
+  assert.doesNotMatch(pending.text, /CF_AGENT_RESULT|dispatch_id|run_id/, 'план не маскируется под задание исполнителю');
+  assert.equal(store.get('k-expect').missionId, 'mission-123', 'mission identity сохранён для retry');
+  assert.equal(store.get('k-expect').turnId, 'turn-456', 'turn identity сохранён для retry');
+
+  const safeFallback = makeRequeue().minimalPrompt({ kind: 'plan', ref: 'mission-789', missionId: 'mission-789', turnId: 'turn-999' });
+  assert.match(safeFallback, /CF_COORDINATOR_RESULT/, 'даже без подготовленного снимка fallback остаётся Coordinator');
+  assert.doesNotMatch(safeFallback, /CF_AGENT_RESULT|dispatch_id|run_id/, 'универсальная ветка не превращает план в dispatch');
+}
+
 // ── 2. Повтор ровно один: второй отказ — пауза ─────────────────────────────
 {
   const { retryRejectedHandoff, store } = makeRequeue();

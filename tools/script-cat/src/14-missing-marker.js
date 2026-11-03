@@ -155,6 +155,19 @@
    * выдачи и формат маркера. Всё остальное агент берёт из карточки.
    */
   function minimalPrompt(expect) {
+    // Coordinator plan is not a dispatch: its ref is the mission page, not a
+    // task card. Preserve a compact queue snapshot and the Coordinator marker.
+    if (expect.kind === "plan") {
+      const missionId = String(expect.missionId || expect.ref || "");
+      const turnId = String(expect.turnId || "");
+      return expect.fallbackText || [
+        `Продолжи ход Координатора по миссии ${missionId}; turn_id ${turnId}.`,
+        expect.url || (missionId ? `https://app.notion.com/p/${missionId.replace(/-/g, "")}` : ""),
+        expect.planContext || "Прочитай очередь миссии и продолжи планирование по её актуальному состоянию.",
+        "Обработай Submitted/Rework и выдай следующий Ready/Draft согласно правилам Coordinator. Не создавай исполнительскую задачу вместо плана.",
+        `Последней строкой: CF_COORDINATOR_RESULT {"mission_id":"${missionId}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
+      ].filter(Boolean).join("\n");
+    }
     const id = String(expect.ref || "");
     const url = expect.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
     return [
