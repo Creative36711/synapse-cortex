@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.2
+// @version      1.8.3
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -507,7 +507,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.2";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.3";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7805,11 +7805,25 @@
    * репозиторий без токена отвечает 404, и это нельзя читать как «PR нет».
    */
   async function verifyMergeClaim(result, token = "", target = null) {
-    const repo = String((target && target.repo) || C.repo || "");
-    const branch = String((target && target.branch) || C.branch || "main");
+    let repo = String((target && target.repo) || C.repo || "");
+    let branch = String((target && target.branch) || C.branch || "main");
+    const ref = prRef(result, repo);
+    // A full PR URL is authoritative when it points to another repository
+    // explicitly configured in this project profile. This supports roles
+    // whose session repo differs from the task repo without accepting arbitrary
+    // external links. The PR base and branch are still verified below.
+    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase() &&
+        typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy) {
+      const entry = (Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : []).find(
+        (item) => item && String(item.repo || "").toLowerCase() === ref.repo.toLowerCase(),
+      );
+      if (entry) {
+        repo = ref.repo;
+        branch = String(entry.branch || "main");
+      }
+    }
     const foreign = typeof projectPrBoundary === "function" ? projectPrBoundary(result, repo) : "";
     if (foreign) return { status: "boundary", why: foreign };
-    const ref = prRef(result, repo);
     if (!ref) return { status: "unknown", why: "в маркере нет номера PR" };
     try {
       const pr = await githubPr(ref.repo, ref.number, token);
