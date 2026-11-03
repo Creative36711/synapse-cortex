@@ -94,8 +94,9 @@ function makeVerify(answer, repoAnswer = { full_name: 'example/relay-fixture', p
   const api = fn({ repo: 'example/relay-fixture' }, async (method, url, headers) => {
     calls.push({ method, url, headers });
     if (/\/pulls\//.test(url)) {
-      if (answer instanceof Error) throw answer;
-      return answer;
+      const response = typeof answer === 'function' ? answer({ method, url, headers }) : answer;
+      if (response instanceof Error) throw response;
+      return response;
     }
     // Проверка «а токен-то репозиторий видит?» — отдельный запрос.
     if (repoAnswer instanceof Error) throw repoAnswer;
@@ -147,6 +148,23 @@ const missing = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeCl
 assert.equal(missing.status, 'unknown', '404 на PR не доказывает, что PR нет');
 assert.equal(missing.notFound, true, 'но это названо: PR не читается');
 
+// Если сохранённый токен получает 404, публичный PR должен проверяться
+// анонимным повтором. Это покрывает PR #5 в Creative36711/synapse: merged.
+{
+  const api = makeVerify(({ headers }) => {
+    if (headers.Authorization) return Object.assign(new Error('HTTP 404: Not Found'), { status: 404 });
+    return {
+      merged: true,
+      merged_at: '2026-11-03T11:40:26Z',
+      base: { repo: { full_name: 'example/relay-fixture' }, ref: 'main' },
+    };
+  });
+  const check = await api.verifyMergeClaim({ pr: 37 }, 'ghp_token');
+  assert.equal(check.status, 'merged', 'анонимный fallback подтверждает публичный PR');
+  assert.equal(api.calls.length, 2, 'сделана одна безопасная повторная проверка');
+  assert.equal(api.calls[1].headers.Authorization, undefined, 'второй запрос не отправляет токен');
+}
+
 // Токена нет — тот же 404 значит «приватный репозиторий не виден».
 const hidden = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 });
 assert.equal(hidden.status, 'unknown', 'без токена 404 — не «PR нет», а «не проверили»');
@@ -159,7 +177,7 @@ assert.match(hidden.why, /приватный|токен/i, 'в причине с
     .verifyMergeClaim({ pr: 37 }, 'ghp_nowhere');
   assert.equal(noAccess.status, 'unknown', 'невидимый репозиторий — не отказ работе');
   assert.equal(noAccess.needsToken, true, 'и снова повод проверить доступ');
-  assert.match(noAccess.why, /доступ/, 'сказано, что проверить');
+  assert.match(noAccess.why, /доступ|токен|приватным/i, 'сказано, что проверить');
 }
 
 // Код в ошибке важнее текста: ScriptCat не всегда кладёт «HTTP 404» в message.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.4
+// @version      1.8.5
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -507,7 +507,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.4";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.5";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7851,40 +7851,33 @@
     } catch (e) {
       const raw = String((e && e.message) || e);
       const code = Number((e && e.status) || (raw.match(/HTTP (\d{3})/) || [])[1] || 0);
-      // 404 без токена — «не видно», а не «нет»: именно на этом 24.10 готовый
-      // PR #37 уехал в Rework. Проверять наличие PR вправе только токен.
-      if (code === 404 && !token)
+      // GitHub иногда отвечает на PR-эндпоинт 401/403/404 из-за сохранённого
+      // fine-grained token, даже когда PR публичен. Повторяем запрос без
+      // Authorization: публичный PR остаётся проверяемым, а приватный по-прежнему
+      // возвращает unknown и не принимается за отсутствующий.
+      if (token && [401, 403, 404].includes(code)) {
+        const anonymous = await verifyMergeClaim(result, "", target);
+        if (anonymous.status !== "unknown") return anonymous;
+        return {
+          ...anonymous,
+          needsToken: true,
+          notFound: code === 404 || anonymous.notFound,
+          why: `GitHub ответил HTTP ${code} с токеном; анонимная проверка не подтвердила PR: ${anonymous.why}`,
+        };
+      }
+      // Анонимный 404 означает только, что репозиторий/PR нельзя прочитать
+      // без авторизации (обычно это приватный repo), а не что PR отсутствует.
+      if (code === 404)
         return {
           status: "unknown",
           needsToken: true,
-          why: `PR #${ref.number} анонимно не виден: ${ref.repo} приватный — нужен токен GitHub в «⚙ Подключения»`,
+          why: `PR #${ref.number} анонимно не виден: ${ref.repo} может быть приватным — нужен токен GitHub в «⚙ Подключения»`,
         };
-      if (code === 404) {
-        // Прежде чем сказать «PR нет», убеждаемся, что токен вообще видит
-        // репозиторий: иначе «нет прав» снова станет «нет работы».
-        try {
-          await request("GET", `https://api.github.com/repos/${ref.repo}`, githubHeaders(token));
-        } catch (e2) {
-          return {
-            status: "unknown",
-            needsToken: true,
-            why: `ни PR #${ref.number}, ни сам ${ref.repo} токену не видны — проверьте доступ к репозиторию`,
-          };
-        }
-        // 404 — это «не видно», а не «нет». Отсутствие PR по нему не
-        // доказывается: 24.10 такой ответ уже отправил слитый PR #37 в Rework.
-        // Поэтому статус остаётся unknown, и карточку за него не отбираем.
-        return {
-          status: "unknown",
-          notFound: true,
-          why: `PR #${ref.number} в ${ref.repo} не читается (404), но отсутствие PR этим не доказывается`,
-        };
-      }
       if (code === 401 || code === 403)
         return {
           status: "unknown",
-          needsToken: true,
-          why: `GitHub не принял токен (HTTP ${code}): проверьте срок и право «Pull requests: read»`,
+          why: `GitHub отклонил анонимный запрос (HTTP ${code}); состояние PR не подтверждено`,
+          code,
         };
       if (!code) return { status: "unknown", why: `GitHub не ответил: ${raw}` };
       return { status: "unknown", why: `GitHub ответил HTTP ${code}`, code };
