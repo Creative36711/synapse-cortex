@@ -222,7 +222,10 @@ const api = new Function(
   },
   async (method, path) => {
     calls.reads.push({ method, path });
-    return { id: 'q-1', properties: { 'Статус': { select: { name: api.__rowStatus || 'Ждёт' } } } };
+    return { id: 'q-1', properties: {
+      'Статус': { select: { name: api.__rowStatus || 'Ждёт' } },
+      'Ответ': { rich_text: api.__rowAnswer ? [{ plain_text: api.__rowAnswer }] : [] },
+    } };
   },
   (url) => url || '',
   () => {},
@@ -361,6 +364,47 @@ const question = {
   assert.equal(calls.pauses[0].quiet, false, 'вызов Мастера — громкий');
   assert.equal(calls.patches.length, 0, 'вопрос не закрыт: его решает Мастер');
   assert.equal(calls.plans.length, 0, 'работа не запущена');
+  assert.equal(store.get('cfn-expect').masterEscalated, true, 'исходный question/turn сохраняется для ответа после паузы');
+  assert.equal(api.answerQueue().length, 1, 'вопрос не удаляется, пока Мастер решает');
+}
+
+// ── 10a. Ответ Warden после решения Мастера принимается на том же turn ─────
+{
+  reset();
+  api.queueAnswer({ id: 'q-1' }, question, { roleName: 'Coordinator' });
+  api.__messages = [
+    { id: 'master-verdict', raw: 'CF_ANSWER_RESULT {"question_id":"q-1","turn_id":"t","verdict":"master","reason":"нужно решение владельца"}' },
+  ];
+  await runAnswerStep({ watermark: 'before-master', ref: 'q-1', kind: 'answer' });
+  const pending = store.get('cfn-expect');
+  api.__messages = [
+    { id: 'late-answer', raw: 'CF_ANSWER_RESULT {"question_id":"q-1","turn_id":"t","verdict":"answer","answer":"Мастер подтвердил Creative36711, 2026 и MIT."}' },
+  ];
+  await api.answerStep(reviewer, pending, true);
+  assert.equal(calls.patches.length, 1, 'поздний ответ записан автоматически');
+  assert.equal(calls.patches[0].props['Статус'].select.name, 'Решено', 'вопрос закрыт после ответа');
+  assert.match(calls.patches[0].props['Ответ'].rich_text[0].text.content, /Creative36711/, 'содержимое позднего ответа сохранено');
+  assert.equal(calls.plans.length, 1, 'после записи ход возвращён Координатору');
+  assert.equal(calls.pauses.length, 1, 'новой ложной паузы нет');
+}
+
+// ── 10b. Ручной ответ в Notion после эскалации тоже продолжает цикл ────────
+{
+  reset();
+  api.queueAnswer({ id: 'q-1' }, question, { roleName: 'Coordinator' });
+  api.__messages = [
+    { id: 'master-verdict', raw: 'CF_ANSWER_RESULT {"question_id":"q-1","turn_id":"t","verdict":"master","reason":"нужно решение владельца"}' },
+  ];
+  await runAnswerStep({ watermark: 'before-master', ref: 'q-1', kind: 'answer' });
+  api.__messages = [];
+  api.__rowStatus = 'Решено';
+  api.__rowAnswer = 'Мастер подтвердил Creative36711, 2026 и MIT.';
+  await api.answerStep(reviewer, store.get('cfn-expect'), true);
+  assert.equal(calls.patches.length, 0, 'уже внесённый человеком ответ не перезаписывается');
+  assert.equal(store.get('cfn-expect'), null, 'ожидание снято после сверки Notion');
+  assert.equal(api.answerQueue().length, 0, 'вопрос снят с очереди');
+  assert.equal(calls.plans.length, 1, 'цикл возвращён Координатору после ручной записи');
+  assert.equal(calls.pauses.length, 1, 'цикл не зациклился на прежнем verdict master');
 }
 
 // ── 11. Пустой ответ, неизвестный вердикт, чужой вопрос ────────────────────
