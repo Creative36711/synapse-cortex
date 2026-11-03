@@ -5,7 +5,7 @@
 
 ## 1. Версия и сборка
 
-- ScriptCat/Relay userscript — версия **1.8.1** (`@version 1.8.1`, `SCRIPT_VERSION`, проверка `version-oracle.mjs`);
+- ScriptCat/Relay userscript — версия **1.8.2** (`@version 1.8.2`, `SCRIPT_VERSION`, проверка `version-oracle.mjs`);
   краткий регламент вшивается в промпт из `docs/regulation-digest.md` (проверка `regulation-oracle.mjs`).
 - SHA-256 собранного `tools/script-cat/relay.user.js`:
   `7c81eee11c4336a3032370bdbaa63918e0a7d367aabb25761d5baf7e672c4919`

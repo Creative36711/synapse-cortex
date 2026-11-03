@@ -205,6 +205,12 @@
     return [
       technicalInfo(role, ctx),
       "",
+      // Регламент идёт СРАЗУ после техблока: порядок и маркер обязаны остаться
+      // в конце промпта. Пока блок регламента (после D-023 — ~6 000 знаков)
+      // стоял последним, служебная строка оказывалась в середине, и агент её
+      // «не находил» (первый ход Координатора, 2026-11-03).
+      roleContext(role),
+      "",
       `Задача ${taskTitle(task)} (dispatch ${task.id}, run ${runId}).`,
       "",
       "ЦЕЛЬ И ГРАНИЦЫ",
@@ -222,8 +228,6 @@
         : role.fn === "Reviewer"
           ? reviewerOrder(task, runId, missionId)
           : executorOrder(task, runId, ctx)),
-      "",
-      roleContext(role),
     ].join("\n");
   }
 
@@ -264,6 +268,8 @@
   ) {
     return [
       technicalInfo(role, ctx),
+      "",
+      roleContext(role),
       "",
       `Миссия: ${rt(mission.properties["Миссия"])}.`,
       `Mission ID: ${mission.id} (UUID страницы миссии, скопируй точно в каждую карточку).`,
@@ -307,7 +313,5 @@
       `CF_COORDINATOR_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
       "Строку копируй целиком, подставляя только next: mission_id и turn_id — из этого промпта. Id прошлого хода выдумывать не надо — транспорт всё равно возьмёт свой.",
       'Поле question необязательное и идёт в тот же JSON: {... "next":"Turn Runtime", "question":{"text":"…","options":["A","B"],"default":"A","hours":24}}',
-      "",
-      roleContext(role),
     ].filter(Boolean).join("\n");
   }
