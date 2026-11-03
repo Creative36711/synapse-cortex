@@ -349,7 +349,6 @@
     // repository field; it must not route Executor Core into the profile's
     // default cortex repo when Notion explicitly assigns it to synapse.
     const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
-    const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10
@@ -362,6 +361,23 @@
     if (!recipient || norm(recipient) !== norm(role.name))
       return `адресат карточки изменился на «${recipient || "не указан"}»; перечитай её и назови верную роль`;
     const state = taskState(fresh);
+    const targetRepo = taskTargetRepository(fresh, sessionRepo);
+    if (!targetRepo) return "у карточки и назначенной роли не задан целевой репозиторий";
+    if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy) {
+      const entry = (Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : []).find(
+        (item) => item && String(item.repo || "").toLowerCase() === targetRepo.toLowerCase(),
+      );
+      if (!entry) return `репозиторий карточки ${targetRepo} не разрешён в профиле; карточку и очередь не меняю`;
+    } else if (String(C.repo || "").toLowerCase() !== targetRepo.toLowerCase()) {
+      return `репозиторий карточки ${targetRepo} не совпадает с legacy-профилем ${C.repo}; выдачу не начинаю`;
+    }
+    const targetBranch = profileRepoBranch(targetRepo);
+    if (fresh.properties?.Check?.select?.name === "fail" && !reworkSeen(fresh.id)) {
+      const reason = `«${taskTitle(fresh)}» имеет Check=fail, но явный переход через Rework не зафиксирован. ` +
+        "Следы ответа и Run ID сохранены; автоматическую перевыдачу остановил. Сначала разберите отчёт и подтвердите Rework.";
+      pause(reason, { kind: "check-fail-redispatch", ref: fresh.id });
+      return reason;
+    }
     let prLink = fresh.properties["PR"]?.url || "";
     let submittedAt = fresh.properties["Submitted At"]?.date?.start || "";
     // Карточку, которую Координатор снова направил в работу, транспорт чистит
@@ -460,6 +476,13 @@
       "Recipient Agent ID": { rich_text: [{ type: "text", text: { content: role.id } }] },
       "Output Drive File ID": { rich_text: [{ type: "text", text: { content: logId } }] },
       "Started At": { date: { start: nowIso() } },
+      ...(Object.prototype.hasOwnProperty.call(fresh.properties || {}, "Repository")
+        ? { Repository: { rich_text: richText(targetRepo) } }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(fresh.properties || {}, "Репозиторий")
+        ? { "Репозиторий": { rich_text: richText(targetRepo) } }
+        : {}),
+      Check: { select: null },
     });
     // Файл журнала создаётся пустым, поэтому задание пишем в него сразу:
     // иначе агент получает ссылку на пустой файл и не понимает, зачем она.
@@ -482,12 +505,12 @@
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
-    const dispatchCtx = { repo: sessionRepo, branch: targetBranch };
+    const dispatchCtx = { repo: targetRepo, branch: targetBranch };
     const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
       logId,
-      targetRepo: sessionRepo,
+      targetRepo,
       targetBranch: targetBranch,
       title: taskTitle(fresh),
       // Ссылка нужна минимальному повтору: «прочитай карточку сам».

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.5
+// @version      1.8.6
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -507,7 +507,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.5";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.6";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1097,6 +1097,9 @@
     const props = card && card.properties;
     if (!props) return null;
     if (props["Dispatch State"]?.select?.name !== "Ready") return null;
+    // A failed check is not, by itself, authorization to erase the prior Run.
+    // Only an observed Rework→Ready transition permits the clean redispatch path.
+    if (props["Check"]?.select?.name === "fail" && !reworkSeen(card.id)) return null;
     if (!answeredCard(card)) return null;
     return {
       "Submitted At": { date: null },
@@ -2005,6 +2008,11 @@
         for (const [name, type] of Object.entries(fields)) {
           if (source.properties[name]?.type !== type) errors.push(`${name}: нужен ${type}`);
         }
+        // Repository — additive for existing databases; absent cards inherit
+        // the freshly-read role repo. If present, it must be a text property.
+        for (const name of ["Repository", "Репозиторий"]) {
+          if (source.properties[name] && source.properties[name].type !== "rich_text") errors.push(`${name}: нужен rich_text`);
+        }
         for (const [name, required] of Object.entries(options)) {
           const actual = source.properties[name]?.select?.options;
           if (!Array.isArray(actual)) errors.push(`${name}: нет списка select`);
@@ -2903,7 +2911,7 @@
     return err;
   }
 
-  function requestOnce(method, url, headers, body, timeout = 45000) {
+  function requestOnce(method, url, headers, body, timeout = 45000, opts = {}) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,
@@ -2913,6 +2921,7 @@
         // и ждёт там JSON-текст, а не JSON-строку в кавычках.
         data: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
         timeout,
+        ...(opts.anonymous === true ? { anonymous: true, withCredentials: false } : {}),
         onload: (r) => {
           let parsed = null;
           try {
@@ -2951,7 +2960,7 @@
     let last = null;
     for (let attempt = 0; attempt < tries; attempt += 1) {
       try {
-        return await requestOnce(method, url, headers, body);
+        return await requestOnce(method, url, headers, body, 45000, opts);
       } catch (e) {
         last = e;
         // Выдержка — только перед следующей попыткой. Иначе последняя,
@@ -7461,12 +7470,12 @@
     // Для новых проектов память привязана ещё и к PR: другая ссылка в том же
     // Run не может воспользоваться подтверждением предыдущего PR. Legacy-ключ
     // остаётся прежним. Даже сохранённый успех сверяется с текущим GitHub.
-    const projectRef = scopedProject ? prRef(result) : null;
+    const projectRef = scopedProject ? prRef(result, target?.repo || C.repo) : null;
     if (scopedProject && !projectRef) {
       lastMergeCheck = { status: "boundary", why: "Не удалось определить PR для этого проекта." };
       return "boundary";
     }
-    const key = `${K.merged}${task.id}:${runId || "run"}${projectRef ? `:pr-${projectRef.number}` : ""}`;
+    const key = `${K.merged}${task.id}:${runId || "run"}${projectRef ? `:repo-${encodeURIComponent(projectRef.repo)}:pr-${projectRef.number}:base-${encodeURIComponent(target?.branch || C.branch || "main")}` : ""}`;
     if (GM_getValue(key, false)) {
       if (scopedProject && projectCheck.status !== "merged") {
         lastMergeCheck = projectCheck;
@@ -7494,21 +7503,21 @@
     while (Date.now() - started < C.prWaitMs) {
       if (mergedFlag()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "merged") { lastMergeCheck = check; return "boundary"; }
         }
         return finishMerge(task, key);
       }
       if (closedFlag()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "closed") { lastMergeCheck = check; return "boundary"; }
         }
         return finishClosed(task, key);
       }
       if (continueButton()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "merged") { lastMergeCheck = check; return "boundary"; }
         }
         return finishMerge(task, key);
@@ -7747,6 +7756,13 @@
     return null;
   }
 
+  /** Целевой repo карточки; старые карточки наследуют repo активной роли. */
+  function taskTargetRepository(card, fallback = C.repo) {
+    const props = card && card.properties || {};
+    const value = rt(props.Repository).trim() || rt(props["Репозиторий"]).trim();
+    return value || String(fallback || C.repo || "").trim();
+  }
+
   /** Явная чужая или некорректная ссылка не доказывает мерж нашего проекта. */
   function projectPrBoundary(result, targetRepo = null) {
     const repo = String(targetRepo || C.repo || "");
@@ -7797,7 +7813,23 @@
    * без него GitHub отвечает 404 независимо от того, есть PR или нет.
    */
   async function githubPr(repo, number, token = "") {
-    return request("GET", `https://api.github.com/repos/${repo}/pulls/${number}`, githubHeaders(token));
+    return request(
+      "GET",
+      `https://api.github.com/repos/${repo}/pulls/${number}`,
+      githubHeaders(token),
+      undefined,
+      { anonymous: !token },
+    );
+  }
+
+  async function githubRepo(repo, token = "") {
+    return request(
+      "GET",
+      `https://api.github.com/repos/${repo}`,
+      githubHeaders(token),
+      undefined,
+      { anonymous: !token },
+    );
   }
 
   /**
@@ -7860,19 +7892,42 @@
         if (anonymous.status !== "unknown") return anonymous;
         return {
           ...anonymous,
-          needsToken: true,
+          needsToken: Boolean(anonymous.needsToken),
           notFound: code === 404 || anonymous.notFound,
           why: `GitHub ответил HTTP ${code} с токеном; анонимная проверка не подтвердила PR: ${anonymous.why}`,
         };
       }
-      // Анонимный 404 означает только, что репозиторий/PR нельзя прочитать
-      // без авторизации (обычно это приватный repo), а не что PR отсутствует.
-      if (code === 404)
-        return {
-          status: "unknown",
-          needsToken: true,
-          why: `PR #${ref.number} анонимно не виден: ${ref.repo} может быть приватным — нужен токен GitHub в «⚙ Подключения»`,
-        };
+      // Не называем PR-404 проблемой токена, пока не проверили сам repo тем
+      // же строго анонимным транспортом. Для публичного repo 200 + PR 404
+      // означает расхождение URL/номера/эндпоинта, а не нехватку прав.
+      if (code === 404) {
+        try {
+          const repository = await githubRepo(ref.repo, "");
+          if (repository && String(repository.full_name || "").toLowerCase() === ref.repo.toLowerCase()) {
+            return {
+              status: "unknown",
+              notFound: true,
+              why: `Репозиторий ${ref.repo} читается анонимно, но GitHub вернул 404 на PR #${ref.number}; проверьте точную ссылку/номер PR`,
+            };
+          }
+          return { status: "unknown", why: `GitHub вернул неожиданный ответ репозитория ${ref.repo} при анонимной проверке PR #${ref.number}` };
+        } catch (repoError) {
+          const repoRaw = String((repoError && repoError.message) || repoError);
+          const repoCode = Number((repoError && repoError.status) || (repoRaw.match(/HTTP (\d{3})/) || [])[1] || 0);
+          if (repoCode === 404) {
+            return {
+              status: "unknown",
+              needsToken: true,
+              why: `Анонимный GitHub API вернул 404 и на PR #${ref.number}, и на репозиторий ${ref.repo}; доступ/ответ API не подтверждён (проверьте видимость и запрос)`,
+            };
+          }
+          return {
+            status: "unknown",
+            why: `Анонимный запрос PR #${ref.number} вернул HTTP 404, а запрос repo — ${repoCode ? `HTTP ${repoCode}` : repoRaw}`,
+            code: repoCode,
+          };
+        }
+      }
       if (code === 401 || code === 403)
         return {
           status: "unknown",
@@ -8421,7 +8476,10 @@
       "   реши сам обратимо и запиши неясно / решил / откат в docs/decisions/<миссия>.md, если Scope разрешает этот путь; иначе — в отчёте.",
       "   Изменение контракта предложи через question в Notion; до фактического решения контракт остаётся прежним.",
       "6. Последней строкой ответа — ровно один маркер:",
-      `CF_AGENT_RESULT {"dispatch_id":"${task.id}","run_id":"${runId}","status":"submitted","check":0,"report":"<путь>","pr":<номер PR>,"merged":true}`,
+      `CF_AGENT_RESULT {"dispatch_id":"${task.id}","run_id":"${runId}","status":"submitted","check":0,"report":"<путь>","pr":"https://github.com/${ctx.repo || "<owner/repo>"}/pull/<номер>","merged":true}`,
+      "Для PR укажи полный URL из репозитория этой карточки (не голый номер); транспорт сверит",
+      `repo и base branch ${branch}. Если PR не нужен — поставь ` + '`"pr": null`' + `; ` +
+        "`check` описывает только результат проверки, а неизвестный PR блокируется отдельно.",
       "`pr` и `merged: true` обязательны, если PR слит: без них «слит» не отличить от",
       "«закрыт без мержа» — снаружи оба случая выглядят одинаково. Работа без PR —",
       "`\"pr\": null`: пропущенный `pr` считается забытым, а не отсутствующим.",
@@ -8500,6 +8558,7 @@
       `- dispatch: \`${task.id}\``,
       `- run: \`${runId}\``,
       `- кому: ${role.name}`,
+      `- repository: ${rt(task.properties?.Repository) || rt(task.properties?.["Репозиторий"]) || role.repo || "наследуется из repo роли"}`,
       `- выдано: ${nowIso()}`,
       "",
       "### Намерение",
@@ -8621,7 +8680,7 @@
       "",
       "ХОД — один ответ:",
       "1) Submitted → проверь по Acceptance, поставь Accepted или Rework (причина в «Ответ»).",
-      "2) В этом же ответе выдай работу: новая карточка (Намерение, Инварианты, Acceptance с командой-оракулом, Свободно, Scope, Кому, Sequence, Миссия, Mission ID, Dependency, Dispatch State = Ready) или Draft → Ready. Пустая очередь после хода — незаконченный ход. Скопируй Mission ID из промпта без изменений, в «Миссию» запиши название для человека.",
+      "2) В этом же ответе выдай работу: новая карточка (Намерение, Инварианты, Acceptance с командой-оракулом, Свободно, Scope, Repository = точный owner/repo цели, если поле есть в базе, Кому, Sequence, Миссия, Mission ID, Dependency, Dispatch State = Ready) или Draft → Ready. Repository — repo карточки, не репозиторий Coordinator; если старой базе поля нет, назначь роль, у которой в «Роли» явно указан нужный repo, и не пытайся записать несуществующее поле. Пустая очередь после хода — незаконченный ход. Скопируй Mission ID из промпта без изменений, в «Миссию» запиши название для человека.",
       '3) Миссия выполнена → допиши «Итог» миссии (что сделано, чем проверено, какие долги остались) и поставь next = "done". Поле «Состояние» сам не ставь: «done» — это передача на приёмку, а не закрытие. Миссию закрывает роль с функцией Reviewer своим вердиктом; если она вернёт работу, замечания придут в плане следующего хода.',
       "",
       "next — имя роли той карточки, которую выдаёшь. Своё имя значит «ход снова мне»: это не ошибка, но работу надо выдать в этом же ответе.",
@@ -9022,8 +9081,20 @@
     }
 
     if (merged === "boundary") {
-      pause(`Не удалось подтвердить PR этого проекта и базовой ветки: ${(lastMergeCheck && lastMergeCheck.why) || "сверьте репозиторий"}. ` +
-        "Карточка не изменена, ожидание сохранено; проверьте ссылку и нажмите «Продолжить».",
+      const why = (lastMergeCheck && lastMergeCheck.why) || "сверьте репозиторий";
+      const targetRepo = expect.targetRepo || C.repo;
+      const blocked = {
+        "Dispatch State": { select: { name: "Blocked" } },
+        "Check": { select: typeof result.check === "number" ? { name: result.check === 0 ? "pass" : "fail" } : null },
+        "Ответ": { rich_text: richText(`Ответ сохранён в журнал ${logId}; GitHub PR не подтверждён: ${why}. Повторную выдачу не выполнять без решения Warden.`) },
+      };
+      const link = prUrl(result.pr, targetRepo);
+      if (link) blocked.PR = { url: link };
+      if (result.report) blocked["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
+      await patch(result.dispatch_id, blocked);
+      GM_setValue(`cfn-done:${result.dispatch_id}:${result.run_id}`, true);
+      if (currentDispatch(expect)) GM_setValue(K.expect, null);
+      pause(`PR этой выдачи не подтверждён: ${why}. Карточка → Blocked; ответ, Run ID и ссылка сохранены; не перевыдаю.`,
         { kind: "project-pr-boundary", ref: result.dispatch_id, runId: result.run_id });
       return true;
     }
@@ -9106,7 +9177,9 @@
       "Ответ": { rich_text: richText(`${review?.verdict ? `Вердикт Reviewer по карточке: ${review.verdict}. ` : ""}Ответ ${hit.id} записан в лог ${logId}.`) },
       "Submitted At": { date: { start: nowIso() } },
     };
-    if (typeof result.check === "number") props["Check"] = { select: { name: result.check === 0 ? "pass" : "fail" } };
+    props["Check"] = {
+      select: typeof result.check === "number" ? { name: result.check === 0 ? "pass" : "fail" } : null,
+    };
     if (result.report) props["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
     const targetRepo = expect && expect.targetRepo ? expect.targetRepo : C.repo;
     const link = prUrl(result.pr, targetRepo);
@@ -12168,7 +12241,6 @@
     // repository field; it must not route Executor Core into the profile's
     // default cortex repo when Notion explicitly assigns it to synapse.
     const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
-    const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и
     // отправкой её мог тронуть Координатор, прошлый тик или человек. 23.10
@@ -12181,6 +12253,23 @@
     if (!recipient || norm(recipient) !== norm(role.name))
       return `адресат карточки изменился на «${recipient || "не указан"}»; перечитай её и назови верную роль`;
     const state = taskState(fresh);
+    const targetRepo = taskTargetRepository(fresh, sessionRepo);
+    if (!targetRepo) return "у карточки и назначенной роли не задан целевой репозиторий";
+    if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy) {
+      const entry = (Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : []).find(
+        (item) => item && String(item.repo || "").toLowerCase() === targetRepo.toLowerCase(),
+      );
+      if (!entry) return `репозиторий карточки ${targetRepo} не разрешён в профиле; карточку и очередь не меняю`;
+    } else if (String(C.repo || "").toLowerCase() !== targetRepo.toLowerCase()) {
+      return `репозиторий карточки ${targetRepo} не совпадает с legacy-профилем ${C.repo}; выдачу не начинаю`;
+    }
+    const targetBranch = profileRepoBranch(targetRepo);
+    if (fresh.properties?.Check?.select?.name === "fail" && !reworkSeen(fresh.id)) {
+      const reason = `«${taskTitle(fresh)}» имеет Check=fail, но явный переход через Rework не зафиксирован. ` +
+        "Следы ответа и Run ID сохранены; автоматическую перевыдачу остановил. Сначала разберите отчёт и подтвердите Rework.";
+      pause(reason, { kind: "check-fail-redispatch", ref: fresh.id });
+      return reason;
+    }
     let prLink = fresh.properties["PR"]?.url || "";
     let submittedAt = fresh.properties["Submitted At"]?.date?.start || "";
     // Карточку, которую Координатор снова направил в работу, транспорт чистит
@@ -12279,6 +12368,13 @@
       "Recipient Agent ID": { rich_text: [{ type: "text", text: { content: role.id } }] },
       "Output Drive File ID": { rich_text: [{ type: "text", text: { content: logId } }] },
       "Started At": { date: { start: nowIso() } },
+      ...(Object.prototype.hasOwnProperty.call(fresh.properties || {}, "Repository")
+        ? { Repository: { rich_text: richText(targetRepo) } }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(fresh.properties || {}, "Репозиторий")
+        ? { "Репозиторий": { rich_text: richText(targetRepo) } }
+        : {}),
+      Check: { select: null },
     });
     // Файл журнала создаётся пустым, поэтому задание пишем в него сразу:
     // иначе агент получает ссылку на пустой файл и не понимает, зачем она.
@@ -12301,12 +12397,12 @@
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
-    const dispatchCtx = { repo: sessionRepo, branch: targetBranch };
+    const dispatchCtx = { repo: targetRepo, branch: targetBranch };
     const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
       logId,
-      targetRepo: sessionRepo,
+      targetRepo,
       targetBranch: targetBranch,
       title: taskTitle(fresh),
       // Ссылка нужна минимальному повтору: «прочитай карточку сам».

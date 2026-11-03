@@ -56,6 +56,18 @@ assert.deepEqual(
   'блок кода и текст после маркера не мешают',
 );
 
+// 1.4.1. Arena может вернуть маркер внутри буквального HTML-комментария.
+assert.deepEqual(
+  parseMarker('<!-- CF_AGENT_RESULT {"dispatch_id":"d1","run_id":"r1","status":"submitted","merged":true} -->', 'CF_AGENT_RESULT'),
+  { dispatch_id: 'd1', run_id: 'r1', status: 'submitted', merged: true },
+  'маркер внутри HTML-комментария извлекается до -->',
+);
+assert.deepEqual(
+  parseMarker('<!-- CF_AGENT_RESULT {&quot;dispatch_id&quot;:&quot;d1&quot;,&quot;run_id&quot;:&quot;r1&quot;,&quot;status&quot;:&quot;submitted&quot;,&quot;merged&quot;:true} --&gt;', 'CF_AGENT_RESULT'),
+  { dispatch_id: 'd1', run_id: 'r1', status: 'submitted', merged: true },
+  'HTML-сущности в маркере и закрытии комментария не обрезают JSON',
+);
+
 // 1.5. Пример из нашего задания (`<роль|done>`) — не ответ.
 assert.equal(
   parseMarker('Последней строкой ответа:\nCF_COORDINATOR_RESULT {"mission_id":"m1","turn_id":"t1","status":"completed","next":"<роль|done>"}', NAME),

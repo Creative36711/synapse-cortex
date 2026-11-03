@@ -148,8 +148,8 @@ async function runEnsure(legacy, statuses, surface = 'merged', rememberedPr = nu
     'K','GM_getValue','rt','hasPrUi','waitFor','patience','C','mergedFlag','closedFlag','continueButton','finishMerge','finishClosed','prRef', 'dispatchTarget',
     `let lastMergeCheck = null;\n${ensureSource}\nreturn { ensureMerged, check:()=>lastMergeCheck };`)(
     {legacy}, () => '', async () => { const status = statuses[Math.min(checks.length, statuses.length - 1)]; checks.push(status); return {status,why:'mock'}; },
-()=>'token', (r)=>r.merged===true, {merged:'m:'}, (key) => rememberedPr !== null && key === (legacy ? 'm:card:run' : `m:card:run:pr-${rememberedPr}`), () => '', () => true, async()=>null, (v)=>v,
-    {prCardWaitMs:0,mergeGraceMs:0,prWaitMs:1000}, () => surface === 'merged', () => surface === 'closed',
+()=>'token', (r)=>r.merged===true, {merged:'m:'}, (key) => rememberedPr !== null && key === (legacy ? 'm:card:run' : `m:card:run:repo-${encodeURIComponent(A.repo)}:pr-${rememberedPr}:base-${encodeURIComponent(A.branch)}`), () => '', () => true, async()=>null, (v)=>v,
+    {repo:A.repo,branch:A.branch,prCardWaitMs:0,mergeGraceMs:0,prWaitMs:1000}, () => surface === 'merged', () => surface === 'closed',
     () => surface === 'continue' ? {} : null, async()=>{finishes.push('merged');return 'merged';}, async()=>{finishes.push('closed');return 'closed';},
     (result)=>({repo:A.repo, number:Number(result.pr)}), () => null);
   const result = await sandbox.ensureMerged({id:'card',properties:{}},{pr:2,merged:false,run_id:'run'});

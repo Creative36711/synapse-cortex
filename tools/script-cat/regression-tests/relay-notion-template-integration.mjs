@@ -26,6 +26,7 @@ assert.ok(db.roles.properties['Устав'].url);
 assert.ok(db.missions.properties['ТЗ SHA'].rich_text);
 assert.ok(db.missions.properties['Координатор'].rich_text);
 assert.ok(db.requests.properties.Dependency.rich_text);
+assert.ok(db.requests.properties.Repository.rich_text, 'карточки нового проекта явно указывают целевой repo');
 assert.ok(db.requests.properties['Проверка'].rich_text);
 for (const option of ['Ждёт', 'Отключена']) {
   assert.ok(db.roles.properties['Статус'].select.options.some(x => x.name === option));

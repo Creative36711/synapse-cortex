@@ -32,7 +32,7 @@
     return err;
   }
 
-  function requestOnce(method, url, headers, body, timeout = 45000) {
+  function requestOnce(method, url, headers, body, timeout = 45000, opts = {}) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,
@@ -42,6 +42,7 @@
         // и ждёт там JSON-текст, а не JSON-строку в кавычках.
         data: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
         timeout,
+        ...(opts.anonymous === true ? { anonymous: true, withCredentials: false } : {}),
         onload: (r) => {
           let parsed = null;
           try {
@@ -80,7 +81,7 @@
     let last = null;
     for (let attempt = 0; attempt < tries; attempt += 1) {
       try {
-        return await requestOnce(method, url, headers, body);
+        return await requestOnce(method, url, headers, body, 45000, opts);
       } catch (e) {
         last = e;
         // Выдержка — только перед следующей попыткой. Иначе последняя,

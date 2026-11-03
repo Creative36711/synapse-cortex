@@ -53,6 +53,12 @@ for (const [id, {fields, options}] of Object.entries(fixture)) {
   }
 }
 currentSchemas = structuredClone(schemas);
+// Repository is additive for older databases; if present, it must be text.
+delete currentSchemas.requests.properties.Repository;
+assert.equal((await run(settings)).ok, true, 'старые Requests без Repository работают через назначение роли');
+currentSchemas.requests.properties.Repository = { type: 'url' };
+assert.match((await run(settings)).text, /Repository: нужен rich_text/);
+currentSchemas = structuredClone(schemas);
 
 pagination = 'good'; calls = []; assert.equal((await run(settings)).ok, true);
 assert.deepEqual(calls.filter((c) => c.url.endsWith('/query')).map((c) => c.body?.start_cursor || ''), ['', 'page-2']);

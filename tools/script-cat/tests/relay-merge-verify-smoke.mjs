@@ -30,10 +30,11 @@ const refFrom = src.indexOf('  function prRef(result,');
 // До конца githubPr: он нужен проверке и живёт между prRef и verifyMergeClaim.
 const refTo = src.indexOf('  /**\n   * Проверка «PR слит» из маркера.');
 assert.ok(refFrom > 0 && refTo > refFrom, 'prRef на месте');
-const { prRef } = new Function(
-  'C',
-  `${src.slice(refFrom, refTo)}\nreturn { prRef };`,
-)({ repo: 'example/relay-fixture' });
+const refApi = new Function(
+  'C', 'rt',
+  `${src.slice(refFrom, refTo)}\nreturn { prRef, taskTargetRepository };`,
+)({ repo: 'example/relay-fixture' }, (p) => (p?.rich_text || []).map((x) => x.plain_text || '').join(''));
+const { prRef, taskTargetRepository } = refApi;
 
 assert.deepEqual(prRef({ pr: 37 }), { repo: 'example/relay-fixture', number: 37 }, 'число');
 assert.deepEqual(prRef({ pr: '#37' }), { repo: 'example/relay-fixture', number: 37 }, 'решётка');
@@ -50,6 +51,8 @@ assert.deepEqual(
 assert.equal(prRef({ pr: null }), null, 'без PR — нечего проверять');
 assert.equal(prRef({ pr: 'none' }), null, '«none» — тоже');
 assert.equal(prRef(null), null, 'без ответа — тоже');
+assert.equal(taskTargetRepository({ properties: { Repository: { rich_text: [{ plain_text: 'Creative36711/synapse' }] } }, }, 'Creative36711/synapse-cortex'), 'Creative36711/synapse', 'явный repo карточки приоритетнее профиля');
+assert.equal(taskTargetRepository({ properties: {} }, 'Creative36711/synapse'), 'Creative36711/synapse', 'старые карточки наследуют repo роли');
 
 // ensureMerged calls this fast boundary guard before verifyMergeClaim. It must
 // resolve the same configured cross-repository URL, or it masks the later fix.
@@ -80,6 +83,24 @@ assert.equal(prRef(null), null, 'без ответа — тоже');
   );
 }
 
+// GM_xmlhttpRequest must use its anonymous mode on the fallback: omitting an
+// Authorization header alone may still send cookies from the browser session.
+{
+  const requestFrom = src.indexOf('  function requestOnce(method, url, headers, body, timeout = 45000, opts = {}) {');
+  const requestTo = src.indexOf('  /**\n   * Запрос с одним повтором', requestFrom);
+  assert.ok(requestFrom > 0 && requestTo > requestFrom, 'requestOnce поддерживает анонимный запрос');
+  let observed;
+  const requestOnce = new Function('GM_xmlhttpRequest',
+    `${src.slice(requestFrom, requestTo)}\nreturn requestOnce;`,
+  )((options) => {
+    observed = options;
+    options.onload({ status: 200, responseText: '{"ok":true}' });
+  });
+  await requestOnce('GET', 'https://api.github.com/repos/example/repo/pulls/1', {}, undefined, 1000, { anonymous: true });
+  assert.equal(observed.anonymous, true, 'fallback explicitly suppresses browser cookies');
+  assert.equal(observed.withCredentials, false, 'fallback disables credentialed transport');
+}
+
 // ── 3. Состояние PR по GitHub ──────────────────────────────────────────────
 const verifyFrom = src.indexOf('  async function verifyMergeClaim(result, token = "",');
 // Границей служит следующая функция, а не её докблок: слова «вернуть карточку»
@@ -91,14 +112,14 @@ function makeVerify(answer, repoAnswer = { full_name: 'example/relay-fixture', p
   const block = `${src.slice(refFrom, refTo)}\n${src.slice(verifyFrom, verifyTo)}\nreturn { verifyMergeClaim };`;
   const calls = [];
   const fn = new Function('C', 'request', 'ACTIVE_PROFILE', block);
-  const api = fn({ repo: 'example/relay-fixture' }, async (method, url, headers) => {
-    calls.push({ method, url, headers });
+  const api = fn({ repo: 'example/relay-fixture' }, async (method, url, headers, body, options) => {
+    calls.push({ method, url, headers, body, options });
     if (/\/pulls\//.test(url)) {
       const response = typeof answer === 'function' ? answer({ method, url, headers }) : answer;
       if (response instanceof Error) throw response;
       return response;
     }
-    // Проверка «а токен-то репозиторий видит?» — отдельный запрос.
+    // Сам repo проверяется отдельным запросом в строго анонимном режиме.
     if (repoAnswer instanceof Error) throw repoAnswer;
     return repoAnswer;
   }, profile);
@@ -144,9 +165,14 @@ assert.equal(closed.status, 'closed', 'закрытый без мержа — т
 
 // Токен есть, репозиторий виден, а PR не читается. Это всё равно не «нет PR»:
 // 24.10 на таком ответе слитый PR #37 уехал в Rework, поэтому статус — unknown.
-const missing = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 }, 'ghp_token');
+const missingApi = makeVerify(new Error('HTTP 404: Not Found'), { full_name: 'example/relay-fixture', private: false });
+const missing = await missingApi.verifyMergeClaim({ pr: 37 }, 'ghp_token');
 assert.equal(missing.status, 'unknown', '404 на PR не доказывает, что PR нет');
 assert.equal(missing.notFound, true, 'но это названо: PR не читается');
+assert.equal(missing.needsToken, false, 'публично читаемый repo не помечается как проблема токена');
+assert.doesNotMatch(missing.why, /нужен токен|приватным/i, 'видимый публичный repo не объявляется проблемой токена');
+assert.ok(missingApi.calls[2].url.endsWith('/repos/example/relay-fixture'), 'после PR-404 проверяется repo endpoint отдельно');
+assert.equal(missingApi.calls[2].options.anonymous, true, 'диагностический repo-запрос тоже строго анонимный');
 
 // Если сохранённый токен получает 404, публичный PR должен проверяться
 // анонимным повтором. Это покрывает PR #5 в Creative36711/synapse: merged.
@@ -163,13 +189,14 @@ assert.equal(missing.notFound, true, 'но это названо: PR не чит
   assert.equal(check.status, 'merged', 'анонимный fallback подтверждает публичный PR');
   assert.equal(api.calls.length, 2, 'сделана одна безопасная повторная проверка');
   assert.equal(api.calls[1].headers.Authorization, undefined, 'второй запрос не отправляет токен');
+  assert.equal(api.calls[1].options.anonymous, true, 'ScriptCat отключает cookies/credentials на анонимном повторе');
 }
 
 // Токена нет — тот же 404 значит «приватный репозиторий не виден».
-const hidden = await makeVerify(new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 });
+const hidden = await makeVerify(new Error('HTTP 404: Not Found'), new Error('HTTP 404: Not Found')).verifyMergeClaim({ pr: 37 });
 assert.equal(hidden.status, 'unknown', 'без токена 404 — не «PR нет», а «не проверили»');
 assert.equal(hidden.needsToken, true, 'и это прямо названо нехваткой токена');
-assert.match(hidden.why, /приватный|токен/i, 'в причине сказано, чего не хватает');
+assert.match(hidden.why, /анонимный GitHub API|доступ/i, 'оба endpoint 404 диагностируются без утверждения, что repo точно приватный');
 
 // Токен есть, но и репозиторий ему не виден: это «нет доступа», а не «нет PR».
 {
@@ -192,7 +219,7 @@ for (const code of [401, 403]) {
   const denied = Object.assign(new Error(`HTTP ${code}: Bad credentials`), { status: code });
   const check = await makeVerify(denied).verifyMergeClaim({ pr: 37 }, 'ghp_bad');
   assert.equal(check.status, 'unknown', `${code} — не приговор работе`);
-  assert.equal(check.needsToken, true, `${code} — повод проверить токен`);
+  assert.equal(check.needsToken, false, `${code} на обоих запросах без подтверждения приватности не доказывает, что нужен токен`);
 }
 
 const offline = await makeVerify(new Error('таймаут запроса')).verifyMergeClaim({ pr: 37 }, 'ghp_token');
@@ -212,6 +239,21 @@ assert.equal(noPr.status, 'unknown', 'без номера проверять н�
   const api = makeVerify({ merged: true, merged_at: '2026-10-24T16:16:10Z' });
   await api.verifyMergeClaim({ pr: 37 });
   assert.equal(api.calls[0].headers.Authorization, undefined, 'без токена — без заголовка');
+}
+
+// Unknown PR verification is a terminal Blocked state, not a destructive reset
+// or an implicit re-dispatch. Evidence remains attached to the current Run.
+{
+  const executor = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
+  const from = executor.indexOf('    if (merged === "boundary") {');
+  const to = executor.indexOf('    if (merged === "claim-rejected") {', from);
+  assert.ok(from > 0 && to > from, 'unconfirmed branch in submitExecutor');
+  const branch = executor.slice(from, to);
+  assert.match(branch, /"Dispatch State": \{ select: \{ name: "Blocked" \} \}/, 'неподтверждённая выдача блокируется');
+  assert.match(branch, /"Check": \{ select: typeof result\.check === "number"/, 'проверка сохраняет pass/fail или очищается как unconfirmed');
+  assert.match(branch, /Run ID и ссылка сохранены|Run ID/, 'Run ID сохраняется, выдача не перезапускается');
+  assert.match(branch, /if \(currentDispatch\(expect\)\) GM_setValue\(K\.expect, null\)/, 'завершённая выдача снимает только собственное ожидание');
+  assert.doesNotMatch(branch, /"Submitted At": \{ date: null \}|"Run ID": \{ rich_text: \[] \}/, 'терминальные следы не стираются');
 }
 
 // ── 4. claimMerge: сначала проверка, потом вера ────────────────────────────

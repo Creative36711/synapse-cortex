@@ -37,7 +37,8 @@ function block(name) {
 // ── 1. Память о мерже — на выдачу, а не на карточку ────────────────────────
 const ensureMerged = block('ensureMerged');
 assert.match(ensureMerged, /const runId = String\(result\.run_id \|\| rt\(task\.properties\?\.\["Run ID"\]\)/, 'run читается из маркера или карточки');
-assert.match(ensureMerged, /const key = `\$\{K\.merged\}\$\{task\.id\}:\$\{runId \|\| "run"\}\$\{projectRef \? `:pr-\$\{projectRef\.number\}` : ""\}`/, 'ключ включает run, а у нового проекта — также номер PR');
+assert.match(ensureMerged, /const key = `\$\{K\.merged\}\$\{task\.id\}:\$\{runId \|\| "run"\}/, 'ключ включает Run ID');
+assert.match(ensureMerged, /projectRef \? `:repo-\$\{encodeURIComponent\(projectRef\.repo\)\}:pr-\$\{projectRef\.number\}:base-/, 'ключ новой выдачи включает repo, PR и base branch');
 assert.doesNotMatch(ensureMerged, /const key = `\$\{K\.merged\}\$\{task\.id\}`;/, 'старого ключа на карточку нет');
 
 // ── 2. Continue перед отправкой ────────────────────────────────────────────

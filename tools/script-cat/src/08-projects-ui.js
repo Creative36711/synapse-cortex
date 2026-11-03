@@ -55,6 +55,11 @@
         for (const [name, type] of Object.entries(fields)) {
           if (source.properties[name]?.type !== type) errors.push(`${name}: нужен ${type}`);
         }
+        // Repository — additive for existing databases; absent cards inherit
+        // the freshly-read role repo. If present, it must be a text property.
+        for (const name of ["Repository", "Репозиторий"]) {
+          if (source.properties[name] && source.properties[name].type !== "rich_text") errors.push(`${name}: нужен rich_text`);
+        }
         for (const [name, required] of Object.entries(options)) {
           const actual = source.properties[name]?.select?.options;
           if (!Array.isArray(actual)) errors.push(`${name}: нет списка select`);

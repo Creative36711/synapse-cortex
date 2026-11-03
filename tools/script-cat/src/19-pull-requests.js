@@ -208,12 +208,12 @@
     // Для новых проектов память привязана ещё и к PR: другая ссылка в том же
     // Run не может воспользоваться подтверждением предыдущего PR. Legacy-ключ
     // остаётся прежним. Даже сохранённый успех сверяется с текущим GitHub.
-    const projectRef = scopedProject ? prRef(result) : null;
+    const projectRef = scopedProject ? prRef(result, target?.repo || C.repo) : null;
     if (scopedProject && !projectRef) {
       lastMergeCheck = { status: "boundary", why: "Не удалось определить PR для этого проекта." };
       return "boundary";
     }
-    const key = `${K.merged}${task.id}:${runId || "run"}${projectRef ? `:pr-${projectRef.number}` : ""}`;
+    const key = `${K.merged}${task.id}:${runId || "run"}${projectRef ? `:repo-${encodeURIComponent(projectRef.repo)}:pr-${projectRef.number}:base-${encodeURIComponent(target?.branch || C.branch || "main")}` : ""}`;
     if (GM_getValue(key, false)) {
       if (scopedProject && projectCheck.status !== "merged") {
         lastMergeCheck = projectCheck;
@@ -241,21 +241,21 @@
     while (Date.now() - started < C.prWaitMs) {
       if (mergedFlag()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "merged") { lastMergeCheck = check; return "boundary"; }
         }
         return finishMerge(task, key);
       }
       if (closedFlag()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "closed") { lastMergeCheck = check; return "boundary"; }
         }
         return finishClosed(task, key);
       }
       if (continueButton()) {
         if (scopedProject) {
-          const check = await verifyMergeClaim(result, ghToken());
+          const check = await verifyMergeClaim(result, ghToken(), target || undefined);
           if (check.status !== "merged") { lastMergeCheck = check; return "boundary"; }
         }
         return finishMerge(task, key);
@@ -494,6 +494,13 @@
     return null;
   }
 
+  /** Целевой repo карточки; старые карточки наследуют repo активной роли. */
+  function taskTargetRepository(card, fallback = C.repo) {
+    const props = card && card.properties || {};
+    const value = rt(props.Repository).trim() || rt(props["Репозиторий"]).trim();
+    return value || String(fallback || C.repo || "").trim();
+  }
+
   /** Явная чужая или некорректная ссылка не доказывает мерж нашего проекта. */
   function projectPrBoundary(result, targetRepo = null) {
     const repo = String(targetRepo || C.repo || "");
@@ -544,7 +551,23 @@
    * без него GitHub отвечает 404 независимо от того, есть PR или нет.
    */
   async function githubPr(repo, number, token = "") {
-    return request("GET", `https://api.github.com/repos/${repo}/pulls/${number}`, githubHeaders(token));
+    return request(
+      "GET",
+      `https://api.github.com/repos/${repo}/pulls/${number}`,
+      githubHeaders(token),
+      undefined,
+      { anonymous: !token },
+    );
+  }
+
+  async function githubRepo(repo, token = "") {
+    return request(
+      "GET",
+      `https://api.github.com/repos/${repo}`,
+      githubHeaders(token),
+      undefined,
+      { anonymous: !token },
+    );
   }
 
   /**
@@ -607,19 +630,42 @@
         if (anonymous.status !== "unknown") return anonymous;
         return {
           ...anonymous,
-          needsToken: true,
+          needsToken: Boolean(anonymous.needsToken),
           notFound: code === 404 || anonymous.notFound,
           why: `GitHub ответил HTTP ${code} с токеном; анонимная проверка не подтвердила PR: ${anonymous.why}`,
         };
       }
-      // Анонимный 404 означает только, что репозиторий/PR нельзя прочитать
-      // без авторизации (обычно это приватный repo), а не что PR отсутствует.
-      if (code === 404)
-        return {
-          status: "unknown",
-          needsToken: true,
-          why: `PR #${ref.number} анонимно не виден: ${ref.repo} может быть приватным — нужен токен GitHub в «⚙ Подключения»`,
-        };
+      // Не называем PR-404 проблемой токена, пока не проверили сам repo тем
+      // же строго анонимным транспортом. Для публичного repo 200 + PR 404
+      // означает расхождение URL/номера/эндпоинта, а не нехватку прав.
+      if (code === 404) {
+        try {
+          const repository = await githubRepo(ref.repo, "");
+          if (repository && String(repository.full_name || "").toLowerCase() === ref.repo.toLowerCase()) {
+            return {
+              status: "unknown",
+              notFound: true,
+              why: `Репозиторий ${ref.repo} читается анонимно, но GitHub вернул 404 на PR #${ref.number}; проверьте точную ссылку/номер PR`,
+            };
+          }
+          return { status: "unknown", why: `GitHub вернул неожиданный ответ репозитория ${ref.repo} при анонимной проверке PR #${ref.number}` };
+        } catch (repoError) {
+          const repoRaw = String((repoError && repoError.message) || repoError);
+          const repoCode = Number((repoError && repoError.status) || (repoRaw.match(/HTTP (\d{3})/) || [])[1] || 0);
+          if (repoCode === 404) {
+            return {
+              status: "unknown",
+              needsToken: true,
+              why: `Анонимный GitHub API вернул 404 и на PR #${ref.number}, и на репозиторий ${ref.repo}; доступ/ответ API не подтверждён (проверьте видимость и запрос)`,
+            };
+          }
+          return {
+            status: "unknown",
+            why: `Анонимный запрос PR #${ref.number} вернул HTTP 404, а запрос repo — ${repoCode ? `HTTP ${repoCode}` : repoRaw}`,
+            code: repoCode,
+          };
+        }
+      }
       if (code === 401 || code === 403)
         return {
           status: "unknown",
