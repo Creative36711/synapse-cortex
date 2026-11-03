@@ -373,10 +373,15 @@
     }
     const targetBranch = profileRepoBranch(targetRepo);
     if (fresh.properties?.Check?.select?.name === "fail" && !reworkSeen(fresh.id)) {
-      const reason = `«${taskTitle(fresh)}» имеет Check=fail, но явный переход через Rework не зафиксирован. ` +
-        "Следы ответа и Run ID сохранены; автоматическую перевыдачу остановил. Сначала разберите отчёт и подтвердите Rework.";
-      pause(reason, { kind: "check-fail-redispatch", ref: fresh.id });
-      return reason;
+      // Не ставим общую паузу на первой попытке: coordinatorStep вернёт
+      // Coordinator точную техническую причину и переспросит план. Это не
+      // разрешает выдачу — карточка и следы остаются нетронуты. Три одинаковых
+      // отказа подряд уже ограничены cfn-dispatch-miss и приведут к паузе.
+      return `«${taskTitle(fresh)}» имеет Check=fail, но ScriptCat не зафиксировал состояние Rework. ` +
+        "Не выдавал карточку и не менял её поля: Submitted At, PR и Run ID сохранены. " +
+        "Сначала оставь карточку в Rework, чтобы транспорт успел увидеть явный возврат; " +
+        "после разбора результата и решения Warden можно отдельным следующим шагом вернуть её в Ready. " +
+        "Не ставь Rework и Ready одним ответом: Check=fail не означает pass и не подтверждает, что предыдущий результат разобран.";
     }
     let prLink = fresh.properties["PR"]?.url || "";
     let submittedAt = fresh.properties["Submitted At"]?.date?.start || "";

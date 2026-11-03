@@ -80,12 +80,13 @@ const draftLine = new Function(
   (x) => String(x || '').replace(/-/g, '').toLowerCase(),
 );
 
-const card = (title, who, seq) => ({
+const card = (title, who, seq, check = '') => ({
   id: title,
   properties: {
     'Запрос': { title: [{ text: { content: title } }] },
     'Кому': { select: who ? { name: who } : null },
     'Sequence': { number: seq },
+    'Check': { select: check ? { name: check } : null },
   },
 });
 
@@ -170,6 +171,7 @@ assert.match(
   'у готовой карточки видно, кому её выдавать',
 );
 assert.match(readyLine([card('Без роли', '', 10)]), /роль не задана/, 'пустая роль названа');
+assert.match(readyLine([card('K-6', 'Executor Core', 60, 'fail')]), /Check=fail: результат не принят, сначала нужен Rework\/разбор Warden/, 'Coordinator явно видит fail и нужное состояние');
 {
   const many = readyLine([
     card('A · один', 'Kernel', 10),

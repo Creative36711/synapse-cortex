@@ -19,7 +19,7 @@ const from = src.indexOf('  async function dispatchTask(');
 const to = src.indexOf('  // ───────────────────────────── цикл', from);
 assert.ok(from > 0 && to > from, 'dispatchTask на месте');
 
-function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) {
+function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFail = false, reworkObserved = true } = {}) {
   const calls = [];
   const store = {};
   const card = {
@@ -30,8 +30,10 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
       'Кому': { select: { name: 'Kernel' } },
       'Payload Drive File ID': { rich_text: payloadId ? [{ plain_text: payloadId }] : [] },
       'Dispatch State': { select: { name: 'Ready' } },
-      'PR': { url: null },
-      'Submitted At': { date: null },
+      'Check': { select: checkFail ? { name: 'fail' } : null },
+      'PR': { url: checkFail ? 'https://github.com/example/relay-fixture/pull/1' : null },
+      'Submitted At': { date: checkFail ? { start: '2026-11-03T10:00:00Z' } : null },
+      'Run ID': { rich_text: checkFail ? [{ plain_text: 'previous-run' }] : [] },
     },
   };
 
@@ -74,7 +76,7 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
     (page) => page?.properties?.['Dispatch State']?.select?.name || '',
     (page) => page?.properties?.['Кому']?.select?.name || '',
     (page, fallback) => page?.properties?.Repository?.rich_text?.[0]?.plain_text || fallback,
-    () => true,
+    () => reworkObserved,
     { repo: 'example/relay-fixture', branch: 'main' },
     { legacy: true, repo: 'example/relay-fixture', branch: 'main' },
     (key, fallback) => store[key] ?? fallback,
@@ -151,7 +153,19 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
   assert.ok(!h.calls.some((c) => c.action === 'send'), 'исполнителю пустышка не уходит');
 }
 
-// ── 4. Порядок: файл читается до выдачи, запись в журнал — до отправки ────
+// ── 4. Check=fail без наблюдённого Rework возвращается Coordinator, не паузит и не чистит следы ──
+{
+  const h = makeHarness({ checkFail: true, reworkObserved: false });
+  const reason = await h.dispatchTask(h.card, 'Kernel');
+  assert.match(reason, /Check=fail/);
+  assert.match(reason, /оставь карточку в Rework/);
+  assert.equal(h.calls.filter((c) => c.action === 'pause').length, 0, 'первый отказ не останавливает цикл');
+  assert.equal(h.calls.filter((c) => c.action === 'send').length, 0, 'исполнителю повторная выдача не уходит');
+  assert.equal(h.calls.filter((c) => c.action === 'patch').length, 0, 'следы ответа и статус не меняются');
+  assert.equal(h.card.properties['Run ID'].rich_text[0].plain_text, 'previous-run', 'Run ID сохранён');
+}
+
+// ── 5. Порядок: файл читается до выдачи, запись в журнал — до отправки ────
 assert.match(
   src.slice(from, to),
   /gateway\("read", payloadId\)[\s\S]*?gateway\("append", logId[\s\S]*?sendToRole\(role, executorPrompt/,
