@@ -2145,10 +2145,10 @@
         </div>
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin:8px 0">
           <button id="cfn-project-export-config" type="button" style="${action}">Экспортировать конфигурацию</button>
-          <button id="cfn-project-import-config" type="button" style="${action}">Импортировать конфигурацию</button>
+          <button id="cfn-project-import-config" type="button" style="${action}">Импортировать проект из файла</button>
           <input id="cfn-project-import-file" type="file" accept="application/json,.json" style="display:none">
         </div>
-        <div style="color:#aab4c3;font-size:12px;margin-bottom:8px">Переносит только настройки проекта — без ключей, очереди и состояния автоцикла. На новом компьютере сохраните подключения заново и повторно разрешите проект.</div>
+        <div style="color:#aab4c3;font-size:12px;margin-bottom:8px">Импорт сам создаёт профиль — заранее создавать пустой проект не нужно. Переносятся настройки, но не ключи, очередь и состояние автоцикла; подключения сохраните заново и повторно разрешите проект.</div>
         <div id="cfn-project-info" style="color:#aab4c3;white-space:pre-wrap"></div>
         <button id="cfn-project-enable" style="${action};margin-top:8px;background:#285638">Проверить подключения и разрешить работу</button>
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px">

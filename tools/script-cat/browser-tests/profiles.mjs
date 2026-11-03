@@ -225,6 +225,16 @@ await page.locator('#cfn-project-list').selectOption('unconfigured'); await page
 await page.waitForFunction(() => sessionStorage.getItem('cfn-active-project-v1') === 'unconfigured');
 await page.waitForFunction(() => document.querySelector('#cfn-panel-project')?.textContent === 'Проект не настроен');
 assert.equal(await page.evaluate(() => sessionStorage.getItem('cfn-project-switch-hold:unconfigured')),'1');
+// An import into an empty registry creates the project directly; no blank profile first.
+await page.locator('#cfn-project-close').click();
+await page.evaluate(() => localStorage.setItem('gm:cfn-project-profiles-v1', JSON.stringify([])));
+await page.locator('#cfn-setup').click(); await page.locator('#cfn-connection-projects').click();
+await page.locator('#cfn-project-import-file').setInputFiles({
+  name: 'direct-import.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(exportedConfig)),
+});
+await page.waitForFunction(() => document.querySelector('#cfn-project-note')?.textContent.includes('Импортирован проект'));
+assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gm:cfn-project-profiles-v1')).length),1, 'импорт сам создал профиль в пустом реестре');
+assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gm:cfn-project-profiles-v1'))[0].id),project.id);
 assert.deepEqual(errors,[]); assert.deepEqual(external,[]);
 console.log('OK: Chromium — создание профиля, проверка схемы и ролей, отдельные секреты, switch/hold, запрет переключения на авто; сеть не использована');
 await browser.close();
