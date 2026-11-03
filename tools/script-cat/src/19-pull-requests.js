@@ -513,8 +513,16 @@
       } catch { return "Некорректная ссылка PR."; }
     }
     const ref = prRef(result, repo);
-    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase())
-      return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
+    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase()) {
+      // Full URL explicitly names the task repo. Accept it only when that repo
+      // is registered in this profile; this check runs before GitHub merge
+      // verification too, so it must use the same multi-repo resolution there.
+      const configured = typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy &&
+        (Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : []).some(
+          (entry) => entry && String(entry.repo || "").toLowerCase() === ref.repo.toLowerCase(),
+        );
+      if (!configured) return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
+    }
     return "";
   }
 

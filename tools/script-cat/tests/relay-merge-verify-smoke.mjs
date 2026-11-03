@@ -51,6 +51,35 @@ assert.equal(prRef({ pr: null }), null, 'без PR — нечего провер
 assert.equal(prRef({ pr: 'none' }), null, '«none» — тоже');
 assert.equal(prRef(null), null, 'без ответа — тоже');
 
+// ensureMerged calls this fast boundary guard before verifyMergeClaim. It must
+// resolve the same configured cross-repository URL, or it masks the later fix.
+{
+  const boundaryFrom = src.indexOf('  function projectPrBoundary(result, targetRepo = null) {');
+  const boundaryTo = src.indexOf('  /** Заголовки GitHub API.', boundaryFrom);
+  assert.ok(boundaryFrom > 0 && boundaryTo > boundaryFrom, 'projectPrBoundary на месте');
+  const boundary = new Function(
+    'C', 'ACTIVE_PROFILE', 'hasMergedClaim',
+    `${src.slice(refFrom, refTo)}\n${src.slice(boundaryFrom, boundaryTo)}\nreturn { projectPrBoundary };`,
+  )(
+    { repo: 'Creative36711/synapse-cortex' },
+    { legacy: false, repos: [
+      { repo: 'Creative36711/synapse-cortex', branch: 'main' },
+      { repo: 'Creative36711/synapse', branch: 'main' },
+    ] },
+    (result) => result?.merged === true,
+  ).projectPrBoundary;
+  assert.equal(
+    boundary({ pr: 'https://github.com/Creative36711/synapse/pull/5' }, 'Creative36711/synapse-cortex'),
+    '',
+    'configured synapse PR is not stopped by the early boundary check',
+  );
+  assert.match(
+    boundary({ pr: 'https://github.com/unknown/repo/pull/5' }, 'Creative36711/synapse-cortex'),
+    /PR относится к unknown\/repo/,
+    'unconfigured repo remains a boundary',
+  );
+}
+
 // ── 3. Состояние PR по GitHub ──────────────────────────────────────────────
 const verifyFrom = src.indexOf('  async function verifyMergeClaim(result, token = "",');
 // Границей служит следующая функция, а не её докблок: слова «вернуть карточку»

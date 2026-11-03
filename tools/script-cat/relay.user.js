@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.3
+// @version      1.8.4
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -507,7 +507,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.3";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.4";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7766,8 +7766,16 @@
       } catch { return "Некорректная ссылка PR."; }
     }
     const ref = prRef(result, repo);
-    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase())
-      return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
+    if (ref && ref.repo.toLowerCase() !== repo.toLowerCase()) {
+      // Full URL explicitly names the task repo. Accept it only when that repo
+      // is registered in this profile; this check runs before GitHub merge
+      // verification too, so it must use the same multi-repo resolution there.
+      const configured = typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy &&
+        (Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : []).some(
+          (entry) => entry && String(entry.repo || "").toLowerCase() === ref.repo.toLowerCase(),
+        );
+      if (!configured) return `PR относится к ${ref.repo}, а цель выдачи работает с ${repo}.`;
+    }
     return "";
   }
 
@@ -12162,7 +12170,11 @@
     // и его базовая ветка. Техблок, команды gh и проверка PR берутся из этого
     // контекста, а не из глобального C.repo/C.branch, чтобы один профиль
     // обслуживал несколько репозиториев без смены UUID.
-    const sessionRepo = profileSessionRepo(role.id);
+    // The freshly re-read Notion role row is the live assignment source. The
+    // profile map is a compatibility fallback for older role rows without a
+    // repository field; it must not route Executor Core into the profile's
+    // default cortex repo when Notion explicitly assigns it to synapse.
+    const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
     const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и

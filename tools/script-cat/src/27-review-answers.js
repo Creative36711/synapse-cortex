@@ -344,7 +344,11 @@
     // и его базовая ветка. Техблок, команды gh и проверка PR берутся из этого
     // контекста, а не из глобального C.repo/C.branch, чтобы один профиль
     // обслуживал несколько репозиториев без смены UUID.
-    const sessionRepo = profileSessionRepo(role.id);
+    // The freshly re-read Notion role row is the live assignment source. The
+    // profile map is a compatibility fallback for older role rows without a
+    // repository field; it must not route Executor Core into the profile's
+    // default cortex repo when Notion explicitly assigns it to synapse.
+    const sessionRepo = String(confirmed[0].repo || profileSessionRepo(role.id) || "");
     const targetBranch = sessionRepo ? profileRepoBranch(sessionRepo) : (C.branch || "main");
 
     // Карточка перечитывается прямо перед выдачей: между выбором из списка и

@@ -21,7 +21,7 @@ const norm = (x) => String(x || '').replace(/-/g, '').toLowerCase();
 const K = { pending: 'pending', expect: 'expect', lastSend: 'lastSend', deadSend: 'deadSend', stateV: 'stateV', paused: 'paused', pause: 'pause', errSeen: 'errSeen' };
 const warden = { name: 'Warden', fn: 'Reviewer', id: 'rev-1', url: '/agent/rev-1', status: 'Активна' };
 const reviewer = { name: 'Независимый приёмщик', fn: 'Reviewer', id: 'rev-2', url: '/agent/rev-2', status: 'Активна' };
-const kernel = { name: 'Kernel', fn: 'Executor', id: 'exec-1', url: '/agent/exec-1', status: 'Активна' };
+const kernel = { name: 'Kernel', fn: 'Executor', id: 'exec-1', url: '/agent/exec-1', status: 'Активна', repo: 'Creative36711/synapse' };
 const auditor = { name: 'Runtime Auditor', fn: 'Auditor', id: 'audit-1', url: '/agent/audit-1', status: 'Активна' };
 const coordinator = { name: 'Coordinator', fn: 'Coordinator', id: 'coord-1', url: '/agent/coord-1', status: 'Активна' };
 const all = [coordinator, warden, reviewer, kernel, auditor];
@@ -175,6 +175,7 @@ for (const role of [kernel, auditor]) {
   assert.equal(h.calls.patches[0].props['Output Drive File ID'].rich_text[0].text.content, 'NEW-LOG');
   assert.equal(h.storage.get(K.pending).roleId, role.id);
   assert.equal(h.storage.get(K.expect).kind, 'dispatch');
+  if (role === kernel) assert.equal(h.storage.get(K.expect).targetRepo, 'Creative36711/synapse', 'live Notion role repo overrides stale default profile route');
   assert.match(h.storage.get(K.pending).text, /свежий payload/);
 }
 {
