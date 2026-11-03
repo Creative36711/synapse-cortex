@@ -153,9 +153,25 @@
   /** Ход приёмки по вопросу: записать ответ или позвать Мастера. */
   async function answerStep(role, expect, manual = false) {
     const replies = messagesAfter(expect.watermark);
-    const decision = replies.map((m) => parseMarker(m.raw, "CF_ANSWER_RESULT"))
+    let decision = replies.map((m) => parseMarker(m.raw, "CF_ANSWER_RESULT"))
       .filter(Boolean)
       .at(-1);
+    // A `master` verdict pauses the cycle, but the Master may then answer in
+    // the same Warden conversation. Also accept an answer they entered directly
+    // in Notion before pressing Continue. Both paths remain bound to this exact
+    // question/turn and never overwrite a completed row.
+    if (!decision && expect.masterEscalated) {
+      try {
+        const row = await notion("GET", `pages/${expect.ref}`);
+        const state = row?.properties?.["Статус"]?.select?.name || "";
+        const savedAnswer = rt(row?.properties?.["Ответ"] || "").trim();
+        if (state === Q.done && savedAnswer) {
+          decision = { question_id: expect.ref, turn_id: expect.turnId, verdict: "answer", answer: savedAnswer };
+        }
+      } catch (e) {
+        logThrottled(`master-answer-read:${expect.ref}`, `Не удалось проверить ручной ответ Мастера: ${e.message}. Ожидание сохранено.`, true);
+      }
+    }
     if (!decision) return markerMissing(role, expect, "CF_ANSWER_RESULT", manual);
     // Одного нового сообщения в чате недостаточно: оно может относиться к
     // предыдущему вопросу или повторной попытке того же вопроса. Не очищаем
@@ -181,11 +197,22 @@
     const answer = String(decision.answer || "").trim();
     if (verdict === "master") {
       const reason = firstLine(String(decision.reason || answer || "").trim()) || "приёмка не назвала причину";
-      GM_setValue(K.expect, null);
-      dropAnswer(expect.ref);
+      // Keep the exact answer expectation alive across the Master pause. A later
+      // Warden answer marker (or a manual Notion resolution) can then be safely
+      // matched to this question and turn instead of letting the cycle jump to
+      // Coordinator and strand the response.
+      GM_setValue(K.expect, {
+        ...expect,
+        watermark: replies.at(-1)?.id || expect.watermark,
+        masterEscalated: true,
+        tries: 0,
+        lastReplySig: "",
+        lastReplyAt: 0,
+      });
       pause(
         `Приёмка не может ответить на вопрос без Мастера: ${reason}. Вопрос остался в базе «Обратная связь» со статусом ` +
-          "«Ждёт» — ответьте в поле «Ответ», поставьте «Решено» и нажмите «Продолжить».",
+          "«Ждёт». После ответа Мастера продолжите здесь: приму маркер Warden только для этого question_id/turn_id; " +
+          "если ответ внесён вручную в Notion, поставьте «Решено» и нажмите «Продолжить».",
         { kind: "answer-needs-master", ref: expect.ref, notifyTitle: "Relay: вопрос ждёт Мастера" },
       );
       return true;
