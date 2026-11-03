@@ -385,8 +385,20 @@
     }
 
     if (merged === "boundary") {
-      pause(`Не удалось подтвердить PR этого проекта и базовой ветки: ${(lastMergeCheck && lastMergeCheck.why) || "сверьте репозиторий"}. ` +
-        "Карточка не изменена, ожидание сохранено; проверьте ссылку и нажмите «Продолжить».",
+      const why = (lastMergeCheck && lastMergeCheck.why) || "сверьте репозиторий";
+      const targetRepo = expect.targetRepo || C.repo;
+      const blocked = {
+        "Dispatch State": { select: { name: "Blocked" } },
+        "Check": { select: typeof result.check === "number" ? { name: result.check === 0 ? "pass" : "fail" } : null },
+        "Ответ": { rich_text: richText(`Ответ сохранён в журнал ${logId}; GitHub PR не подтверждён: ${why}. Повторную выдачу не выполнять без решения Warden.`) },
+      };
+      const link = prUrl(result.pr, targetRepo);
+      if (link) blocked.PR = { url: link };
+      if (result.report) blocked["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
+      await patch(result.dispatch_id, blocked);
+      GM_setValue(`cfn-done:${result.dispatch_id}:${result.run_id}`, true);
+      if (currentDispatch(expect)) GM_setValue(K.expect, null);
+      pause(`PR этой выдачи не подтверждён: ${why}. Карточка → Blocked; ответ, Run ID и ссылка сохранены; не перевыдаю.`,
         { kind: "project-pr-boundary", ref: result.dispatch_id, runId: result.run_id });
       return true;
     }
@@ -469,7 +481,9 @@
       "Ответ": { rich_text: richText(`${review?.verdict ? `Вердикт Reviewer по карточке: ${review.verdict}. ` : ""}Ответ ${hit.id} записан в лог ${logId}.`) },
       "Submitted At": { date: { start: nowIso() } },
     };
-    if (typeof result.check === "number") props["Check"] = { select: { name: result.check === 0 ? "pass" : "fail" } };
+    props["Check"] = {
+      select: typeof result.check === "number" ? { name: result.check === 0 ? "pass" : "fail" } : null,
+    };
     if (result.report) props["Report SHA"] = { rich_text: [{ type: "text", text: { content: String(result.report).slice(0, 200) } }] };
     const targetRepo = expect && expect.targetRepo ? expect.targetRepo : C.repo;
     const link = prUrl(result.pr, targetRepo);

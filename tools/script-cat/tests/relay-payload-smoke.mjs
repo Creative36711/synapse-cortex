@@ -38,7 +38,7 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
   const dispatchTask = new Function(
     'roles', 'roleRows', 'norm', 'rt', 'gateway', 'patch', 'taskLogEntry', 'executorPrompt',
     'log', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
-    'notion', 'taskState', 'taskRole', 'GM_getValue', 'GM_setValue', 'pause', 'K',
+    'notion', 'taskState', 'taskRole', 'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue', 'pause', 'K',
     'profileSessionRepo', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
     'answerStampKey', 'reworkKey', 'taskPreflight',
@@ -73,6 +73,10 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false } = {}) 
     async () => card,
     (page) => page?.properties?.['Dispatch State']?.select?.name || '',
     (page) => page?.properties?.['Кому']?.select?.name || '',
+    (page, fallback) => page?.properties?.Repository?.rich_text?.[0]?.plain_text || fallback,
+    () => true,
+    { repo: 'example/relay-fixture', branch: 'main' },
+    { legacy: true, repo: 'example/relay-fixture', branch: 'main' },
     (key, fallback) => store[key] ?? fallback,
     (key, value) => {
       store[key] = value;

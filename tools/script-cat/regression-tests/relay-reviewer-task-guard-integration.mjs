@@ -72,7 +72,7 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
       if (directoryError) throw new Error(directoryError);
       return clone(directory);
     },
-    norm, rt, K,
+    norm, rt, K, C: { repo: 'example/relay-fixture', branch: 'main' }, ACTIVE_PROFILE: { legacy: false, repo: 'example/relay-fixture', branch: 'main', repos: [{ repo: 'Creative36711/synapse', branch: 'main' }, { repo: 'example/relay-fixture', branch: 'main' }] },
     GM_getValue: (key, fallback) => storage.has(key) ? storage.get(key) : fallback,
     GM_setValue: (key, value) => storage.set(key, clone(value)),
     notion: async (method, path) => { calls.reads.push({ method, path }); return clone(freshCard); },
@@ -86,6 +86,8 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
     taskTitle: (p) => rt(p.properties['Запрос']),
     taskState: (p) => p.properties['Dispatch State']?.select?.name || '',
     taskRole: (p) => p.properties['Кому']?.select?.name || '',
+    taskTargetRepository: (p, fallback) => p.properties?.Repository?.rich_text?.[0]?.plain_text || fallback,
+    reworkSeen: () => true,
     profileSessionRepo: () => 'example/relay-fixture',
     profileRepoBranch: () => 'main',
     redispatchClearProps: (p) => p.properties['Submitted At']?.date?.start ? { 'Submitted At': { date: null } } : null,
@@ -102,8 +104,8 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
     location: { href: 'https://arena.ai/agent/coord-1', pathname: '/agent/coord-1', assign: (url) => calls.navigations.push(url) },
   };
   const make = new Function('env', `
-    const {roles, roleRows, norm, rt, K, GM_getValue, GM_setValue, notion, patch, gateway,
-      taskTitle, taskState, taskRole, profileSessionRepo, profileRepoBranch,
+    const {roles, roleRows, norm, rt, K, C, ACTIVE_PROFILE, GM_getValue, GM_setValue, notion, patch, gateway,
+      taskTitle, taskState, taskRole, taskTargetRepository, reworkSeen, profileSessionRepo, profileRepoBranch,
       redispatchClearProps, redispatchWhy, noteRedispatch, REDISPATCH_LIMIT,
       answerStampKey, reworkKey, pause, log, uid, nowIso, taskLogEntry, executorPrompt,
       releaseUndelivered, taskPreflight, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location} = env;

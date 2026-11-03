@@ -93,7 +93,8 @@ assert.equal(
   false,
   'памяти о Rework нет — ровно как было на NAR-4.9',
 );
-assert.deepEqual(api.redispatchClearProps(card()), CLEAR, 'следы снимаются и без памяти о Rework');
+assert.deepEqual(api.redispatchClearProps(card()), CLEAR, 'обычный Rework→Ready снимает следы');
+assert.equal(api.redispatchClearProps(card({ check: 'fail' })), null, 'Check=fail без наблюдённого Rework не очищается автоматически');
 
 // ── 2. Не Ready — не наше дело ─────────────────────────────────────────────
 for (const state of ['Submitted', 'Running', 'Rework', 'Accepted', 'Draft', 'Blocked']) {
@@ -139,6 +140,7 @@ assert.deepEqual(
   assert.equal(api.editedSinceAnswer(card({ id: 'why-4', edited: '2026-10-27T16:52:00.000Z' })), false, 'нет отметки — нет вывода');
 
   api.rememberRework([{ id: 'why-5' }]);
+  assert.deepEqual(api.redispatchClearProps(card({ id: 'why-5', check: 'fail' })), CLEAR, 'явный Rework разрешает контролируемый повтор');
   assert.match(api.redispatchWhy(card({ id: 'why-5' })), /видели в Rework/, 'память о Rework — первая причина');
   assert.equal(api.reworkSeen('why-6'), false, 'чужая память не переходит на другую карточку');
 }
@@ -168,6 +170,8 @@ assert.deepEqual(
 
 // ── 8. dispatchTask: чистка до проверки, причина вместо молчания ───────────
 const dispatch = sliceBetween('  async function dispatchTask(', '\n  async function ');
+assert.match(dispatch, /Check\?\.select\?\.name === \"fail\" && !reworkSeen\(fresh\.id\)/, 'Check=fail без явного Rework блокирует повтор');
+assert.ok(dispatch.indexOf('Check?.select?.name === \"fail\"') < dispatch.indexOf('redispatchClearProps(fresh)'), 'проверка fail блокирует повтор до очистки следов');
 assert.match(dispatch, /const clearing = redispatchClearProps\(fresh\);/, 'выдача спрашивает разрешение на чистку');
 assert.match(dispatch, /await patch\(fresh\.id, clearing\);/, 'и снимает следы одной записью');
 assert.match(dispatch, /GM_setValue\(answerStampKey\(fresh\.id\), ""\)/, 'отметка ответа тоже снимается');

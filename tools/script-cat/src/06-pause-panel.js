@@ -212,6 +212,9 @@
     const props = card && card.properties;
     if (!props) return null;
     if (props["Dispatch State"]?.select?.name !== "Ready") return null;
+    // A failed check is not, by itself, authorization to erase the prior Run.
+    // Only an observed Rework→Ready transition permits the clean redispatch path.
+    if (props["Check"]?.select?.name === "fail" && !reworkSeen(card.id)) return null;
     if (!answeredCard(card)) return null;
     return {
       "Submitted At": { date: null },

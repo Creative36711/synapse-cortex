@@ -61,7 +61,7 @@ const linkError = new Function(`${linkErrorBlock}; return linkError;`)();
 // отправлять Мастера искать блокировку было нечестно. В `gmRequest` (пуши
 // ntfy) эта причина остаётся законной — там @connect и правда решает.
 assert.match(src, /@connect\s+api\.notion\.com/, 'хост Notion в заголовке разрешён');
-const requestOnceBlock = sliceBetween('  function requestOnce(method, url, headers, body, timeout = 45000) {', '  /**');
+const requestOnceBlock = sliceBetween('  function requestOnce(method, url, headers, body, timeout = 45000, opts = {}) {', '  /**');
 assert.ok(
   !/@connect/.test(requestOnceBlock),
   'в запросах к Notion фразы про @connect больше нет: она отправляла искать блокировку, которой нет',
