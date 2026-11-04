@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
 
 import { assertUserscriptVersionContract } from '../version-oracle.mjs';
+import { promptShim } from './helpers/prompt-shim.mjs';
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 
 // 1. Версия и гейт тика.
@@ -315,7 +316,7 @@ const load = ({ pending, editor, send, panels = [], stop = false, now = 1_000_00
     "appReady", "roleRows",
     // 1.4.78: проверка Continue перед отправкой.
     "waitFor", "patience", "mergedFlag",
-    `${sendBlock}\n${contBlock}\nreturn { consumePending, closeCompletionPlaque, ensureComposer };`,
+    `${promptShim}\n${sendBlock}\n${contBlock}\nreturn { consumePending, closeCompletionPlaque, ensureComposer };`,
   );
   const api = fn(
     (k, d) => (k === "cfn-pending" ? pending : k === "cfn-expect" ? expect : d),

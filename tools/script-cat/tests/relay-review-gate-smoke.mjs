@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
 
 import { assertUserscriptVersionContract } from '../version-oracle.mjs';
+import { promptShim } from './helpers/prompt-shim.mjs';
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 const versionMatch = assertUserscriptVersionContract(src);
 
@@ -46,7 +47,11 @@ assert.match(
   /const reviewerRole = async \(\) => \(await roles\(\)\)\.find\(\(r\) => r\.fn === "Reviewer"\) \|\| null;/,
   'приёмка ищется по функции Reviewer, а не по имени роли',
 );
-assert.match(src, /Reviewer: REVIEWER_TECH,/, 'у приёмки свой техблок');
+{
+  const { PromptCompiler, reviewRequest } = await import('./helpers/prompt-env.mjs');
+  const r = PromptCompiler.compile(reviewRequest());
+  assert.ok(r.profileId === 'reviewer.mission' && r.ruleIds.includes('R-VERIFY-GITHUB'), 'у приёмки свой профиль и правила');
+}
 assert.match(src, /if \(role\.fn === "Reviewer"\) \{/, 'у приёмки своё правило поведения');
 
 // ── 2. Ветка done: передача на приёмку вместо закрытия ─────────────────────
@@ -63,11 +68,11 @@ assert.match(
   'ход приёмки подключён к тику',
 );
 assert.match(src, /parseMarker\(m\.raw, "CF_REVIEW_RESULT"\)/, 'маркер приёмки читается общим разбором');
-assert.match(
-  src,
-  /if \(expect\.kind === "review"\) \{\s*\n\s*line = `CF_REVIEW_RESULT/,
-  'напоминание о формате говорит на языке приёмки',
-);
+{
+  const { PromptCompiler, reminderRequest } = await import('./helpers/prompt-env.mjs');
+  const rem = PromptCompiler.compile(reminderRequest('Reviewer', 'CF_REVIEW_RESULT')).text;
+  assert.match(rem, /CF_REVIEW_RESULT/, 'напоминание о формате говорит на языке приёмки');
+}
 
 // ── 3. Сам блок приёмки ────────────────────────────────────────────────────
 const block = sliceBetween('  const reviewerRole = async () =>', '  async function dispatchTask(');
@@ -105,7 +110,8 @@ const api = new Function(
   'messagesAfter',
   'parseMarker',
   'markerMissing', 'isUuid', 'retainRejectedResult',
-  `${block}
+  `${promptShim}
+${block}
    return { reviewerRole, missionRound, reviewCards, reviewPrompt, startReview, closeMission, returnMission, reviewStep };`,
 )(
   { reworkLimit: 3, pageUrl: 'https://app.notion.com/p/Relay', markerReminders: 2 },
@@ -210,21 +216,20 @@ const reset = () => {
 {
   const m = mission({ round: 1 });
   api.__accepted = [card('5.1', 'Architect', { answer: 'ADR принят', pr: 'https://github.com/x/y/pull/1' }), card('5.2', 'Tools')];
-  const text = api.reviewPrompt(m, reviewer, 'turn-9', 1, { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework, 2 Draft' }, api.__accepted);
+  const text = api.reviewPrompt(m, reviewer, 'turn-9', 1, { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework, 2 Draft' }, api.__accepted).text;
   assert.match(text, /Миссия: NAR-5 · Контракты/, 'миссия в промпте');
-  assert.match(text, /ТЗ и оракул: https:\/\/github\.com\/example\/relay-fixture\/blob\/main\/docs\/agents\/tz-nar-5\.md/, 'оракул назван ссылкой');
-  assert.match(text, /Круг: 1 \(доработок было 1, предел 3\)/, 'круг и предел видны');
+  assert.match(text, /ТЗ: https:\/\/github\.com\/example\/relay-fixture\/blob\/main\/docs\/agents\/tz-nar-5\.md/, 'оракул назван ссылкой');
+  assert.match(text, /Круг: 1 \(предел доработок 3\)/, 'круг и предел видны');
   assert.match(text, /0 Submitted, 0 Running, 0 Ready, 0 Rework, 2 Draft/, 'очередь видна');
   assert.match(text, /5\.1 · Architect · https:\/\/github\.com\/x\/y\/pull\/1 · ответ: ADR принят/, 'принятая карточка с ответом и PR');
-  assert.match(text, /ИТОГ МИССИИ \(как его записал Координатор\):\nСделано 12 карточек/, '«Итог» в промпте');
+  assert.match(text, /ИТОГ МИССИИ:\nСделано 12 карточек/, '«Итог» в промпте');
   assert.match(text, /CF_REVIEW_RESULT \{"mission_id":"mission-1","turn_id":"turn-9","verdict":"accept"/, 'маркер accept');
   assert.match(text, /"verdict":"rework","remarks"/, 'маркер rework');
-  assert.match(text, /Предел доработок: 3/, 'предел назван в промпте приёмки');
-  assert.match(text, /Ты — приёмка миссии, а не исполнитель/, 'роль приёмки названа');
-  assert.match(text, /Ты — Warden/, 'контекст роли на месте');
+  assert.match(text, /Предел доработок 3/, 'предел назван в промпте приёмки');
+  assert.match(text, /приёмка \(Reviewer\)/, 'роль приёмки названа');
 
-  const empty = api.reviewPrompt(mission({ result: '' }), reviewer, 't', 0, { summary: '—' }, []);
-  assert.match(empty, /«Итог» пусто — это уже повод не принимать/, 'пустой «Итог» назван поводом');
+  const empty = api.reviewPrompt(mission({ result: '' }), reviewer, 't', 0, { summary: '—' }, []).text;
+  assert.match(empty, /«Итог» пусто — повод не принимать/, 'пустой «Итог» назван поводом');
   assert.match(empty, /Принятых карточек нет/, 'пустая приёмка не выглядит как работа');
 }
 

@@ -194,15 +194,16 @@ for (const stalePage of [page({ state: 'Ready', runId: 'r-1' }), page({ state: '
   assert.doesNotMatch(submit, /gateway\("append",\s*declaredLog/, 'в поле напрямую не пишем');
 }
 
-// 7. Правило для агентов: поля карточки ставит скрипт.
+// 7. Правило для агентов: поля карточки ставит скрипт (декларативный блок).
 {
-  const rule = src.slice(src.indexOf('const CARD_FIELDS_RULE'), src.indexOf('const EXECUTOR_TECH'));
+  const { PROMPT_BLOCKS, PromptCompiler, dispatchRequest } = await import('./helpers/prompt-env.mjs');
+  const rule = PROMPT_BLOCKS['card.fields'].render({});
   assert.match(rule, /Output Drive File ID/, 'поле названо');
   assert.match(rule, /report/, 'сказано, куда девать отчёт');
-  const executor = src.slice(src.indexOf('const executorTech'), src.indexOf('const auditorTech'));
-  const auditor = src.slice(src.indexOf('const auditorTech'), src.indexOf('const COORDINATOR_TECH'));
-  assert.match(executor, /CARD_FIELDS_RULE/, 'исполнителю сказано');
-  assert.match(auditor, /CARD_FIELDS_RULE/, 'аудитору сказано');
+  for (const fn of ['Executor', 'Auditor']) {
+    const r = PromptCompiler.compile(dispatchRequest(fn));
+    assert.ok(r.ruleIds.includes('R-CARD-FIELDS'), `${fn}: правило полей карточки в промпте`);
+  }
 }
 
 console.log(`OK: relay ${version} — журнал выдачи восстанавливается без перезаписи чужого Run ID`);

@@ -101,23 +101,16 @@ assert.equal(api.reworkLine(null), '', 'null тоже пустой');
   assert.match(readyBlock, /убери карточку из Ready/, 'а если повторять не надо — её убирают');
 }
 
-// ── 6. Промпт: Rework возвращается, Accepted — нет ─────────────────────────
-assert.match(src, /Rework — не выдача и не приговор: разбираешь его ты, а не Мастер/, 'правило Rework в промпте');
-assert.match(src, /\(б\) Карточка была сформулирована с ошибкой — перепиши её Намерение, Инварианты, Acceptance и Scope/, 'ошибочную карточку правит Координатор');
-assert.match(src, /Acceptance карточки — не оракул миссии/, 'карточка и оракул миссии разведены');
-assert.match(
-  src,
-  /Нужна переделка — верни её в Ready и направь ход роли из карточки; следы прошлого ответа \(«Submitted At», «PR», «Run ID»\) снимет транспорт при разрешённой повторной выдаче/,
-  'путь назад в промпте: Ready ставит Координатор, следы снимает транспорт после разрешения',
-);
-assert.match(src, /Особое правило для Check=fail: НЕ ставь Rework и Ready одним ответом/, 'Check=fail требует отдельного, наблюдаемого Rework');
-assert.doesNotMatch(src, /чисти «Submitted At», «PR», «Run ID», иначе выдача откажет/, 'прежняя просьба чистить коннектором убрана');
-assert.match(src, /Принятую \(Accepted\) обратно в Ready не возвращай/, 'запрет остался только для принятых');
-assert.doesNotMatch(src, /по которой уже есть ответ \(Submitted или Accepted\)/, 'старая двусмысленная строка убрана');
+// ── 6. Промпт: Rework возвращается, Check=fail — отдельный шаг ─────────────
+const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+const coord = PromptCompiler.compile(planRequest({ queue: { summary: 's', rework: api.reworkLine([card({ answer: 'причина' })]) } })).text;
+assert.match(coord, /Rework: переделка — в Ready отдельным шагом/, 'путь назад назван');
+assert.match(coord, /Check=fail НЕ ставь Rework\+Ready одним ответом/, 'Check=fail требует отдельного Rework (#37)');
+assert.match(coord, /Accepted\/Rework\/Ready — ты/, 'Ready — право Координатора');
+assert.doesNotMatch(coord, /чисти «Submitted At», «PR», «Run ID», иначе выдача откажет/, 'прежняя просьба чистить коннектором убрана');
 
 // ── 7. Строка Rework доходит до Координатора ───────────────────────────────
 assert.match(src, /reworkLine\(queue\.rework\)/, 'reworkLine вызывается при запросе плана');
-assert.match(src, /function coordinatorPrompt\([\s\S]*?ready = "",\n\s*rework = "",/, 'промпт принимает строку Rework');
-assert.match(src, /^\s+ready,\n\s+rework,/m, 'и ставит её сразу после Ready');
+assert.match(src, /function coordinatorPrompt\([\s\S]*?rework = "",/, 'промпт принимает строку Rework');
 
 console.log('OK: relay 1.4.63 — Rework не запирает карточку: причина в промпте, путь назад назван, следы снимает транспорт');

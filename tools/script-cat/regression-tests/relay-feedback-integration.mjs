@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { assertUserscriptVersionContract } from '../version-oracle.mjs';
+import { promptShim } from '../tests/helpers/prompt-shim.mjs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 assertUserscriptVersionContract(src);
@@ -119,7 +120,7 @@ const api = new Function(
   'request', 'githubHeaders', 'activeMission', 'missionSame', 'log', 'logThrottled', 'dbg', 'document', 'window',
   'technicalInfo', 'roleContext', 'reviewerRole', 'sendToRole', 'uid', 'messagesAfter', 'parseMarker',
   'markerMissing', 'pause', 'firstLine', 'roles', 'queueOf', 'requestPlan', 'isUuid', 'retainRejectedResult',
-  `${questionBlock}\n${answerBlock}\nreturn { parseQuestion, questionInMarker, questionProps, askQuestion,\n` +
+  `${promptShim}\n${questionBlock}\n${answerBlock}\nreturn { parseQuestion, questionInMarker, questionProps, askQuestion,\n` +
   'queueQuestion, flushQuestionQueue, refreshQuestions, refreshDecisions, deliverProposals, closeExpired, questionBriefing,\n' +
   'markDelivered, answerQueue, queueAnswer, answerPrompt, startAnswer, answerStep, openQuestions, notifyNewQuestions, pruneQuestionSeen, flushQuestionBodies, questionBodyPending };',
 )(
@@ -127,7 +128,7 @@ const api = new Function(
   async () => copy(mission), (a, b) => a === b,
   (text, error, options) => logs.push({ text, error, options }),
   (...args) => logs.push({ throttled: args }), () => {}, undefined, {},
-  () => 'ТЕХНИКА', () => 'РОЛЬ', async () => ({ name: 'Warden', fn: 'Reviewer' }), async (...args) => { sent.push(args); return true; },
+  () => 'ТЕХНИКА', () => 'РОЛЬ', async () => ({ name: 'Warden', fn: 'Reviewer' }), async (...args) => { if (args[1] && args[1].text) args[1] = args[1].text; sent.push(args); return true; },
   () => 'turn-1', () => messages,
   (raw, name) => raw.startsWith(name) ? JSON.parse(raw.slice(raw.indexOf('{'))) : null,
   async () => false, (reason) => { throw new Error(`неожиданная пауза: ${reason}`); },
@@ -173,7 +174,7 @@ assert.equal(posts.filter((post) => rt(post.properties['Вопрос']).includes
 assert.equal(posts[1].properties['Материал'].url, adrUrl, 'ссылка формируется для старого маркера без url');
 assert.deepEqual(api.answerQueue().map((row) => row.id).sort(), [ordinaryRow.id, proposalRow.id].sort());
 const proposalItem = api.answerQueue().find((row) => row.id === proposalRow.id);
-const prompt = api.answerPrompt(mission, { name: 'Warden' }, proposalItem, 'turn-2');
+const prompt = api.answerPrompt(mission, { name: 'Warden', fn: 'Reviewer' }, proposalItem, 'turn-2').text;
 assert(prompt.includes(adrUrl), 'приёмка видит ссылку на материал');
 assert.equal(prompt.split(adrUrl).length - 1, 1, 'ссылка не повторяется в промпте');
 assert.match(prompt, /CF_ANSWER_RESULT \{"question_id":"row-2"/);

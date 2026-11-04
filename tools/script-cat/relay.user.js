@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.8.9
+// @version      1.9.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -211,7 +211,7 @@
     }
     const folder = String(p.driveFolder || "");
     return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
-      !["logs", "payloads"].includes(folder);
+      !["logs", "payloads", "artifacts"].includes(folder);
   }
   function selectedProfileId() {
     try { return sessionStorage.getItem(PROFILE_SESSION_KEY) || LEGACY_PROFILE_ID; }
@@ -277,6 +277,10 @@
     collapsed: "cfn-panel-collapsed",
     stateV: "cfn-state-v",
     rolesCache: "cfn-roles-cache",
+    // Эфемерные пилоты SYN-P1: отдельный namespace, НЕ K.pending/K.expect.
+    pilots: "cfn-pilots-v1",
+    pilotWait: "cfn-pilot-wait:",
+    pilotTranscript: "cfn-pilot-transcript:",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.
@@ -507,7 +511,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.8.9";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.9.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -3130,8 +3134,8 @@
       // ни read, ни запись, даже если адрес и ключ ошибочно принадлежат Relay.
       const ping = await gatewayWithCredentials("ping", "", { projectId: ACTIVE_PROFILE.id }, credentials);
       if (!ping || ping.projectScoped !== true || ping.projectId !== ACTIVE_PROFILE.id ||
-          ping.project?.name !== ACTIVE_PROFILE.driveFolder) {
-        const error = new Error("Шлюз не подтвердил этот проект и папку: нужен проектный шлюз 1.6.");
+          ping.project?.name !== ACTIVE_PROFILE.driveFolder || ping.artifacts?.name !== "artifacts") {
+        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.7.");
         error.relay = "gateway"; error.refused = true; error.reason = error.message; throw error;
       }
       return gatewayWithCredentials(action, fileId, { ...extra, projectId: ACTIVE_PROFILE.id }, credentials);
@@ -4398,57 +4402,17 @@
    * «ответь одной последней строкой» буквально, а в журнал попал только маркер).
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
-    // Формат маркера зависит от вида хода: их четыре, и путать их нельзя —
-    // напоминание не должно просить у приёмки маркер исполнителя.
-    let line;
-    if (expect.kind === "answer") {
-      line = `CF_ANSWER_RESULT {"question_id":"${expect.ref}","turn_id":"${expect.turnId || ""}","verdict":"answer","answer":"<решение>"}`;
-    } else if (expect.kind === "plan") {
-      line = `CF_COORDINATOR_RESULT {"mission_id":"${expect.missionId || expect.ref}","turn_id":"${expect.turnId || ""}","status":"completed","next":"<роль|done>"}`;
-    } else if (expect.kind === "review") {
-      line = `CF_REVIEW_RESULT {"mission_id":"${expect.missionId || expect.ref}","turn_id":"${expect.turnId || ""}","verdict":"accept|rework","remarks":"<пункты замечаний>"}`;
-    } else if (role.fn === "Reviewer" && markerName === "CF_REVIEW_RESULT") {
-      line = `CF_REVIEW_RESULT {"mission_id":"${expect.missionId || ""}","dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","verdict":"accept|rework|master","remarks":"<причина или замечания>"}`;
-    } else if (role.fn === "Reviewer") {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","pr":null}`;
-    } else if (role.fn === "Auditor") {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь к отчёту>"}`;
-    } else {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь>","pr":<номер PR|null>,"merged":true}`;
-    }
-    const about = expect.title ? ` по «${expect.title}»` : "";
-    const variants = [
-      [
-        `ТЕХНИЧЕСКОЕ НАПОМИНАНИЕ (${attempt} из ${C.markerReminders}; это не задание и не новый ход).`,
-        `Твой предыдущий ответ${about} пришёл без обязательного маркера ${markerName}.`,
-        "Без него нельзя понять, закончена работа или нет, поэтому ответ не засчитан.",
-      ],
-      [
-        `НАПОМИНАНИЕ О ФОРМАТЕ (${attempt} из ${C.markerReminders}; повторять работу не нужно).`,
-        `В ответе${about} не нашлось последней строки с ${markerName}.`,
-        "Остальное в чате на месте — не хватает только служебной строки.",
-      ],
-    ];
-    // Маркер вместо отчёта. Просить «одну последнюю строку» нельзя: агент
-    // присылает ровно её, отчёт остаётся в чате, а журнал хода пустеет.
-    const thin = [
-      `ОТЧЁТ НЕ ЗАПИСАН (${attempt} из ${C.markerReminders}; это не задание и не новый ход).`,
-      `В последнем ответе${about} пришла только служебная строка ${markerName}, без отчёта.`,
-      "Маркер без фактов не считается ответом: по нему нельзя принять работу.",
-    ];
-    return [
-      ...(why === "thin" ? thin : variants[(attempt - 1) % variants.length]),
-      "Не повторяй уже сделанное и не жди Мастера — это ошибка формата, а не работы.",
-      why === "thin"
-        ? "Пришли ответ ещё раз целиком: что изменил, что показали команды, какие числа получились — и последней строкой маркер."
-        : "Пришли ответ ещё раз целиком и последней строкой добавь маркер: одним маркером вместо отчёта отвечать нельзя.",
-      "",
-      roleContext(role),
-      "",
-      "ФОРМАТ ОТВЕТА — последняя строка, ровно одна:",
-      line,
-      "Строка должна быть последней, без блока кода и без текста после неё.",
-    ].filter(Boolean).join("\n");
+    const ctx = {
+      kind: "reminder",
+      role: promptRole(role),
+      turnId: expect.turnId || "",
+      reminder: { markerName, attempt, max: C.markerReminders, why },
+      delivery: { tier: "full", attempt },
+    };
+    if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
+    if (expect.kind === "plan" || expect.kind === "review") ctx.mission = { id: expect.missionId || expect.ref };
+    if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId };
+    return compileOrPause(ctx, `reminder ${expect.kind}`);
   }
 
   /**
@@ -4533,35 +4497,20 @@
    * выдачи и формат маркера. Всё остальное агент берёт из карточки.
    */
   function minimalPrompt(expect) {
-    // Coordinator plan is not a dispatch: its ref is the mission page, not a
-    // task card. Preserve a compact queue snapshot and the Coordinator marker.
     if (expect.kind === "plan") {
-      const missionId = String(expect.missionId || expect.ref || "");
-      const turnId = String(expect.turnId || "");
-      return expect.fallbackText || [
-        `Продолжи ход Координатора по миссии ${missionId}; turn_id ${turnId}.`,
-        expect.url || (missionId ? `https://app.notion.com/p/${missionId.replace(/-/g, "")}` : ""),
-        expect.planContext || "Прочитай очередь миссии и продолжи планирование по её актуальному состоянию.",
-        "Обработай Submitted/Rework и выдай следующий Ready/Draft согласно правилам Coordinator. Не создавай исполнительскую задачу вместо плана.",
-        `Последней строкой: CF_COORDINATOR_RESULT {"mission_id":"${missionId}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
-      ].filter(Boolean).join("\n");
+      return compileOrPause({
+        kind: "plan", role: { fn: "Coordinator", name: expect.roleName || "Coordinator" },
+        mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
+        queue: { summary: expect.planContext || "Прочитай очередь миссии и продолжи планирование." },
+        delivery: { tier: "recovery", attempt: (Number(expect.arenaResend) || 0) + 1 },
+      }, `recovery ${expect.ref}`);
     }
-    const id = String(expect.ref || "");
-    const url = expect.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
-    return [
-      `Задание ${expect.title || id} (dispatch ${id}, run ${expect.runId || ""}).`,
-      "Полный текст Arena не приняла ошибкой. Прочитай задание сам — оно в карточке:",
-      url || `(карточка Notion ${id})`,
-      "Поля карточки — Намерение, Инварианты, Оракул (Acceptance), Scope — и есть задание.",
-      expect.roleFn === "Reviewer"
-        ? "Проверь оракул и дай отчёт. Код, ветки и PR не меняй. Если карточка требует CF_REVIEW_RESULT, включи в него dispatch_id и run_id этой выдачи."
-        : "Работай только в своей зоне, PR мержи сам (`gh pr merge --squash`), оракул не ослабляй.",
-      "Последней строкой ответа — ровно один маркер сдачи карточки:",
-      expect.roleFn === "Reviewer"
-        ? `CF_AGENT_RESULT {"dispatch_id":"${id}","run_id":"${expect.runId || ""}","status":"submitted","pr":null}`
-        : `CF_AGENT_RESULT {"dispatch_id":"${id}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь>","pr":<номер PR>,"merged":true}`,
-      'Работа без PR — `"pr": null`.',
-    ].join("\n");
+    return compileOrPause({
+      kind: "retry", profileId: "delivery.compact",
+      role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
+      task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
+      delivery: { tier: "compact", attempt: (Number(expect.arenaResend) || 0) + 1 },
+    }, `retry ${expect.ref}`);
   }
 
   /**
@@ -4580,7 +4529,9 @@
     if (Date.now() - Number(expect.sentAt || 0) > C.arenaRetryMs) return false;
     const done = Number(expect.arenaResend) || 0;
     if (done >= C.arenaResendMax) return false;
-    const text = minimalPrompt(expect);
+    const envelope = minimalPrompt(expect);
+    if (!envelope) return false; // компиляция не прошла — пауза уже поставлена
+    const text = envelope.text;
     GM_setValue(K.deadSend, (alert && alert.messageId) || "");
     GM_setValue(K.pending, {
       roleId: expect.roleId,
@@ -4593,6 +4544,7 @@
     GM_setValue(K.expect, {
       ...expect,
       text,
+      prompt: envelope,
       sentAt: null,
       verified: false,
       undelivered: true,
@@ -4717,6 +4669,7 @@
       // нажал «Продолжить»); вторая подряд — пауза с честной причиной.
       const eaten = latestUserMessageAlert();
       if (eaten && expect.sentAt) {
+        journalDelivery(expect, "arena_generic_error", classifyArenaFailure(eaten.text));
         if (retryRejectedHandoff(expect, eaten, `Arena ответила «${eaten.text}»`)) {
           // Отправляем прямо здесь, а не «следующим тиком»: шаг уже выполняется,
           // и отложенный тик был бы молча проглочен сторожем блокировки.
@@ -6598,7 +6551,13 @@
     return String(h);
   }
 
-  async function sendToRole(role, text, kind, ref, extra = {}) {
+  async function sendToRole(role, input, kind, ref, extra = {}) {
+    // Адаптеры передают envelope компилятора; null означает, что компиляция
+    // не прошла и пауза уже поставлена — в Arena ничего не уходит.
+    if (input == null) return false;
+    const envelope = typeof input === "object" && input && typeof input.text === "string" ? input : null;
+    const text = envelope ? envelope.text : String(input);
+    if (!text.trim()) return false;
     if (typeof projectRoleAllowed === "function" && !projectRoleAllowed(role)) return false;
     // Ранее выданную Reviewer карточку можно завершить и напомнить о маркере,
     // но новой рабочей выдачи через общий транспорт быть не должно.
@@ -6664,11 +6623,15 @@
       lastReplyAt: 0,
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
+      prompt: envelope || null,
       ...payload,
       sessionRepo,
       targetRepo,
       targetBranch,
     });
+    if (envelope) {
+      recordPromptAttempt(envelope, { kind, ref, role: role.name, attempt: payload.attempt || 1, outcome: "queued" });
+    }
     dbg("sendToRole: задание в очереди", { role: role.name, kind, ref, длина: text.length });
     GM_setValue("cfn-me", role.name);
     setStatus();
@@ -6979,6 +6942,7 @@
     const { editor, closed, overlay } = await ensureComposer();
     if (closed) log("Убрал плашку «задача выполнена» — она закрывала поле ввода.");
     if (!editor) {
+      journalDelivery(GM_getValue(K.expect, null), "editor_not_found", "editor_not_found");
       pendingSay(
         pending,
         `Не нашёл поле ввода на странице адресата (${composerDiagnostics()}): задание осталось в очереди и не потеряется.` +
@@ -7040,6 +7004,7 @@
     // «откат отправки» и значит, что `sentAt` не ставится.
     if (delivery.captcha) {
       const waiting = GM_getValue(K.expect, null);
+      journalDelivery(waiting, "captcha", "captcha");
       if (waiting) GM_setValue(K.expect, { ...waiting, captcha: true, sentAt: null, verified: false });
       // Очередь остаётся, но с отметкой: после решения капчи сначала надо
       // посмотреть, не дошло ли сообщение всё-таки. Отсчёт TTL начинается
@@ -7076,6 +7041,7 @@
       // этой же карточке пришёл бы, когда она уже не Running, и
       // `submitExecutor` честно отказался бы его записывать.
       const failed = GM_getValue(K.expect, null);
+      journalDelivery(failed, "failed", classifyArenaFailure(`${delivery.reason} ${delivery.detail || ""}`));
       const rolled = await releaseUndelivered(
         failed,
         `сообщение не ушло (${String(delivery.reason).toLowerCase()})`,
@@ -7122,6 +7088,7 @@
         ...(isDispatchAssignment(expect, pending, me) ? { dispatchSentAt: sentAt } : {}),
       });
       dbg("Send: доставка подтверждена, отметка внутри чата", { watermark: mark, via: delivery.via || "message" });
+      journalDelivery(expect, "delivered");
     }
     GM_setValue(K.pending, null);
     GM_setValue(K.deadSend, "");
@@ -8210,373 +8177,556 @@
     return /^(none|null|no|нет|—|-)$/i.test(String(pr).trim());
   };
 
-  // ───────────────────────── техническая информация ─────────────────────────
-  /**
-   * Блок, который ScriptCat дописывает в КАЖДОЕ исходящее сообщение.
-   *
-   * Зачем: агент попадает в песочницу, где checkout — не main, а ветка-снимок
-   * без общей истории с main (проверено: `git merge-base HEAD origin/main`
-   * пусто, 46 файлов main в снимке отсутствуют). Агент, который этого не
-   * знает, коммитит в мёртвую историю, а его PR показывает удаление чужих
-   * файлов. Ни Координатор, ни регламент этого не видят — знание о среде
-   * должно приходить автоматически, вместе с заданием.
-   *
-   * Блок разный по функции роли (поле «Функция» в базе «Роли»):
-   *   Executor    — стартовый ритуал, зона, порядок PR и маркер;
-   *   Auditor     — только origin/main, писать нельзя;
-   *   Coordinator — git не нужен вообще, инструменты Notion и Drive.
-   */
+  // ───────────────────────── реестр маркеров ─────────────────────────
+  // Единый источник имён маркеров и их обязательных ID. Используется
+  // компилятором промптов, разбором ответов и генерацией документации,
+  // чтобы «какой маркер какой роли» не расходилось между кодом и docs.
+  const PROMPT_MARKER_REGISTRY = (() => {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const defs = {
+      CF_COORDINATOR_RESULT: { kind: "plan", ids: ["mission_id", "turn_id"], role: "Coordinator" },
+      CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
+      CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
+      CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
+    };
+    const forKind = (kind, roleFn) => {
+      if (kind === "plan") return "CF_COORDINATOR_RESULT";
+      if (kind === "review") return "CF_REVIEW_RESULT";
+      if (kind === "answer") return "CF_ANSWER_RESULT";
+      if (kind === "dispatch") return "CF_AGENT_RESULT";
+      if (kind === "reminder") return null; // reminder наследует маркер исходного хода
+      return null;
+    };
+    const idFields = (name) => (defs[name] ? defs[name].ids.slice() : []);
+    const isUuid = (v) => UUID.test(String(v || "").trim());
+    return { defs, forKind, idFields, isUuid, names: Object.keys(defs) };
+  })();
 
-  // Разметка блока — обычный текст, а не HTML-комментарии: `<!-- -->`
-  // вырезают чистильщики разметки, и своё же задание перестаёт опознаваться
-  // в транскрипте (25.10: дважды подряд ошибка Arena на задании 2.16).
-  const TECH_OPEN = "=== CF_TECH v1 ===";
-  const TECH_CLOSE = "=== /CF_TECH ===";
-  const TECH_TITLE = "ТЕХНИЧЕСКАЯ ИНФОРМАЦИЯ";
+  // ───────────────────────── блоки промптов ─────────────────────────
+  // Каждый блок — чистая функция ctx => текст. Блоки не читают DOM, Notion,
+  // GitHub, GM_* и часы: все факты приходят в ctx. Одинаковый ctx даёт
+  // одинаковый текст и хеш. ruleIds связывают блок с обязательными правилами
+  // регламента (contracts/agent-protocol.json); verbatim-поля не входят в overhead.
+  const PROMPT_BLOCKS = (() => {
+    const B = {};
+    const def = (id, spec) => { B[id] = { id, version: 1, audience: ["Executor", "Auditor", "Coordinator", "Reviewer"], ruleIds: [], verbatim: false, ...spec }; };
+    const line = (label, value) => (String(value || "").trim() ? `${label}: ${String(value).trim()}` : "");
 
-  const stampUtc = () => `${new Date().toISOString().replace("T", " ").slice(0, 16)} UTC`;
+    def("identity.task", { ruleIds: [], render: (c) => [
+      `Карточка «${c.task?.title || c.task?.id}» · dispatch ${c.task?.id} · run ${c.task?.runId}` + (c.mission?.id ? ` · миссия ${c.mission.id}` : ""),
+      `Адресат: ${c.role?.name} (${c.role?.fn}).`,
+    ].join("\n") });
 
-  /** Шапка блока: предупреждение, что это не задание. */
-  function techHeader(role) {
-    return [
-      TECH_OPEN,
-      `━━━ ${TECH_TITLE} · ${role.name} · ${stampUtc()} ━━━`,
-      "Это не задание и не текст Координатора: это факты о среде, в которой ты",
-      "работаешь. Задание — ниже, под блоком.",
-    ].join("\n");
+    def("identity.mission", { render: (c) => [
+      `Миссия: ${c.mission?.name || c.mission?.id}.`,
+      `mission_id: ${c.mission?.id}`,
+      c.turnId ? `turn_id: ${c.turnId}` : "",
+      c.mission?.tzUrl ? `ТЗ: ${c.mission.tzUrl}` : "",
+      Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
+    ].filter(Boolean).join("\n") });
+
+    def("repo.target", { render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return [
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок Arena может быть без общей истории: пустой merge-base в shallow не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+      ].join("\n");
+    } });
+
+    def("repo.boundary", { ruleIds: ["R-REPO-BOUNDARY"], render: () =>
+      "D-022: пиши только в целевой repo. synapse (MIT) — роли ядра; cortex закрыт и ролям ядра не виден; ссылка на cortex в synapse — дефект." });
+
+    def("authority.core", { ruleIds: ["R-ZONES", "R-SECRETS"], render: (c) =>
+      `Зона (${c.role?.zone || "своя"}) — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай.` });
+
+    def("authority.executor", { ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
+      "Исполнитель: правишь зону+Scope, PR мержишь сам (gh pr merge <N> --squash). Чужая правка — карточкой владельцу." });
+
+    def("authority.auditor", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: () =>
+      "Аудитор: только чтение и проверка; ни ветки/коммита/пуша/PR. Находки — в отчёт, чинит исполнитель. Новые проверки можно, ослаблять нельзя." });
+
+    def("authority.coordinator", { ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
+      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
+
+    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
+      "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
+
+    def("git.executor", { ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return `GIT: fetch origin ${base}; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
+    } });
+
+    def("git.auditor", { ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return `GIT read-only: истина — origin/${base}. fetch origin ${base}; log --oneline -5 origin/${base}; show origin/${base}:<путь>. Работа — PR в ${base}: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
+    } });
+
+    def("evidence.rule", { ruleIds: ["R-EVIDENCE"], render: () =>
+      "Доказательство: not run/тайм-аут/зелёный CI/мок ≠ pass; нужны команда, код возврата, артефакт, SHA. Визуал — сам открыл PNG и описал." });
+
+    def("task.intent", { verbatim: true, render: (c) => line("Намерение", c.task?.intent || c.task?.title) });
+    def("task.invariants", { verbatim: true, render: (c) => line("Инварианты", c.task?.invariants || "не заданы — держи поведение неизменным") });
+    def("task.acceptance", { verbatim: true, ruleIds: ["R-EVIDENCE"], render: (c) => line("Оракул (как принимают)", c.task?.acceptance || "не задан") });
+    def("task.scope", { verbatim: true, render: (c) => line("Scope", c.task?.scope || "не задан") });
+    def("task.freedom", { verbatim: true, render: (c) => line("Свободно", c.task?.freedom || "как решишь, если проходят инварианты") });
+    def("task.assignment", { verbatim: (c) => Boolean(String(c.task?.payload || "").trim()), render: (c) => {
+      const body = String(c.task?.payload || "").trim();
+      if (body) return `ЗАДАНИЕ\n${body}`;
+      return "ЗАДАНИЕ: карточка и есть задание (поля выше). Не хватает — реши обратимо, запиши (неясно/решил/откат) в docs/decisions если Scope разрешает, иначе в отчёт.";
+    } });
+
+    def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
+      'Вопрос — полем question в маркере {"text","options","default","hours"}; default обязателен (работа идёт по нему), ответ придёт строкой; ≤1 за ход. Опрос «можно?» в чате — остановка, не делай.' });
+
+    def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
+      "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
+
+    def("phases.bans", { ruleIds: ["R-PHASES"], render: () =>
+      "Фазы 0–4: без платежей/каталога/загрузки/аккаунтов до их фаз; без запуска кода пользователей; без доли/валюты/комиссии; без платной инфра без лимита; ядро не open source без OSI; без пустых сервисов." });
+
+    def("i18n.rule", { ruleIds: ["R-I18N"], audience: ["Executor"], render: () =>
+      "i18n: 8 локалей (en,ru,zh-Hans,ja,pt-BR,de,fr,ko); текст только в каталогах; диагностика код+параметры; локаль не меняет правил." });
+
+    def("card.fields", { ruleIds: ["R-CARD-FIELDS"], audience: ["Executor", "Auditor"], render: () =>
+      "Поля карточки (Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check) ставит скрипт; отчёт — поле report маркера." });
+
+    def("answers.delta", { verbatim: true, render: (c) => [c.queue?.answersLine, c.queue?.openLine, c.queue?.answerLine].filter(Boolean).join("\n") });
+    def("queue.snapshot", { verbatim: true, render: (c) => [
+      c.queue?.summary ? `Очередь: ${c.queue.summary}` : "",
+      c.queue?.ready, c.queue?.rework, c.queue?.draft,
+    ].filter(Boolean).join("\n") });
+    def("queue.drafts", { verbatim: true, render: (c) => c.queue?.draft || "" });
+
+    def("queue.coordinator", { ruleIds: ["R-QUEUE", "R-NO-REVIEWER-DISPATCH"], audience: ["Coordinator"], render: () =>
+      "Очередь: Running ставит транспорт и сам вернёт в Ready без хода — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID той же миссии, Accepted, без Check=fail. Rework: переделка — в Ready отдельным шагом; Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи молча. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто после хода — незаконченный ход. Выполнено — «Итог» + next:\"done\" (передача приёмке). Running в очереди — это работа, которая идёт прямо сейчас. Движок ставит Running и Submitted; Accepted, Rework и Ready ставишь ты." });
+
+    def("review.evidence", { verbatim: true, render: (c) => [
+      c.queue?.acceptedCount != null ? `Принятых карточек: ${c.queue.acceptedCount}.` : "",
+      c.queue?.accepted,
+      c.mission?.result ? `ИТОГ МИССИИ:\n${c.mission.result}` : "ИТОГ МИССИИ: поле «Итог» пусто — повод не принимать.",
+    ].filter(Boolean).join("\n") });
+    def("review.protocol", { ruleIds: ["R-EVIDENCE", "R-VERIFY-GITHUB"], audience: ["Reviewer"], render: () =>
+      "Смотри, выполнено ли то, о чём миссия, а не только «всё ли выдано». Каждый пункт оракула закрывай командой или артефактом; нельзя запустить команду — это замечание. Accepted — состояние карточки, не доказательство pass; Check=fail и остатки не скрывай. Заявленное в «Итоге» сверь с реально сделанным карточками." });
+
+    def("answer.question", { verbatim: true, render: (c) => [
+      c.question?.role ? `Вопрос задал: ${c.question.role}` + (c.question.card ? ` · карточка «${c.question.card}»` : "") : "",
+      "ВОПРОС",
+      c.question?.fullText || c.question?.text,
+      c.question?.options?.length ? `Варианты: ${c.question.options.join(" · ")}` : "",
+      c.question?.fallback ? `Вариант по умолчанию (работа идёт по нему сейчас): ${c.question.fallback}` : "",
+      c.question?.sourceUrl && !String(c.question?.fullText || "").includes(c.question.sourceUrl) ? `Материал: ${c.question.sourceUrl}` : "",
+    ].filter(Boolean).join("\n") });
+    def("answer.protocol", { ruleIds: ["R-QUESTIONS"], audience: ["Reviewer"], render: () =>
+      "Отвечай по существу: что делать, где граница, по какому признаку считать сделанным. Ответ самодостаточен — агент увидит его без твоего чата. По ADR решай в пределах делегированных полномочий, сам оракул/файлы не меняй. Мастера зови только когда без него физически нельзя (новый агент, доступ, решение по ТЗ)." });
+    def("answer.resume", { audience: ["Reviewer"], render: () =>
+      "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
+
+    const markerJson = (c, name) => {
+      if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
+      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
+      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
+      const auditor = c.role?.fn === "Auditor";
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
+    };
+    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => [
+      "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
+      markerJson(c, "CF_AGENT_RESULT"),
+    ].join("\n") });
+    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => [
+      "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
+      markerJson(c, "CF_COORDINATOR_RESULT"),
+    ].join("\n") });
+    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
+      c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
+      markerJson(c, "CF_REVIEW_RESULT"),
+    ].filter(Boolean).join("\n") });
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+      "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+      c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
+      markerJson(c, "CF_ANSWER_RESULT"),
+    ].filter(Boolean).join("\n") });
+
+    def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
+      const thin = c.reminder?.why === "thin";
+      return [
+        `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
+        thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.` : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
+        "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
+      ].join("\n");
+    } });
+
+    def("pilot.brief", { audience: ["pilot"], verbatim: true, render: (c) => c.pilot?.brief || "" });
+    def("pilot.stop", { audience: ["pilot"], render: () =>
+      "Финал — отчёт текстом: что сделано, как запущено, артефакты, журнал затруднений и допущения. Командные маркеры не используй." });
+    def("pilot.repo", { audience: ["pilot"], render: (c) =>
+      `Репо: ${c.pilot?.repo || "Creative36711/synapse"}@${c.pilot?.startSha || "main"}, read-only; запись только в локальный sandbox.` });
+
+    def("delivery.recovery", { render: () =>
+      "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
+    def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
+    def("drive.layout", { ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
+      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads, обычно не нужен; журнал попытки — logs; свободные результаты — artifacts." });
+    def("delivery.retry", { render: (c) => {
+      const id = String(c.task?.id || "");
+      const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
+      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.`;
+    } });
+
+    return B;
+  })();
+
+  // ───────────────────────── профили промптов ─────────────────────────
+  // Профиль — декларативный список блоков, обязательные факты, запрещённые
+  // блоки/аудитории, бюджет overhead и тип маркера. Добавление роли или типа
+  // выдачи — новый профиль, а не if внутри общей строки.
+  const PROMPT_PROFILES = (() => {
+    const team = ["Executor", "Auditor", "Coordinator", "Reviewer"];
+    const P = {};
+    const def = (id, spec) => { P[id] = { id, audience: team, requiredFacts: [], forbidden: [], marker: null, budget: { overhead: 0 }, ...spec }; };
+
+    def("executor.card", {
+      audience: ["Executor"], marker: "CF_AGENT_RESULT",
+      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
+      requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
+      forbidden: ["queue.coordinator", "review.protocol", "pilot.brief", "pilot.stop"],
+      budget: { overhead: 2800 },
+    });
+    def("auditor.card", {
+      audience: ["Auditor"], marker: "CF_AGENT_RESULT",
+      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
+      requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
+      forbidden: ["git.executor", "queue.coordinator", "pilot.brief"],
+      budget: { overhead: 2200 },
+    });
+    def("coordinator.plan", {
+      audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
+      blocks: ["identity.mission", "mission.returned", "repo.boundary", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      requiredFacts: ["role.name", "mission.id", "turnId"],
+      forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
+      budget: { overhead: 3200 },
+    });
+    def("coordinator.recovery", {
+      audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
+      blocks: ["identity.mission", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
+      requiredFacts: ["mission.id", "turnId"],
+      forbidden: ["git.executor", "marker.agent", "task.assignment"],
+      budget: { overhead: 1500 },
+    });
+    def("reviewer.mission", {
+      audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      requiredFacts: ["mission.id", "turnId"],
+      forbidden: ["git.executor", "marker.agent", "task.assignment"],
+      budget: { overhead: 2400 },
+    });
+    def("reviewer.answer", {
+      audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
+      blocks: ["identity.mission", "authority.reviewer", "answer.question", "answer.protocol", "answer.resume", "marker.answer"],
+      requiredFacts: ["question.id", "turnId"],
+      forbidden: ["git.executor", "marker.agent", "task.assignment"],
+      budget: { overhead: 1800 },
+      conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
+    });
+    def("reviewer.card", {
+      audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
+      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
+      requiredFacts: ["task.id", "task.runId"],
+      forbidden: ["git.executor"],
+      budget: { overhead: 2000 },
+    });
+    def("reminder.marker", {
+      audience: team, marker: null,
+      blocks: ["identity.task", "reminder.marker", "marker.agent"],
+      requiredFacts: [],
+      forbidden: ["task.assignment", "queue.coordinator", "review.protocol"],
+      budget: { overhead: 700 },
+    });
+    def("delivery.compact", {
+      audience: ["Executor", "Auditor", "Reviewer"], marker: "CF_AGENT_RESULT",
+      blocks: ["identity.task", "delivery.retry", "marker.agent"],
+      requiredFacts: ["task.id", "task.runId"],
+      forbidden: ["queue.coordinator", "review.protocol"],
+      budget: { overhead: 1500 },
+    });
+    def("pilot.synapse", {
+      audience: ["pilot"], marker: null,
+      blocks: ["pilot.repo", "pilot.brief", "pilot.stop"],
+      requiredFacts: ["pilot.brief", "pilot.startSha"],
+      forbidden: team.flatMap(() => []).concat(["authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer", "marker.agent", "marker.coordinator", "marker.review", "marker.answer", "questions.protocol", "adr.protocol", "repo.boundary", "phases.bans"]),
+      budget: { overhead: 250 },
+    });
+
+    // Выбор профиля по kind + role.fn + tier.
+    const select = (kind, fn, tier) => {
+      if (kind === "pilot") return "pilot.synapse";
+      if (kind === "reminder") return "reminder.marker";
+      if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
+      if (kind === "review") return "reviewer.mission";
+      if (kind === "answer") return "reviewer.answer";
+      if (kind === "dispatch" || kind === "retry") {
+        if (fn === "Auditor") return "auditor.card";
+        if (fn === "Reviewer") return "reviewer.card";
+        if (fn === "Coordinator") return "coordinator.plan";
+        return "executor.card"; // неизвестная командная роль → Executor
+      }
+      return null;
+    };
+    return { profiles: P, select };
+  })();
+
+  // ───────────────────────── компилятор промптов ─────────────────────────
+  // compilePrompt(request) выбирает профиль, проверяет факты/аудиторию/маркер/
+  // бюджет и возвращает envelope либо типизированную ошибку. Ошибки компиляции
+  // не отправляются в Arena: вызывающий ставит локальную паузу с причиной.
+  const PromptCompiler = (() => {
+    const enc = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+    const utf8Bytes = (s) => (enc ? enc.encode(s).length : Buffer.byteLength(s, "utf8"));
+    const hash = (s) => { // FNV-1a 32-bit, детерминированный
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i += 1) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return ("00000000" + h.toString(16)).slice(-8);
+    };
+    const get = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+    const err = (code, message, detail) => ({ ok: false, error: { code, message, detail } });
+
+    const reminderMarkerBlock = (name) => ({
+      CF_AGENT_RESULT: "marker.agent", CF_COORDINATOR_RESULT: "marker.coordinator",
+      CF_REVIEW_RESULT: "marker.review", CF_ANSWER_RESULT: "marker.answer",
+    }[name] || null);
+
+    function metrics(text, parts) {
+      const verbatimChars = parts.filter((p) => p.verbatim).reduce((a, p) => a + p.text.length, 0);
+      return {
+        chars: text.length,
+        utf8Bytes: utf8Bytes(text),
+        lines: text.split("\n").length,
+        overheadChars: Math.max(0, text.length - verbatimChars),
+      };
+    }
+
+    function compile(request) {
+      const c = request || {};
+      const kind = c.kind;
+      const fn = c.role?.fn || "";
+      const tier = c.delivery?.tier || "full";
+      if (kind === "pilot" && fn !== "pilot") {
+        return err("unknown_profile", `pilot требует роль pilot, получено «${fn || "неизвестно"}»`);
+      }
+      const profileId = c.profileId || PROMPT_PROFILES.select(kind, fn, tier);
+      const profile = PROMPT_PROFILES.profiles[profileId];
+      if (!profile) return err("unknown_profile", `нет профиля для kind=${kind} fn=${fn} tier=${tier}`);
+      if (kind === "pilot" && profileId !== "pilot.synapse") return err("unknown_profile", "pilot обязан использовать pilot.synapse");
+
+      for (const fact of profile.requiredFacts) {
+        const v = get(c, fact);
+        if (v === undefined || v === null || String(v).trim() === "") return err("missing_fact", `не хватает обязательного факта ${fact} для ${profileId}`);
+      }
+
+      // Разрешаем маркер для reminder и собираем список блоков.
+      let blockIds = profile.blocks.slice();
+      let markerName = profile.marker;
+      if (kind === "reminder") {
+        markerName = c.reminder?.markerName || null;
+        const mb = reminderMarkerBlock(markerName);
+        if (!mb) return err("marker_mismatch", `reminder не знает маркер ${markerName}`);
+        blockIds = blockIds.filter((id) => !id.startsWith("marker."));
+        blockIds = ["reminder.marker", mb];
+      }
+
+      const parts = [];
+      for (const id of blockIds) {
+        const block = PROMPT_BLOCKS[id];
+        if (!block) return err("unknown_profile", `неизвестный блок ${id}`);
+        if (profile.forbidden.includes(id)) return err("forbidden_block", `блок ${id} запрещён профилем ${profileId}`);
+        const cond = profile.conditions?.[id];
+        if (cond && !cond(c)) continue;
+        // Аудитория: pilot-профиль не принимает командные блоки и наоборот.
+        const aud = block.audience || [];
+        const isPilotProfile = profileId === "pilot.synapse";
+        const isPilotBlock = aud.includes("pilot");
+        if (isPilotProfile !== isPilotBlock) {
+          return err("forbidden_block", isPilotProfile ? `командный блок ${id} попал в pilot-профиль` : `pilot-блок ${id} попал в командный профиль`);
+        }
+        if (!isPilotProfile && fn && !aud.includes(fn)) {
+          return err("forbidden_block", `блок ${id} не предназначен роли ${fn}`);
+        }
+        const text = String(block.render(c) || "").trim();
+        if (!text) continue;
+        const verbatim = typeof block.verbatim === "function" ? block.verbatim(c) : Boolean(block.verbatim);
+        parts.push({ id, version: block.version, text, verbatim, ruleIds: block.ruleIds || [], hash: hash(text) });
+      }
+
+      // Маркер ровно один и последний смысловой блок.
+      if (markerName) {
+        const markerParts = parts.filter((p) => p.id.startsWith("marker."));
+        if (markerParts.length !== 1) return err("marker_mismatch", `ожидался ровно один маркер ${markerName}, найдено ${markerParts.length}`);
+        if (parts[parts.length - 1].id !== markerParts[0].id) return err("marker_mismatch", "маркер должен быть последним смысловым блоком");
+        const mtext = markerParts[0].text;
+        if (!mtext.includes(markerName)) return err("marker_mismatch", `маркер ${markerName} отсутствует в последнем блоке`);
+        const idCheck = validateMarkerIds(markerName, mtext, c);
+        if (idCheck) return err("marker_mismatch", idCheck);
+      } else if (parts.some((p) => p.id.startsWith("marker."))) {
+        return err("forbidden_block", "профиль без маркера не должен содержать marker-блок");
+      }
+
+      const text = parts.map((p) => p.text).join("\n\n");
+      const m = metrics(text, parts);
+      const ruleIds = [...new Set(parts.flatMap((p) => p.ruleIds))];
+
+      if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
+        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead });
+      }
+      const hard = c.delivery?.hardLimit || 0;
+      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard });
+
+      return {
+        ok: true, text, profileId, tier, marker: markerName,
+        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim })),
+        ruleIds, metrics: m, hash: hash(text),
+      };
+    }
+
+    const firstJsonObject = (text, from) => {
+      const start = text.indexOf("{", from);
+      if (start === -1) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i += 1) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === "{") depth += 1;
+        else if (ch === "}") { depth -= 1; if (depth === 0) return text.slice(start, i + 1); }
+      }
+      return null;
+    };
+
+    function validateMarkerIds(name, mtext, c) {
+      const at = mtext.indexOf(name);
+      const raw = firstJsonObject(mtext, at);
+      if (!raw) return "маркер без JSON";
+      let obj;
+      try { obj = JSON.parse(raw); } catch { return "маркерный JSON не разбирается"; }
+      const eq = (a, b) => String(a || "").replace(/-/g, "").toLowerCase() === String(b || "").replace(/-/g, "").toLowerCase();
+      if (name === "CF_AGENT_RESULT") {
+        if (c.task?.id && !eq(obj.dispatch_id, c.task.id)) return "dispatch_id маркера не совпадает с ctx";
+        if (c.task?.runId && !eq(obj.run_id, c.task.runId)) return "run_id маркера не совпадает с ctx";
+      } else if (name === "CF_COORDINATOR_RESULT" || name === "CF_REVIEW_RESULT") {
+        if (c.mission?.id && !eq(obj.mission_id, c.mission.id)) return "mission_id маркера не совпадает с ctx";
+        if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_ANSWER_RESULT") {
+        const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
+        if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
+        if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      }
+      return null;
+    }
+
+    // Стратегия доставки: full → compact → payload/пауза. Не режет оракул молча.
+    function forDelivery(request, { softLimit = 6000, hardLimit = 9000, payloadChannel = false } = {}) {
+      const full = compile({ ...request, delivery: { ...request.delivery, tier: "full", hardLimit } });
+      if (full.ok && full.metrics.chars <= softLimit) return { strategy: "full", envelope: full };
+      const compact = compile({ ...request, delivery: { ...request.delivery, tier: "compact", hardLimit } });
+      if (compact.ok && compact.metrics.chars <= hardLimit) return { strategy: "compact", envelope: compact };
+      if (payloadChannel && compact.ok) return { strategy: "payload", envelope: compact };
+      const why = full.ok ? compact : full;
+      return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
+    }
+
+    return { compile, forDelivery, metrics, hash, reminderMarkerBlock };
+  })();
+
+  // ───────────────────────── факты и компиляция ─────────────────────────
+  // Источник фактов для компилятора промптов. Ручного склеивания промпта здесь
+  // больше нет: состав, порядок, маркер и бюджет проверяет PromptCompiler.
+  // Блоки и профили живут в prompt-blocks.js / prompt-profiles.js.
+
+  const promptRole = (role) => ({
+    id: role?.id || "", name: role?.name || "", fn: role?.fn || "",
+    repo: role?.repo || "", zone: role?.zone || "", gate: role?.gate || "",
+  });
+
+  const promptTarget = (ctx = {}) => ({
+    repo: ctx.repo || C.repo || "",
+    baseBranch: ctx.branch || ctx.baseBranch || C.branch || "main",
+    startSha: ctx.startSha || "",
+  });
+
+  /** Журнал попыток доставки: профиль, объём, исход. Без секретов. */
+  function recordPromptAttempt(envelope, meta = {}) {
+    if (!envelope || !envelope.metrics) return;
+    try {
+      const key = "cfn-prompt-journal-v1";
+      const prior = GM_getValue(key, []);
+      const list = Array.isArray(prior) ? prior : [];
+      list.push({
+        at: nowIso(),
+        profileId: envelope.profileId, tier: envelope.tier, hash: envelope.hash,
+        blocks: envelope.blocks, ruleIds: envelope.ruleIds,
+        chars: envelope.metrics.chars, utf8Bytes: envelope.metrics.utf8Bytes,
+        lines: envelope.metrics.lines, overhead: envelope.metrics.overheadChars,
+        kind: meta.kind || "", ref: meta.ref || "", role: meta.role || "",
+        attempt: meta.attempt || 1, outcome: meta.outcome || "queued",
+        errorClass: meta.errorClass || "",
+      });
+      GM_setValue(key, list.slice(-200));
+    } catch (e) { dbg("prompt-journal", String(e?.message || e)); }
   }
 
-  /** Факт о стартовом состоянии для цели выдачи (репозиторий + базовая ветка). */
-  const snapshotFact = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    const mergeBase = "git merge-base HEAD origin/" + base;
-    const shallow = "git rev-parse --is-shallow-repository";
-    const bt = "`";
-    const lines = [
-      "Репозиторий: " + (repo || C.repo || "") + ", единственная ветка для мержа — " + base + ".",
-      "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
-      "с " + base + ". Но пустой " + bt + mergeBase + bt + " в shallow checkout сам по себе",
-      "не доказывает отсутствие общей истории: проверь " + bt + shallow + bt + ".",
-      "На таком снимке в дереве может не быть файлов, которые в базовой ветке уже есть.",
-    ];
-    // Измерение стартового снимка относится к главной ветке проекта: для другой
-    // базовой ветки не подставляем чужое число — иначе снимок одного проекта
-    // приметься за факт другого.
-    if (base === "main")
-      lines.push("(замер 2026-10-22: 46 файлов, включая сам этот скрипт; число растёт с каждой миссией).");
-    lines.push("Если общая история действительно отсутствует, PR покажет удаление чужих файлов.");
-    return lines.join("\n");
-  };
-  /**
-   * Поля карточки, которые ставит скрипт.
-   *
-   * На NAR-2.13 Runtime Auditor вписал в `Output Drive File ID` id своего отчёта
-   * из Arena/reports. Поле — единственная ссылка на журнал попытки, поэтому
-   * запись ответа упёрлась в отказ шлюза («только Arena/logs»), а цикл встал на
-   * паузе. Правило ставится и исполнителю, и аудитору: карточка — не блокнот.
-   */
-  const CARD_FIELDS_RULE = [
-    "КАРТОЧКА: твой выход — ответ в чате и последняя строка-маркер. Поля `Dispatch State`,",
-    "`Run ID`, `Output Drive File ID`, `Recipient Agent ID`, `Started At`, `Submitted At`,",
-    "`PR`, `Check` ставит скрипт; вписанное руками значение ломает запись ответа в журнал",
-    "(например, если в `Output Drive File ID` вписан ID отчёта, шлюз откажет). Ссылку на отчёт даёт",
-    "поле `report` в маркере, а не поле карточки.",
-  ].join("\n");
-
-  const executorTech = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    return [
-      snapshotFact(repo, branch),
-      "",
-      "СТАРТ (до первой правки):",
-    "СИСТЕМНЫЕ ИНСТРУКЦИИ И ОГРАНИЧЕНИЯ ПОЛЬЗОВАТЕЛЯ ВЫШЕ этого техблока и карточки.",
-    "Если ветка закреплена за сессией — оставайся на ней, не создавай и не переключай ветки.",
-    "Не удаляй, не сбрасывай и не добавляй в коммит чужие незакоммиченные изменения.",
-    "Пустой merge-base в shallow checkout не доказывает разрыв; сначала выясни историю.",
-    `  git fetch origin ${base}`,
-    `  git merge-base HEAD origin/${base}`,
-    "  git status --short                  # перечисли чужие изменения, не уничтожай их",
-    "Исторические команды ниже — НЕ ВЫПОЛНЯТЬ в закреплённой сессии или грязном дереве:",
-    `  # git reset --hard origin/${base}`,
-    `  # git switch -c nar/<номер> origin/${base}`,
-    `  git diff --stat origin/${base}          # только чтение; расхождение нужно объяснить`,
-    "",
-    "ЗАПРЕЩЕНО: публиковать PR без общей истории с main, трогать пути вне Scope,",
-    "мержить в main в обход PR или нарушать закрепление ветки. Если безопасно продолжить",
-    "нельзя, объясни препятствие, не теряя изменений; пустой merge-base в shallow проверь отдельно.",
-    "РАЗРЕШЕНО: только своя зона из карточки, PR в main через `gh`, squash-мерж.",
-    "",
-    CARD_FIELDS_RULE,
-  ].join("\n");
-  };
-
-  const auditorTech = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    return [
-    snapshotFact(repo, branch),
-    "",
-    "ТЫ НЕ ПИШЕШЬ: ни ветки, ни коммита, ни пуша, ни PR. Твой выход — отчёт.",
-    `ИСТОЧНИК ИСТИНЫ — origin/${branch || C.branch || "main"}, а не твоё рабочее дерево и не ветка сессии:`,
-    `  git fetch origin ${branch || C.branch || "main"}`,
-    `  git log --oneline -5 origin/${branch || C.branch || "main"}`,
-    `  git show origin/${branch || C.branch || "main"}:<путь>          # файл из базовой ветки, без checkout`,
-    `Проверяемая работа — это PR, слитый в ${base}:`,
-    "  gh pr view <номер> --json state,mergeCommit",
-    "  gh pr diff <номер>",
-    "Свою ветку как эталон не используй: она может быть снимком без части файлов.",
-    "",
-    CARD_FIELDS_RULE,
-  ].join("\n");
-  };
-
-  const COORDINATOR_TECH = [
-    "Git и репозиторий тебе не нужны: ты не читаешь код и не запускаешь команды.",
-    "Твои инструменты — Notion (Миссии, Запросы, Роли) и Drive (логи передач).",
-    "В «Ролях» ты только читаешь: Статус и Agent URL ставит Мастер.",
-    "Регламент уже пришёл в этом промпте блоком === CF_REGULATION ===: роли, зоны, цикл и правила",
-    "решения там. Не открывай страницу регламента и не листай её блоки — это лишние вызовы,",
-    "после которых из контекста вытесняется формат твоего ответа.",
-    "Формат финальной строки — в самом конце этого промпта, после всех правил. Не восстанавливай",
-    "его по памяти, не ищи в Notion, Drive и других проектах: если строки не видно, сдай отчёт",
-    "текстом и скажи, что маркер не виден, — транспорт напомнит сам.",
-    "ТЗ миссии читай по делу (цель, оракул, инварианты, форма отчёта), а не целиком блоками по 4:",
-    "объёмное чтение вытесняет из контекста карточку и формат ответа.",
-    "Ветки, коммиты и PR — не твоя зона: за них отвечают Executor и Auditor.",
-    "Очередь — твоя: нарезка, Кому, Sequence, число Ready и выдача работы — новой карточкой или Draft → Ready. Оракул фазы — не твоя:",
-    "команду проверки и инварианты менять нельзя; для изменения нужны вопрос ADR в Notion и фактическое решение приёмки или Мастера. Существующие proposed-файлы сохраняются.",
-    "",
-    "ФАЙЛ ЗАДАНИЯ (Payload Drive File ID) обычно не нужен:",
-    "карточка и есть задание — её Намерение, Инварианты, Оракул и Scope уходят исполнителю.",
-    "Заводить файл стоит, только если текст не влезает в поля карточки:",
-    "создай его в Arena/payloads и впиши id в «Payload Drive File ID» — скрипт",
-    "прочитает файл и приложит его к заданию исполнителя.",
-    "Точный id важен: нечитаемый файл останавливает выдачу. Корень один — Arena,",
-    "в корень Диска не писать. Раскладка и правила — docs/agents/drive.md.",
-  ].join("\n");
-
-  /**
-   * Приёмке не нужны git, PR и мерж: её выход — вердикт, а не правка.
-   * Без собственного блока она получила бы исполнительский и пошла бы
-   * «доделывать» то, что должна была вернуть.
-   */
-  const REVIEWER_TECH = [
-    "Репозиторий и «Запросы» тебе не подчиняются: ты не правишь ни код, ни карточки.",
-    "Читать можно всё: карточку миссии («Итог», «Замечания», «Круг»), принятые карточки, документы репозитория.",
-    "В отдельной приёмке миссии твой выход — CF_REVIEW_RESULT: verdict accept, rework или master.",
-    "Новые рабочие карточки Reviewer не выдаются. Если карточка была отправлена до обновления, заверши её как отдельный ход: отчёт заканчивается CF_AGENT_RESULT с dispatch_id и run_id.",
-    "Если оракул карточки требует CF_REVIEW_RESULT, добавь его в отчёт с теми же dispatch_id и run_id; сам по себе он миссию не закрывает.",
-    "Нет нужного маркера — хода не было: цикл ждёт ответ, потом напомнит и встанет.",
-  ].join("\n");
-
-  const TECH_BY_FN = {
-    Executor: (repo, branch) => executorTech(repo, branch),
-    Auditor: (repo, branch) => auditorTech(repo, branch),
-    Coordinator: COORDINATOR_TECH,
-    Reviewer: REVIEWER_TECH,
-  };
-
-  /**
-   * Полный блок для роли, собранный из контекста цели выдачи: репозиторий и
-   * базовая ветка, в которой работает эта карточка, а не глобальный C.repo.
-   * Неизвестная функция трактуется как Executor: забыть поле «Функция»
-   * безопаснее в сторону «проверь ветку», чем в сторону «делай что хочешь».
-   */
-  function technicalInfo(role, ctx = {}) {
-    const repo = ctx.repo || C.repo || "";
-    const branch = ctx.branch || C.branch || "main";
-    const builder = TECH_BY_FN[role.fn] || TECH_BY_FN.Executor;
-    const body = typeof builder === "function" ? builder(repo, branch) : builder;
-    let text = [techHeader(role), "", body, "", TECH_CLOSE].join("\n");
-    if (branch !== "main") text = text.replace(/\bmain\b/g, branch);
-    if (C.driveFolder) text = text.replace(/Arena\/payloads/g, `Arena/${C.driveFolder}/payloads`)
-      .replace("Раскладка и правила — docs/agents/drive.md.", `Папка текущего проекта — Arena/${C.driveFolder}.`);
-    if (C.projectName && C.projectName !== "Relay")
-      text = text.replace("которые в " + (C.branch || "main") + " уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;\nчисло растёт с каждой миссией).", "которые в базовой ветке уже есть.");
-    return text;
+  /** Классификация отказа доставки/страницы для журнала попытки. */
+  function classifyArenaFailure(text) {
+    const t = String(text || "").toLowerCase();
+    if (/captcha|recaptcha|security verification|подтвердите, что вы человек/.test(t)) return "captcha";
+    if (/sign in|log in|unauthorized|\b401\b|authentication|войдите|авторизац/.test(t)) return "auth";
+    if (/agent[^\n]{0,24}(unavailable|not found)|агент[^\n]{0,24}недоступ/.test(t)) return "agent_unavailable";
+    if (/rate limit|too many requests|\b429\b|слишком много запросов/.test(t)) return "rate_limit";
+    if (/something went wrong|please try again|попробуйте ещё|что-то пошло не так/.test(t)) return "arena_generic_error";
+    if (/send[^\n]{0,24}(disabled|недоступ)|кнопка[^\n]{0,24}неактив/.test(t)) return "send_disabled";
+    if (/не нашёл поле|поле ввода|editor|contenteditable/.test(t)) return "editor_not_found";
+    if (/network|failed to fetch|timeout|timed out|сеть|тайм-аут|не удалось загрузить/.test(t)) return "network";
+    if (/budget|лимит|превышен/.test(t)) return "budget_exceeded";
+    return "unknown";
   }
 
+  /** Записать исход доставки в журнал попытки (профиль уже сохранён в expect). */
+  function journalDelivery(expect, outcome, errorClass = "") {
+    if (!expect || !expect.prompt) return;
+    recordPromptAttempt(expect.prompt, {
+      kind: expect.kind, ref: expect.ref, role: expect.roleName,
+      attempt: (Number(expect.tries) || 0) + 1, outcome, errorClass,
+    });
+  }
 
-
-
-
+  /**
+   * Скомпилировать запрос или поставить локальную паузу с причиной.
+   * Ошибка компиляции не отправляется в Arena. Возвращает envelope или null.
+   */
+  function compileOrPause(request, label) {
+    const result = PromptCompiler.compile(request);
+    if (result.ok) return result;
+    pause(
+      `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
+        "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+      { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
+    );
+    return null;
+  }
 
   // ───────────────────────────── промпты ─────────────────────────────
-  /** Правило поведения зависит от функции: аудитору и координатору мерж не положен. */
-  function roleRule(role) {
-    if (role.fn === "Auditor") {
-      return [
-        "Ты ничего не меняешь в репозитории: находки идут в отчёт, чинит исполнитель.",
-        "Новые проверки и пробы добавлять можно и нужно; ослаблять существующие — нельзя.",
-      ].join(" ");
-    }
-    if (role.fn === "Coordinator") {
-      return "Ты принимаешь решения в Notion; код, ветки и PR — не твоя зона. Нарезка, порядок, Кому, Sequence и число Ready — твои.";
-    }
-    if (role.fn === "Reviewer") {
-      return [
-        "Ты ничего не меняешь: ни в репозитории, ни в карточках — ни «на минутку», ни «чтобы стало зелёным».",
-        "Твой выход — вердикт: accept или rework с проверяемыми замечаниями, а на вопросы агентов — решение или master.",
-        "Вопрос агента ты закрываешь вместо Мастера; зовёшь Мастера только там, где без него физически нельзя.",
-        "Чинит исполнитель, разбирает замечания карточками Координатор: чужая работа остаётся чужой.",
-      ].join(" ");
-    }
-    return [
-      "Не меняй чужие зоны: чужая правка — не твоя работа, даже если она кажется мелкой.",
-      "Мерж PR делаешь сам: `gh pr merge --squash`.",
-      "Оракул — смоуки, эталон, контракты, существующие типы — ослаблять нельзя.",
-    ].join(" ");
-  }
+  // Тонкие адаптеры к PromptCompiler. Вызывающие места передают факты, а не
+  // собранный текст; состав/порядок/маркер/бюджет проверяет компилятор.
 
-  // Текст краткого регламента живёт в C.regulationDigest и вшивается сборкой из
-  // docs/regulation-digest.md (см. regulation-oracle.mjs). Если его нет — промпт
-  // остаётся со ссылкой: усечённый или выдуманный регламент хуже ссылки.
-  const digestBlock = () => {
-    const text = typeof C.regulationDigest === "string" ? C.regulationDigest.trim() : "";
-    if (!text) return [];
-    return [
-      "",
-      "КРАТКИЙ РЕГЛАМЕНТ — действует в этом ходе, читать страницу для него не нужно.",
-      "Полная версия по ссылке выше — справочник для деталей; при расхождении верна полная.",
-      "=== CF_REGULATION ===",
-      text,
-      "=== /CF_REGULATION ===",
-    ];
-  };
-
-  function roleContext(role) {
-    return [
-      `Ты — ${role.name}.`,
-      role.zone ? `Твоя зона записи: ${role.zone}.` : "",
-      role.gate ? `Гейт: ${role.gate}.` : "",
-      `Регламент (полная версия): ${C.pageUrl}`,
-      ...digestBlock(),
-      "",
-      roleRule(role),
-      workRules(role),
-    ].filter(Boolean).join("\n");
-  }
-
-  /**
-   * Дисциплина хода: зоны, решения, вопросы.
-   *
-   * 24.10 Kernel на середине NAR-1.12 выставил опрос «May I expand the write
-   * zone?»: в техблоке стояла зона `src/core/`, а Scope карточки разрешал ещё
-   * пробу и `package.json`. Тогда это вылечили запретом вопросов вовсе — и
-   * получили обратную беду: важный вопрос стало некуда задать, он уходил
-   * строкой в отчёт и терялся. 25.10 (фаза 2) так потерялись оба.
-   *
-   * Теперь вопрос — поле маркера с обязательным вариантом по умолчанию:
-   * транспорт пишет его в базу «Вопросы», работа идёт дальше, ответ приходит
-   * на следующем ходе. Вопрос перестал быть остановкой и перестал теряться.
-   */
-  function workRules(role) {
-    return [
-      "КАК РЕШАТЬ",
-      `Зона записи${role && role.zone ? ` (${role.zone})` : ""} — рамка по умолчанию; Scope карточки расширяет её на этот ход. На этот ход карточка главнее общей рамки.`,
-      "Неоднозначность решаешь сам: минимальное изменение, «Допущение: …» строкой в отчёт. Изменение контракта предложи через question (ADR) и до фактического решения приёмки оставь контракт как есть; новый ADR-файл в репозитории нужен, только если его требует ТЗ.",
-      'Вопрос задаётся только полем question в маркере: {"text":"…","options":["A","B"],"default":"A","hours":24}. Вариант по умолчанию обязателен — по нему ты работаешь сразу, не дожидаясь ответа. Вопрос уходит приёмке сразу, как только записан: ответ придёт строкой в следующем промпте, обычно в том же ходе цикла. Больше одного вопроса за ход не задавай.',
-      "Вопросы и предложения попадают в одну базу «Обратная связь» в Notion. Если есть материал, добавь в question необязательное поле url с полной HTTP(S)-ссылкой: она сохранится в поле «Материал».",
-      "Вопрос уместен, только если ответ меняет то, что будет построено, и ни ТЗ, ни карточка его не дают. Порядок, формулировки, оформление — решай сам.",
-      "Новые предложения веди в Notion через question: начинай text с «ADR:», изложи суть, контекст, доказательства, три варианта и последствия целиком (до 12000 знаков); default — «оставить как есть». Запись попадёт в «Обратную связь», полный текст сохраняется в теле. Сам default или срок не заменяет решения приёмки. Новый файл ADR в GitHub не обязателен, если ТЗ не требует его отдельно.",
-      "Для уже существующих файлов: предложение (ADR `proposed` в docs/decisions) — это тоже вопрос, и оно не работает без второго шага: в том же ходе задай question со ссылкой на файл, тремя вариантами и default = «оставить как есть». Иначе решение лежит в репозитории, где Мастер его не увидит. Ответ придёт строкой в следующем промпте — тогда и меняй статус: `accepted` или `rejected`, с датой. Оставлять `proposed` после ответа нельзя: это выглядит как нерешённый вопрос.",
-      "Статус решения не должен замораживаться тестом: оракул, который требует `Статус: proposed`, защищает открытый вопрос от ответа. Проверка вправе требовать только допустимый статус, а не конкретный.",
-      "Опрос в чате, «May I…», просьба разрешения — не вопрос, а остановка хода: работа не сдаётся, карточка висит в Running. Не делай так.",
-      "Файлы для показа не открывай: путь к файлу назови текстом в отчёте — Мастер откроет сам, если нужно.",
-    ].join("\n");
-  }
-
-  /** Порядок работы для того, кто пишет код: коммит, пуш, PR, мерж. `ctx` — цель выдачи (репозиторий и базовая ветка). */
-  function executorOrder(task, runId, ctx = {}) {
-    const branch = ctx.branch || (typeof C !== "undefined" && C.branch) || "main";
-    return [
-      "ПОРЯДОК (с учётом системных ограничений и прямого запроса пользователя)",
-      "Порядок ниже не разрешает сброс дерева, смену закреплённой ветки или публикацию чужих изменений.",
-      "1. Ветка: git switch -c nar/<номер задачи> — только если создание ветки явно разрешено; иначе оставайся на закреплённой.",
-      "2. Коммит, если разрешён: git add -A && git commit -m \"<номер>: <суть>\" — ТОЛЬКО когда в дереве нет чужих изменений; иначе укажи свои пути явно.",
-      "3. Пуш — только в разрешённую ветку и если он действительно запрошен.",
-      "4. PR и мерж — только если разрешены; проверяй, что PR содержит лишь твою работу:",
-      `   gh pr create --fill --base ${branch}   # если PR уже есть — пропусти`,
-      "   # Исторический пример НЕ выполнять: gh pr merge --squash --delete-branch",
-      "   Вместо него — gh pr merge <номер> --squash без удаления закреплённой ветки; номер указывай явно.",
-      "   Своих изменений в репозитории нет (отчёт, аудит-справка, запись решения): PR не открывай,",
-      "   пустой PR ради галочки не нужен — в маркере поставь \"pr\": null.",
-      "5. Проверка: команда, код возврата, путь к отчёту. Если задание молчит в чём-то,",
-      "   реши сам обратимо и запиши неясно / решил / откат в docs/decisions/<миссия>.md, если Scope разрешает этот путь; иначе — в отчёте.",
-      "   Изменение контракта предложи через question в Notion; до фактического решения контракт остаётся прежним.",
-      "6. Последней строкой ответа — ровно один маркер:",
-      `CF_AGENT_RESULT {"dispatch_id":"${task.id}","run_id":"${runId}","status":"submitted","check":0,"report":"<путь>","pr":"https://github.com/${ctx.repo || "<owner/repo>"}/pull/<номер>","merged":true}`,
-      "Для PR укажи полный URL из репозитория этой карточки (не голый номер); транспорт сверит",
-      `repo и base branch ${branch}. Если PR не нужен — поставь ` + '`"pr": null`' + `; ` +
-        "`check` описывает только результат проверки, а неизвестный PR блокируется отдельно.",
-      "`pr` и `merged: true` обязательны, если PR слит: без них «слит» не отличить от",
-      "«закрыт без мержа» — снаружи оба случая выглядят одинаково. Работа без PR —",
-      "`\"pr\": null`: пропущенный `pr` считается забытым, а не отсутствующим.",
-    ];
-  }
-
-  /** Порядок для аудитора: ничего не менять, только проверить и вынести вердикт. `ctx` — цель проверки (репозиторий и базовая ветка). */
-  function auditorOrder(task, runId, ctx = {}) {
-    const branch = ctx.branch || (typeof C !== "undefined" && C.branch) || "main";
-    return [
-      "ПОРЯДОК (каждый ход, обязательно)",
-      "1. В репозитории ничего не менять: ни ветки, ни коммита, ни пуша, ни PR.",
-      `2. Собрать факты из origin/${branch} и из слитого PR (команды — в блоке выше).`,
-      "3. Вердикт: pass или fail, каждое утверждение — с командой, которой его проверить.",
-      "4. Находки — в отчёт; чинить их будет исполнитель, а не ты.",
-      "5. Последней строкой ответа — ровно один маркер:",
-      `CF_AGENT_RESULT {"dispatch_id":"${task.id}","run_id":"${runId}","status":"submitted","check":0,"report":"<путь к отчёту>"}`,
-      "`check: 0` — вердикт pass, любой другой код — fail. PR и merged для аудита не нужны:",
-      "отдельного PR у тебя нет: мержа здесь не ждут, ответ записывается сразу.",
-    ];
-  }
-
-  /** Карточка Reviewer — отчёт о своей работе, не отдельное закрытие миссии. */
-  function reviewerOrder(task, runId, missionId = "") {
-    const missionField = missionId ? `"mission_id":"${missionId}",` : "";
-    return [
-      "ПОРЯДОК ДЛЯ КАРТОЧКИ ПРИЁМКИ",
-      "1. Проверь задание по его оракулу. Код, ветки и PR не меняй.",
-      "2. Дай полный отчёт с фактами; если оракул карточки требует вердикт, добавь в отчёт отдельную строку:",
-      `CF_REVIEW_RESULT {${missionField}"dispatch_id":"${task.id}","run_id":"${runId}","verdict":"accept|rework|master","remarks":"<проверяемые замечания или причина>"}`,
-      "В реальном вердикте выбери одно значение, а не шаблон; поля карточки и её оракул сохраняются.",
-      "3. Последней строкой ответа — маркер сдачи карточки (работа без PR):",
-      `CF_AGENT_RESULT {"dispatch_id":"${task.id}","run_id":"${runId}","status":"submitted","pr":null}`,
-      "Этот ход сдаёт карточку Координатору; отдельно назначенная приёмка решает судьбу всей миссии.",
-    ];
-  }
-
-  /**
-   * Текст задания.
-   *
-   * Отдельный файл-задание (Payload Drive File ID) не обязателен: карточка уже
-   * несёт Намерение, Инварианты, Оракул и Scope. Раньше без файла в чат уходило
-   * «(текст задания не найден — работай по карточке)»: агент читал это как сбой
-   * и шёл искать несуществующий текст, хотя задание было строкой выше.
-   */
+  /** Текст задания для журнала попытки: файл важнее карточки. */
   function assignmentBody(task, payload) {
     const body = String(payload || "").trim();
     if (body) return body;
     return [
       "Отдельного файла с текстом задания нет: карточка и есть задание.",
-      "Сделай ровно то, что описано выше в «ЦЕЛЬ И ГРАНИЦЫ»:",
-      "  • Намерение — что должно появиться;",
-      "  • Инварианты — что обязано остаться верным;",
-      "  • Оракул — команда, которой проверяют результат;",
-      "  • Scope — единственное место записи.",
-      "Если чего-то не хватает — реши сам, выбери обратимый вариант и запиши",
-      "три строки (неясно / решил / откат) в docs/decisions/<миссия>.md, если Scope разрешает этот путь; иначе — в отчёте.",
-      "Предложение изменить контракт отправь через question в Notion; до ответа контракт не меняется.",
+      "Сделай ровно то, что описано в «ЦЕЛЬ И ГРАНИЦЫ»: Намерение, Инварианты, Оракул, Scope.",
+      "Если чего-то не хватает — реши обратимо и запиши (неясно/решил/откат) в docs/decisions/<миссия>.md, если Scope разрешает; иначе в отчёт.",
     ].join("\n");
   }
 
-  /**
-   * Журнал попытки — файл в Arena/logs, который создаётся при выдаче хода.
-   *
-   * Раньше он создавался пустым, а в задании стояла строка «Лог попытки: …»:
-   * агент открывал пустой файл и не понимал, зачем он. Теперь туда сразу
-   * пишется само задание, а позже — ответ агента: файл читается как журнал
-   * одного хода, от выдачи до ответа.
-   */
+  /** Журнал попытки — файл в Arena/logs с заданием и маркером записи. */
   function taskLogEntry(task, role, payload, runId) {
     const marker = `<!-- CF_DISPATCH ${task.id}:${runId}:task -->`;
     return [
@@ -8607,44 +8757,31 @@
     ].join("\n");
   }
 
+  const taskFacts = (task, runId, payload) => ({
+    id: task.id, runId,
+    title: taskTitle(task),
+    intent: rt(task.properties["Намерение"]) || taskTitle(task),
+    invariants: rt(task.properties["Инварианты"]),
+    acceptance: rt(task.properties["Acceptance"]),
+    scope: rt(task.properties["Scope"]),
+    freedom: rt(task.properties["Свободно"]),
+    payload: String(payload || "").trim(),
+  });
+
+  /** Выдача рабочей карточки (Executor/Auditor/историческая Reviewer). */
   function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {
-    return [
-      technicalInfo(role, ctx),
-      "",
-      // Регламент идёт СРАЗУ после техблока: порядок и маркер обязаны остаться
-      // в конце промпта. Пока блок регламента (после D-023 — ~6 000 знаков)
-      // стоял последним, служебная строка оказывалась в середине, и агент её
-      // «не находил» (первый ход Координатора, 2026-11-03).
-      roleContext(role),
-      "",
-      `Задача ${taskTitle(task)} (dispatch ${task.id}, run ${runId}).`,
-      "",
-      "ЦЕЛЬ И ГРАНИЦЫ",
-      `Намерение: ${rt(task.properties["Намерение"]) || taskTitle(task)}`,
-      `Инварианты: ${rt(task.properties["Инварианты"]) || "не заданы — держи поведение неизменным"}`,
-      `Оракул (как принимают): ${rt(task.properties["Acceptance"]) || "не задан"}`,
-      `Свободно: ${rt(task.properties["Свободно"]) || "как решишь, если проходят инварианты"}`,
-      `Scope: ${rt(task.properties["Scope"]) || "не задан"}`,
-      "",
-      "ЗАДАНИЕ",
-      assignmentBody(task, payload),
-      "",
-      ...(role.fn === "Auditor"
-        ? auditorOrder(task, runId, ctx)
-        : role.fn === "Reviewer"
-          ? reviewerOrder(task, runId, missionId)
-          : executorOrder(task, runId, ctx)),
-    ].join("\n");
+    const envelope = compileOrPause({
+      kind: "dispatch",
+      role: promptRole(role),
+      target: promptTarget(ctx),
+      task: taskFacts(task, runId, payload),
+      mission: missionId ? { id: missionId } : undefined,
+      delivery: { tier: "full", attempt: 1 },
+    }, `dispatch ${task.id}`);
+    return envelope;
   }
 
-  /**
-   * Ссылка на журнал последнего ответа — только для Координатора.
-   *
-   * Мастер (49): Координатору важно видеть, что ответил тот, за кем был
-   * последний ход, иначе приёмка идёт по короткой строке «Ответ ... записан
-   * в лог». Исполнителю эта строка не нужна: ему выдали задание, а не чужой
-   * ответ (из executorPrompt она убрана в 1.4.16).
-   */
+  /** Ссылка на журнал последнего ответа — только для Координатора. */
   function answerLogLine(cards) {
     const at = (card) => card?.properties?.["Submitted At"]?.date?.start || "";
     const rows = (cards || [])
@@ -8659,67 +8796,23 @@
   }
 
   function coordinatorPrompt(
-    mission,
-    role,
-    queueSummary,
-    turnId,
-    note = "",
-    answerLine = "",
-    drafts = "",
-    ready = "",
-    rework = "",
-    openQuestions = "",
-    answers = "",
-    ctx = {},
+    mission, role, queueSummary, turnId, note = "", answerLine = "", drafts = "",
+    ready = "", rework = "", openQuestions = "", answers = "", ctx = {},
   ) {
-    return [
-      technicalInfo(role, ctx),
-      "",
-      roleContext(role),
-      "",
-      `Миссия: ${rt(mission.properties["Миссия"])}.`,
-      `Mission ID: ${mission.id} (UUID страницы миссии, скопируй точно в каждую карточку).`,
-      `ТЗ: ${mission.properties["ТЗ URL"]?.url || "не задано"}`,
-      `Очередь: ${queueSummary}`,
-      returnBlock(mission),
-      ready,
-      rework,
-      drafts,
-      answerLine,
-      openQuestions,
-      answers,
-      note ? `Комментарий: ${note}` : "",
-      "",
-      "ОЧЕРЕДЬ — ТВОЯ",
-      "Running в очереди — это работа, которая идёт прямо сейчас: его ставит транспорт на время хода и сам возвращает карточку в Ready, если хода по ней нет. Перевыдавать такую карточку не надо.",
-      "Движок ставит Running и Submitted; Accepted, Rework и Ready ставишь ты. Нарезка, порядок, Кому, Sequence, число Ready, выдача черновика (Draft → Ready), правка его полей и архив лишнего — твои действия. Код, ветки и PR — не твоя зона.",
-      "Мастер и Архитектор пишут только черновики: это твой задел, а не приказ — правь под оракул миссии и выдавай сам, не дожидаясь Мастера. В архив — только если черновик дублирует уже выданное.",
-      "Прежде чем заводить карточку, пролистай «Запросы» по номеру: карточка с этим номером уже есть (Draft, Ready, Rework — всё равно) — правь её и выдавай, второй такой же номер не создавай. Дубль без «Ответа» убери в архив. В «Миссию» пиши полное название для человека; для очереди обязателен точный Mission ID этой миссии — названия и похожие слова не являются привязкой.",
-      "Dependency: оставь пустым, если зависимостей нет; иначе перечисли UUID страниц карточек через запятую. Выдача проверит, что каждая из этой же миссии, Accepted и без Check=fail; порядок и устранение причин остаются за тобой. Не объявляй зависимость выполненной только по её названию.",
-      "Rework — не выдача и не приговор: разбираешь его ты, а не Мастер. (а) Нужна переделка — верни её в Ready и направь ход роли из карточки; следы прошлого ответа («Submitted At», «PR», «Run ID») снимет транспорт при разрешённой повторной выдаче. Особое правило для Check=fail: НЕ ставь Rework и Ready одним ответом. Оставь карточку в Rework как минимум до следующего снимка очереди ScriptCat и разбора Warden; затем отдельным следующим шагом реши, возвращать ли её в Ready. Если транспорт сообщает, что Rework не зафиксирован, не повторяй выдачу: исправь статус и дождись нового плана. Чистить поля коннектором не надо и не пытайся. (б) Карточка была сформулирована с ошибкой — перепиши её Намерение, Инварианты, Acceptance и Scope; это правка карточки, а не смена оракула миссии. (в) Работа уже сделана другими карточками — поставь Accepted с пометкой «остаток разбит на …» или убери её. Принятую (Accepted) обратно в Ready не возвращай. Держать Rework «на всякий случай» нельзя: он висит в очереди и мешает закрыть миссию.",
-      "Ready-карточку с меньшим Sequence не обходи молча. Выдаёшь не её — назови в ответе причину (ждёт решения Мастера, зависит от другой карточки, сформулирована неверно) и поправь ей Sequence или убери в Draft. Молчаливый обход выглядит как потерянная работа: карточка остаётся Ready и ждёт следующего круга.",
-      "Scope карточки обязан покрывать артефакты её Оракула: пробу, npm-скрипт и запись решения перечисляй в Scope прямо — иначе исполнитель встанет на границе зоны.",
-      "Если роль не может получить работу («Ждёт», пустой Agent URL, нет в «Ролях») — назначь в «Кому» активную роль или оставь Draft и назови, кого он ждёт. Статус роли и Agent URL — зона Мастера, не меняй их.",
-      "Роли Reviewer (Warden) обычные рабочие карточки не выдавай: аудит поручай независимому Auditor или подходящему Executor. Reviewer отдельно принимает миссию по next: done и отвечает на вопросы и предложения; оба канала сохраняются.",
-      "Проверки промежуточной карточки выбирай по её рискам и Scope, но выполни все проверки, прямо требуемые её Acceptance и ТЗ: не запускай повторно полный миссионный набор без требования или риска. Accepted означает обработку карточки, а не pass её проверки и не выполнение всей миссии; явно учитывай Check=fail и остатки.",
-      `Если ТЗ требует финальные проверки на одном SHA: после последней обязательной правки зафиксируй финальный ${ctx.branch || (typeof C !== "undefined" && C.branch) || "main"} SHA, выполни все требуемые команды и CI именно на нём, а отчёт/ссылки сохрани в Notion или Drive, когда это разрешено ТЗ. Отчётный коммит после проверок меняет SHA; если код или обязательный файл изменился, зафиксируй новый SHA и повтори требуемые проверки. Требование отчёта конкретной карточки не отменяется.`,
-      "Оракул миссии (ТЗ §2/§3) и инварианты миссии менять нельзя: другой смысл требует процесса ТЗ — предложения ADR через вопрос в Notion и фактического решения приёмки или Мастера в пределах его полномочий. Acceptance карточки — не оракул миссии: ошибочную формулировку ты исправляешь сам, но так, чтобы смысл проверки миссии не изменился.",
-      "Новые предложения ADR передавай через question в том же маркере: полная суть, ссылка на материал при наличии, три варианта, default = «оставить как есть». Они попадают в «Обратную связь»; по существу отвечает Reviewer, Мастер нужен только при физической необходимости. Старые файлы ADR proposed и их историю сохраняй, включая ссылку на файл в вопросе; не удаляй их до безопасного переноса и фактического рассмотрения. Только фактический ответ приёмки или Мастера разрешает исполнителю оформить существующий файл как `accepted`/`rejected` с датой. Сам default или истёкший срок не являются ответом и не разрешают менять оракул. Нерешённое предложение — долг, а не состояние: если оно висит, назови его в Итоге миссии.",
-      "",
-      "ХОД — один ответ:",
-      "1) Submitted → проверь по Acceptance, поставь Accepted или Rework (причина в «Ответ»).",
-      "2) В этом же ответе выдай работу: новая карточка (Намерение, Инварианты, Acceptance с командой-оракулом, Свободно, Scope, Repository = точный owner/repo цели, если поле есть в базе, Кому, Sequence, Миссия, Mission ID, Dependency, Dispatch State = Ready) или Draft → Ready. Repository — repo карточки, не репозиторий Coordinator; если старой базе поля нет, назначь роль, у которой в «Роли» явно указан нужный repo, и не пытайся записать несуществующее поле. Пустая очередь после хода — незаконченный ход. Скопируй Mission ID из промпта без изменений, в «Миссию» запиши название для человека.",
-      '3) Миссия выполнена → допиши «Итог» миссии (что сделано, чем проверено, какие долги остались) и поставь next = "done". Поле «Состояние» сам не ставь: «done» — это передача на приёмку, а не закрытие. Миссию закрывает роль с функцией Reviewer своим вердиктом; если она вернёт работу, замечания придут в плане следующего хода.',
-      "",
-      "next — имя роли той карточки, которую выдаёшь. Своё имя значит «ход снова мне»: это не ошибка, но работу надо выдать в этом же ответе.",
-      'Остановить цикл можно только одним способом: next = "blocked" и need = "<роль>" — когда работы для активных ролей нет вовсе. Rework, черновики и спорный Scope — твоя работа, а не повод. Остановка без need не принимается: транспорт вернёт ход тебе же. Вопрос — не остановка: он уходит приёмке сразу, она отвечает вместо Мастера, и ответ придёт тебе строкой в следующем плане. Иначе — работай дальше.',
-      "Вопрос или предложение приёмке задаётся полем question в маркере (формат — в «КАК РЕШАТЬ»): цикл при этом не останавливается.",
-      "",
-      "Последней строкой ответа:",
-      `CF_COORDINATOR_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
-      "Строку копируй целиком, подставляя только next: mission_id и turn_id — из этого промпта. Id прошлого хода выдумывать не надо — транспорт всё равно возьмёт свой.",
-      'Поле question необязательное и идёт в тот же JSON: {... "next":"Turn Runtime", "question":{"text":"…","options":["A","B"],"default":"A","hours":24}}',
-    ].filter(Boolean).join("\n");
+    const envelope = compileOrPause({
+      kind: "plan",
+      role: promptRole(role),
+      target: promptTarget(ctx),
+      mission: {
+        id: mission.id, name: rt(mission.properties["Миссия"]),
+        tzUrl: mission.properties["ТЗ URL"]?.url || "", round: missionRound(mission),
+        reworkLimit: C.reworkLimit, returned: returnBlock(mission),
+      },
+      turnId,
+      queue: { summary: queueSummary, ready, rework, draft: drafts, answerLine, openLine: openQuestions, answersLine: answers },
+      delivery: { tier: "full", attempt: 1 },
+    }, `plan ${mission.id}`);
+    return envelope;
   }
 
   // ───────────────────────────── ход исполнителя ─────────────────────────────
@@ -11587,23 +11680,15 @@
     // Вопросы к Мастеру и его ответы: ответы доставляются ровно один раз —
     // отметка ставится после того, как промпт действительно ушёл.
     const briefing = await questionBriefing(mission);
-    // Keep a purpose-built recovery prompt with the same turn identities and
-    // queue evidence; the full coordinator prompt can be rejected by Arena.
-    const fallbackText = [
-      `Продолжи ход Координатора по миссии ${mission.id}; turn_id ${turnId}.`,
-      `Миссия: ${mission.properties["Миссия"]?.title || mission.id}.`,
-      `ТЗ: ${mission.properties["ТЗ URL"]?.url || "не задано"}`,
-      `Текущий снимок очереди: ${summary}`,
-      readyLine(queue.ready),
-      reworkLine(queue.rework),
-      drafts,
-      answerLine,
-      briefing.openLine,
-      briefing.answersLine,
-      note ? `Комментарий: ${note}` : "",
-      "Разбери этот снимок и продолжи работу Coordinator: обработай Submitted/Rework и выдай следующий Ready/Draft по правилам миссии. Не оформляй это как задание исполнителю.",
-      `CF_COORDINATOR_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
-    ].filter(Boolean).join("\n");
+    // Recovery — скомпилированный профиль coordinator.recovery с теми же ID и
+    // снимком очереди; ручной склейки промпта здесь больше нет.
+    const recoveryEnvelope = PromptCompiler.compile({
+      kind: "plan", role: promptRole(role), mission: { id: mission.id, name: rt(mission.properties["Миссия"]) },
+      turnId,
+      queue: { summary, ready: readyLine(queue.ready), rework: reworkLine(queue.rework), draft: drafts, answerLine, openLine: briefing.openLine, answersLine: briefing.answersLine },
+      delivery: { tier: "recovery" },
+    });
+    const fallbackText = recoveryEnvelope.ok ? recoveryEnvelope.text : summary;
     const sent = await sendToRole(
       role,
       coordinatorPrompt(
@@ -11626,6 +11711,7 @@
         turnId,
         title: "план Координатора",
         fallbackText,
+        planContext: summary,
         // Снимок очереди на момент вопроса: по нему видно, устарел ли ответ.
         readyKey: readyKeyOf(queue.ready),
         runningIds: (queue.running || []).map((card) => card.id),
@@ -11681,49 +11767,18 @@
   }
 
   function reviewPrompt(mission, role, turnId, round, queue, accepted) {
-    const name = rt(mission.properties["Миссия"]) || "миссия";
-    const tz = mission.properties["ТЗ URL"]?.url || "не задано";
-    const result = rt(mission.properties["Итог"]).trim();
-    return [
-      technicalInfo(role),
-      "",
-      roleContext(role),
-      "",
-      `Миссия: ${name}`,
-      `ТЗ и оракул: ${tz}`,
-      `Круг: ${round} (доработок было ${round}, предел ${C.reworkLimit})`,
-      `Очередь: ${queue.summary}`,
-      "",
-      `ПРИНЯТЫЕ КАРТОЧКИ (${accepted.length}; краткий список, ответ и PR могут быть сокращены):`,
-      reviewCards(accepted),
-      "Открой карточки и полные ответы/журналы для проверки: Accepted — состояние карточки, не доказательство pass; Check=fail и остатки не скрывай.",
-      "",
-      result
-        ? `ИТОГ МИССИИ (как его записал Координатор):\n${result}`
-        : "ИТОГ МИССИИ: поле «Итог» пусто — это уже повод не принимать.",
-      "",
-      "ЧТО ОТ ТЕБЯ ТРЕБУЕТСЯ",
-      "Ты — приёмка миссии, а не исполнитель. Ничего не правь: ни карточки, ни код, ни документы. Смотри, выполнено ли то, о чём миссия, а не только «всё ли выдано».",
-      "Проверяй по оракулу из ТЗ: каждый его пункт должен закрываться командой или артефактом, а не фразой. Если команду нельзя запустить — это и есть замечание.",
-      "",
-      "Решай по существу:",
-      "1) Заявленное в «Итоге» совпадает с тем, что реально сделано карточками? Есть ли работа, которой нет в отчёте, и отчёт без работы?",
-      "2) Оракул закрыт целиком? Проверки не ослаблены, не подменены и не «зелёные по договорённости»?",
-      "3) Остались ли долги, обещанные «в следующий раз» без карточки и без записи в реестре?",
-      "Принимаешь — цикл останавливается. Возвращаешь — Координатор получает замечания и разбирает их карточками.",
-      "",
-      "ОТВЕТ — одной строкой в конце:",
-      `CF_REVIEW_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","verdict":"accept","summary":"<одна строка: на что опирался>"}`,
-      "или",
-      `CF_REVIEW_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","verdict":"rework","remarks":"1) <что не принято и чем это проверяется> 2) …"}`,
-      "или, если без Мастера решить нельзя (нужен новый агент, доступ, смена ТЗ или оракула):",
-      `CF_REVIEW_RESULT {"mission_id":"${mission.id}","turn_id":"${turnId}","verdict":"master","reason":"<чего именно не хватает>"}`,
-      "Замечания — по пунктам и проверяемо: «не соответствует», «нет команды», «долг без записи». Придирка без проверки вернётся тебе же на четвёртом круге.",
-      `Предел доработок: ${C.reworkLimit}. Следующий возврат не запускает работу, а будит Мастера — возвращай то, без чего миссию нельзя считать сделанной, а не то, что можно доделать следующим ТЗ.`,
-      "verdict master — не «мне не нравится»: это остановка цикла и вызов Мастера. Только когда без него физически нельзя.",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    return compileOrPause({
+      kind: "review",
+      role: promptRole(role),
+      mission: {
+        id: mission.id, name: rt(mission.properties["Миссия"]) || "миссия",
+        tzUrl: mission.properties["ТЗ URL"]?.url || "", round,
+        reworkLimit: C.reworkLimit, result: rt(mission.properties["Итог"]).trim(),
+      },
+      turnId,
+      queue: { summary: queue.summary, accepted: reviewCards(accepted), acceptedCount: accepted.length },
+      delivery: { tier: "full", attempt: 1 },
+    }, `review ${mission.id}`);
   }
 
   /** Передать миссию на приёмку. Возвращает true: ход уже не у Координатора. */
@@ -11992,41 +12047,21 @@
 
   /** Промпт приёмке: ответить на вопрос агента по существу или позвать Мастера. */
   function answerPrompt(mission, role, item, turnId) {
-    const name = rt(mission.properties["Миссия"]) || "миссия";
-    const tz = mission.properties["ТЗ URL"]?.url || "не задано";
-    return [
-      technicalInfo(role),
-      "",
-      roleContext(role),
-      "",
-      `Миссия: ${name}`,
-      `ТЗ и оракул: ${tz}`,
-      `Вопрос задал: ${item.role || "агент"}${item.card ? ` · карточка «${item.card}»` : ""}`,
-      item.pageUrl ? `Страница вопроса в Notion: ${item.pageUrl}` : "",
-      "",
-      "ВОПРОС",
-      item.fullText,
-      item.url && !String(item.fullText || "").includes(item.url) ? `Материал: ${item.url}` : "",
-      "",
-      item.options.length ? `Варианты, которые предложил агент: ${item.options.join(" · ")}` : "",
-      `Вариант по умолчанию (по нему работа идёт прямо сейчас): ${item.fallback}`,
-      "",
-      "ЧТО ОТ ТЕБЯ ТРЕБУЕТСЯ",
-      "Ты — приёмка миссии и на вопросы агентов отвечаешь вместо Мастера. Решай по существу: что правильнее для миссии и её оракула, а не что проще согласовать.",
-      "Ответ увидят исполнитель и Координатор на следующем ходе — пиши решение, а не рассуждение: что делать, где граница, по какому признаку считать сделанным.",
-      "Твой ответ записывается в «Ответ» этой строки, статус становится «Решено», и на следующем ходе он уезжает агентам строкой «Ответы на вопросы». Поэтому ответ должен быть самодостаточным: агент увидит его без твоего чата.",
-      "Если вопрос про новое предложение в Notion (ADR:), читай полный материал страницы и решай по существу; одного срока или default недостаточно.",
-      "Если вопрос про предложение (`docs/decisions/*.md`, статус `proposed`) — отвечай решением по существу: принять, отклонить или явно оставить как есть (отклонить изменение), и что именно сделать. Статус файла меняет исполнитель карточкой, не ты.",
-      "Ничего не правь: ни карточки, ни код, ни документы. Твой выход — ответ или вызов Мастера.",
-      "Мастера зовёшь только тогда, когда без него физически нельзя: нужен новый агент в Arena, доступ или решение, для которого по ТЗ необходимы полномочия Мастера. По ADR решай в пределах делегированных полномочий; сам оракул или файлы не меняй. «Так спокойнее» и «пусть подтвердит» — не повод.",
-      "",
-      "ОТВЕТ — одной строкой в конце, ровно один маркер:",
-      `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"answer","answer":"<решение: что делать и по какому признаку считать сделанным>"}`,
-      "или, если без Мастера физически нельзя:",
-      `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"master","reason":"<чего именно не хватает: роль, доступ, решение по ТЗ>"}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    return compileOrPause({
+      kind: "answer",
+      role: promptRole(role),
+      mission: { id: mission.id, name: rt(mission.properties["Миссия"]) || "миссия", tzUrl: mission.properties["ТЗ URL"]?.url || "" },
+      turnId, // тот же turn_id; после masterEscalated новый не создаётся
+      question: {
+        id: item.id, turnId,
+        text: item.text, fullText: item.fullText || item.text,
+        options: Array.isArray(item.options) ? item.options : [],
+        fallback: item.fallback, sourceUrl: item.pageUrl || item.url || "",
+        role: item.role || "", card: item.card || "",
+        masterEscalated: Boolean(item.masterEscalated),
+      },
+      delivery: { tier: "full", attempt: 1 },
+    }, `answer ${item.id}`);
   }
 
   /** Проверяем настоящий Git blob текста, а не один формальный маркер SHA. */
@@ -12506,6 +12541,156 @@
     return true;
   }
 
+  // ───────────────────────── эфемерные пилоты SYN-P1 ─────────────────────────
+  // Пилот — разовый прогон публичного брифа на отдельном Arena-агенте, URL
+  // которого предоставляет Мастер вручную. Создание/клонирование агентов НЕ
+  // реализовано (отдельное ТЗ). Состояние пилота живёт в собственном namespace
+  // (K.pilots / K.pilotWait / K.pilotTranscript) и никогда не трогает
+  // K.pending / K.expect командного транспорта.
+
+  const PILOT_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 часа до вызова Мастера
+  const PILOT_FORBIDDEN = [
+    /CF_[A-Z]+_RESULT/, /\bCF_[A-Z_]+\b/, /notion/i, /cortex/i,
+    /REGULATION/, /WARDEN/i, /DECISIONS/, /synapse-cortex/i,
+  ];
+  const pilotBriefClean = (brief) => {
+    const text = String(brief || "");
+    return text.trim().length > 0 && !PILOT_FORBIDDEN.some((re) => re.test(text));
+  };
+  const pilotVariant = (brief) => {
+    const m = String(brief || "").trim().match(/^(?:бриф\s+)?([ABC])\b/i);
+    return m ? m[1].toUpperCase() : "";
+  };
+
+  const listPilots = () => {
+    const raw = GM_getValue(K.pilots, []);
+    return Array.isArray(raw) ? raw : [];
+  };
+  const savePilots = (list) => GM_setValue(K.pilots, list.slice(-50));
+
+  /**
+   * Регистрация пилотного агента. URL даёт Мастер; автосоздания нет.
+   * Идемпотентно по URL: повторная регистрация возвращает тот же id.
+   * Изоляция: бриф только публичный (A/B/C), без внутренних токенов; URL не
+   * должен совпадать с боевой ролью команды; startSha — 40 hex.
+   */
+  function registerPilotAgent({ url, brief, startSha, isolation = "" } = {}) {
+    const clean = String(url || "").trim();
+    if (!/^https:\/\//i.test(clean)) return { ok: false, error: "pilot URL должен быть https" };
+    let host = ""; let path = "";
+    try { const u = new URL(clean); host = u.host; path = u.pathname; } catch { return { ok: false, error: "pilot URL не разбирается" }; }
+    if (!/arena|e2b|app/i.test(host)) return { ok: false, error: "pilot URL не похож на страницу Arena-агента" };
+    if (!/^[0-9a-f]{40}$/i.test(String(startSha || ""))) return { ok: false, error: "startSha должен быть 40-hex SHA коммита synapse" };
+    if (!pilotBriefClean(brief)) return { ok: false, error: "бриф содержит внутренние токены (CF_/Notion/cortex/REGULATION/WARDEN/DECISIONS) или пуст" };
+    const variant = pilotVariant(brief);
+    if (!["A", "B", "C"].includes(variant)) return { ok: false, error: "бриф должен быть помечен вариантом A, B или C" };
+    if (!String(isolation || "").trim()) return { ok: false, error: "нужно подтверждение изоляции от Мастера (isolation)" };
+    // Не боевая роль: сверяем с кешем ролей и с known team-путями.
+    const roles = GM_getValue(K.rolesCache, []);
+    const roleList = Array.isArray(roles) ? roles : (roles?.rows || []);
+    if (roleList.some((r) => norm(r.url) === norm(clean))) {
+      return { ok: false, error: "pilot URL совпадает с боевой ролью команды — изоляция нарушена" };
+    }
+    const existing = listPilots().find((p) => norm(p.url) === norm(clean));
+    if (existing) return { ok: true, id: existing.id, reused: true };
+    const id = uid();
+    savePilots([...listPilots(), {
+      id, url: clean, host, path, variant, startSha: String(startSha).toLowerCase(),
+      briefHash: PromptCompiler.hash(String(brief)), brief: String(brief),
+      isolation: String(isolation), registeredAt: nowIso(), status: "registered",
+    }]);
+    return { ok: true, id, reused: false };
+  }
+
+  const getPilot = (id) => listPilots().find((p) => p.id === id) || null;
+
+  /** Поставить пилот в очередь отправки (отдельный namespace) и перейти на URL. */
+  function sendToEphemeralAgent(id) {
+    const pilot = getPilot(id);
+    if (!pilot) return { ok: false, error: "пилот не зарегистрирован" };
+    const envelope = PromptCompiler.compile({
+      kind: "pilot", role: { fn: "pilot", name: `pilot-${pilot.variant}` },
+      pilot: { brief: pilot.brief, repo: "Creative36711/synapse", startSha: pilot.startSha },
+      delivery: { tier: "full" },
+    });
+    if (!envelope.ok) return { ok: false, error: envelope.error.message };
+    GM_setValue(K.pilotWait + id, {
+      id, url: pilot.url, text: envelope.text, prompt: envelope,
+      at: Date.now(), sentAt: 0, watermark: "", seen: [], status: "queued",
+    });
+    savePilots(listPilots().map((p) => (p.id === id ? { ...p, status: "queued" } : p)));
+    log(`Пилот ${pilot.variant} (${id.slice(0, 8)}) поставлен в очередь; перехожу на ${pilot.url}.`, true, { ntfy: "quiet", title: "Relay: пилот SYN-P1" });
+    location.assign(pilot.url);
+    return { ok: true, id };
+  }
+
+  const pilotOnPage = (wait) => {
+    try { return new URL(wait.url, location.href).pathname === location.pathname; } catch { return false; }
+  };
+
+  /**
+   * Тик пилота: вызывается ДО consumePending. Возвращает true, если ход занят
+   * пилотом. Завершение — по фактам (idle + финальный отчёт), не по маркеру.
+   */
+  async function consumePilot() {
+    const waits = listPilots()
+      .map((p) => GM_getValue(K.pilotWait + p.id, null))
+      .filter((w) => w && w.status !== "done");
+    if (!waits.length) return false;
+    const wait = waits.find(pilotOnPage) || null;
+    if (!wait) return false; // пилот ждёт своей страницы; командный ход не блокируем
+    const pilot = getPilot(wait.id);
+
+    if (Date.now() - Number(wait.at || 0) > PILOT_TIMEOUT_MS) {
+      GM_setValue(K.pilotWait + wait.id, { ...wait, status: "timeout" });
+      pause(`Пилот ${pilot?.variant || ""} не завершился за 4 часа. Сырой транскрипт сохранён; нужен Мастер.`, { kind: "pilot-timeout", ref: wait.id });
+      return true;
+    }
+
+    // Ещё не отправляли: вставляем бриф и отправляем (page-scoped механика).
+    if (!wait.sentAt) {
+      const busy = await busySettled();
+      if (busy) return true;
+      const { editor } = await ensureComposer();
+      if (!editor) return true;
+      if (composerText(editor)) clearComposer(editor);
+      if (!writePrompt(editor, wait.text)) return true;
+      const watermark = lastMessageId();
+      const seen = messages().map(nodeId).slice(-40);
+      const delivery = await deliver(editor, wait.text);
+      if (delivery.captcha) { captchaPause(); return true; }
+      if (!delivery.ok) { log(`Пилот: отправка не прошла (${delivery.reason}).`, true); return true; }
+      GM_setValue(K.pilotWait + wait.id, { ...wait, sentAt: Date.now(), watermark: delivery.msgId || watermark, seen, status: "running" });
+      savePilots(listPilots().map((p) => (p.id === wait.id ? { ...p, status: "running" } : p)));
+      log(`Пилот ${pilot?.variant || ""}: бриф отправлен, жду финальный отчёт (маркер не требуется).`);
+      return true;
+    }
+
+    // Отправлено: читаем транскрипт после водяного знака.
+    const replies = messagesAfter(wait.watermark || "");
+    const last = replies.at(-1);
+    if (!last) return true;
+    if (!last.ended) return true; // ещё пишет
+    const busy = await busySettled();
+    if (busy) return true;
+    const transcript = replies.map((m) => m.text).join("\n\n");
+    // Сохраняем сырой транскрипт (без интерпретации маркеров).
+    GM_setValue(K.pilotTranscript + wait.id, { at: nowIso(), text: transcript, parts: replies.length });
+    const questions = replies.filter((m) => /\?\s*$/.test(String(m.text || "").trim()) || /вопрос к мастеру/i.test(m.text || ""));
+    if (questions.length) {
+      log(`Пилот ${pilot?.variant || ""} задал вопрос Мастеру: «${tail(questions.at(-1).text, 140)}».`, true, { ntfy: "quiet", title: "Relay: вопрос пилота" });
+    }
+    // Финальный отчёт: idle + содержательный текст без служебных маркеров команды.
+    const hasReport = transcript.replace(/\s+/g, " ").trim().length > 200;
+    if (hasReport && !busy) {
+      GM_setValue(K.pilotWait + wait.id, { ...wait, status: "done", doneAt: Date.now() });
+      savePilots(listPilots().map((p) => (p.id === wait.id ? { ...p, status: "done", doneAt: nowIso() } : p)));
+      log(`Пилот ${pilot?.variant || ""} завершён по фактам: финальный отчёт получен (${transcript.length} символов). Сырой транскрипт сохранён.`, true, { ntfy: "quiet", title: "Relay: пилот завершён" });
+      return true;
+    }
+    return true;
+  }
+
   // ───────────────────────────── цикл ─────────────────────────────
   let busy = false;
   /** Сколько раз подряд шаг снимали с блокировки по тишине. */
@@ -12796,6 +12981,9 @@
         ghostAfterUpdate = null;
         await releaseUndelivered(gone, "обновление скрипта: задание не уходило");
       }
+      // Эфемерные пилоты SYN-P1 читаются до командного транспорта и живут в
+      // отдельном namespace; на странице команды consumePilot возвращает false.
+      if (await consumePilot()) return;
       if (await consumePending(fromToggle)) return;
       // Фантом старой версии снят, повторять нечего: без нажатия не начинаем ход.
       if (revived === "dropped" && !auto && !fromToggle) return;

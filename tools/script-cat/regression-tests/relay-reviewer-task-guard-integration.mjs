@@ -3,6 +3,7 @@
 // отправленные карточки остаются отдельными работающими путями.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { promptShim } from '../tests/helpers/prompt-shim.mjs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 function cut(a, b) {
@@ -253,7 +254,7 @@ function makeConsumer(expect, pending, owners = [warden]) {
       clearComposer, sleep, writePrompt, lastMessageId, messages, nodeId, deliver, isDispatchAssignment,
       dispatchDeliveryNtfy, dbg, setTimeout, tick} = env;
     let pendingNoticeAt = 0, insertFail = {at: 0, count: 0};
-    ${consume}\nreturn consumePending;`);
+    ${promptShim}\n${consume}\nreturn consumePending;`);
   return { consumePending: make(env), storage, calls };
 }
 const pending = { roleId: warden.id, roleName: warden.name, text: 'текст карточки', at: Date.now() };

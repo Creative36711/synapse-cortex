@@ -20,57 +20,17 @@
    * «ответь одной последней строкой» буквально, а в журнал попал только маркер).
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
-    // Формат маркера зависит от вида хода: их четыре, и путать их нельзя —
-    // напоминание не должно просить у приёмки маркер исполнителя.
-    let line;
-    if (expect.kind === "answer") {
-      line = `CF_ANSWER_RESULT {"question_id":"${expect.ref}","turn_id":"${expect.turnId || ""}","verdict":"answer","answer":"<решение>"}`;
-    } else if (expect.kind === "plan") {
-      line = `CF_COORDINATOR_RESULT {"mission_id":"${expect.missionId || expect.ref}","turn_id":"${expect.turnId || ""}","status":"completed","next":"<роль|done>"}`;
-    } else if (expect.kind === "review") {
-      line = `CF_REVIEW_RESULT {"mission_id":"${expect.missionId || expect.ref}","turn_id":"${expect.turnId || ""}","verdict":"accept|rework","remarks":"<пункты замечаний>"}`;
-    } else if (role.fn === "Reviewer" && markerName === "CF_REVIEW_RESULT") {
-      line = `CF_REVIEW_RESULT {"mission_id":"${expect.missionId || ""}","dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","verdict":"accept|rework|master","remarks":"<причина или замечания>"}`;
-    } else if (role.fn === "Reviewer") {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","pr":null}`;
-    } else if (role.fn === "Auditor") {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь к отчёту>"}`;
-    } else {
-      line = `CF_AGENT_RESULT {"dispatch_id":"${expect.ref}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь>","pr":<номер PR|null>,"merged":true}`;
-    }
-    const about = expect.title ? ` по «${expect.title}»` : "";
-    const variants = [
-      [
-        `ТЕХНИЧЕСКОЕ НАПОМИНАНИЕ (${attempt} из ${C.markerReminders}; это не задание и не новый ход).`,
-        `Твой предыдущий ответ${about} пришёл без обязательного маркера ${markerName}.`,
-        "Без него нельзя понять, закончена работа или нет, поэтому ответ не засчитан.",
-      ],
-      [
-        `НАПОМИНАНИЕ О ФОРМАТЕ (${attempt} из ${C.markerReminders}; повторять работу не нужно).`,
-        `В ответе${about} не нашлось последней строки с ${markerName}.`,
-        "Остальное в чате на месте — не хватает только служебной строки.",
-      ],
-    ];
-    // Маркер вместо отчёта. Просить «одну последнюю строку» нельзя: агент
-    // присылает ровно её, отчёт остаётся в чате, а журнал хода пустеет.
-    const thin = [
-      `ОТЧЁТ НЕ ЗАПИСАН (${attempt} из ${C.markerReminders}; это не задание и не новый ход).`,
-      `В последнем ответе${about} пришла только служебная строка ${markerName}, без отчёта.`,
-      "Маркер без фактов не считается ответом: по нему нельзя принять работу.",
-    ];
-    return [
-      ...(why === "thin" ? thin : variants[(attempt - 1) % variants.length]),
-      "Не повторяй уже сделанное и не жди Мастера — это ошибка формата, а не работы.",
-      why === "thin"
-        ? "Пришли ответ ещё раз целиком: что изменил, что показали команды, какие числа получились — и последней строкой маркер."
-        : "Пришли ответ ещё раз целиком и последней строкой добавь маркер: одним маркером вместо отчёта отвечать нельзя.",
-      "",
-      roleContext(role),
-      "",
-      "ФОРМАТ ОТВЕТА — последняя строка, ровно одна:",
-      line,
-      "Строка должна быть последней, без блока кода и без текста после неё.",
-    ].filter(Boolean).join("\n");
+    const ctx = {
+      kind: "reminder",
+      role: promptRole(role),
+      turnId: expect.turnId || "",
+      reminder: { markerName, attempt, max: C.markerReminders, why },
+      delivery: { tier: "full", attempt },
+    };
+    if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
+    if (expect.kind === "plan" || expect.kind === "review") ctx.mission = { id: expect.missionId || expect.ref };
+    if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId };
+    return compileOrPause(ctx, `reminder ${expect.kind}`);
   }
 
   /**
@@ -155,35 +115,20 @@
    * выдачи и формат маркера. Всё остальное агент берёт из карточки.
    */
   function minimalPrompt(expect) {
-    // Coordinator plan is not a dispatch: its ref is the mission page, not a
-    // task card. Preserve a compact queue snapshot and the Coordinator marker.
     if (expect.kind === "plan") {
-      const missionId = String(expect.missionId || expect.ref || "");
-      const turnId = String(expect.turnId || "");
-      return expect.fallbackText || [
-        `Продолжи ход Координатора по миссии ${missionId}; turn_id ${turnId}.`,
-        expect.url || (missionId ? `https://app.notion.com/p/${missionId.replace(/-/g, "")}` : ""),
-        expect.planContext || "Прочитай очередь миссии и продолжи планирование по её актуальному состоянию.",
-        "Обработай Submitted/Rework и выдай следующий Ready/Draft согласно правилам Coordinator. Не создавай исполнительскую задачу вместо плана.",
-        `Последней строкой: CF_COORDINATOR_RESULT {"mission_id":"${missionId}","turn_id":"${turnId}","status":"completed","next":"<роль|done>"}`,
-      ].filter(Boolean).join("\n");
+      return compileOrPause({
+        kind: "plan", role: { fn: "Coordinator", name: expect.roleName || "Coordinator" },
+        mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
+        queue: { summary: expect.planContext || "Прочитай очередь миссии и продолжи планирование." },
+        delivery: { tier: "recovery", attempt: (Number(expect.arenaResend) || 0) + 1 },
+      }, `recovery ${expect.ref}`);
     }
-    const id = String(expect.ref || "");
-    const url = expect.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
-    return [
-      `Задание ${expect.title || id} (dispatch ${id}, run ${expect.runId || ""}).`,
-      "Полный текст Arena не приняла ошибкой. Прочитай задание сам — оно в карточке:",
-      url || `(карточка Notion ${id})`,
-      "Поля карточки — Намерение, Инварианты, Оракул (Acceptance), Scope — и есть задание.",
-      expect.roleFn === "Reviewer"
-        ? "Проверь оракул и дай отчёт. Код, ветки и PR не меняй. Если карточка требует CF_REVIEW_RESULT, включи в него dispatch_id и run_id этой выдачи."
-        : "Работай только в своей зоне, PR мержи сам (`gh pr merge --squash`), оракул не ослабляй.",
-      "Последней строкой ответа — ровно один маркер сдачи карточки:",
-      expect.roleFn === "Reviewer"
-        ? `CF_AGENT_RESULT {"dispatch_id":"${id}","run_id":"${expect.runId || ""}","status":"submitted","pr":null}`
-        : `CF_AGENT_RESULT {"dispatch_id":"${id}","run_id":"${expect.runId || ""}","status":"submitted","check":0,"report":"<путь>","pr":<номер PR>,"merged":true}`,
-      'Работа без PR — `"pr": null`.',
-    ].join("\n");
+    return compileOrPause({
+      kind: "retry", profileId: "delivery.compact",
+      role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
+      task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
+      delivery: { tier: "compact", attempt: (Number(expect.arenaResend) || 0) + 1 },
+    }, `retry ${expect.ref}`);
   }
 
   /**
@@ -202,7 +147,9 @@
     if (Date.now() - Number(expect.sentAt || 0) > C.arenaRetryMs) return false;
     const done = Number(expect.arenaResend) || 0;
     if (done >= C.arenaResendMax) return false;
-    const text = minimalPrompt(expect);
+    const envelope = minimalPrompt(expect);
+    if (!envelope) return false; // компиляция не прошла — пауза уже поставлена
+    const text = envelope.text;
     GM_setValue(K.deadSend, (alert && alert.messageId) || "");
     GM_setValue(K.pending, {
       roleId: expect.roleId,
@@ -215,6 +162,7 @@
     GM_setValue(K.expect, {
       ...expect,
       text,
+      prompt: envelope,
       sentAt: null,
       verified: false,
       undelivered: true,
@@ -339,6 +287,7 @@
       // нажал «Продолжить»); вторая подряд — пауза с честной причиной.
       const eaten = latestUserMessageAlert();
       if (eaten && expect.sentAt) {
+        journalDelivery(expect, "arena_generic_error", classifyArenaFailure(eaten.text));
         if (retryRejectedHandoff(expect, eaten, `Arena ответила «${eaten.text}»`)) {
           // Отправляем прямо здесь, а не «следующим тиком»: шаг уже выполняется,
           // и отложенный тик был бы молча проглочен сторожем блокировки.

@@ -1,4 +1,4 @@
-/** Relay ScriptCat Drive gateway 1.6. Deploy as a web app executing as the owner. */
+/** Relay ScriptCat Drive gateway 1.7. Deploy as a web app executing as the owner. */
 const CF_KEY_PROPERTY = "CF_GATEWAY_KEY";
 const CF_PROJECTS_PROPERTY = "CF_GATEWAY_PROJECTS_V1";
 const CF_SETUP_PROJECT_ID = "CF_SETUP_PROJECT_ID";
@@ -6,6 +6,9 @@ const CF_SETUP_PROJECT_FOLDER = "CF_SETUP_PROJECT_FOLDER";
 const CF_ARENA_FOLDER_NAME = "Arena";
 const CF_LOGS_FOLDER_NAME = "logs";
 const CF_PAYLOADS_FOLDER_NAME = "payloads";
+const CF_ARTIFACTS_FOLDER_NAME = "artifacts";
+const CF_ARTIFACT_MAX_BYTES = 262144;
+const CF_ARTIFACT_MIME = { md: "text/markdown", txt: "text/plain", json: "application/json", csv: "text/csv" };
 // Optional explicit compatibility settings; never assume a previous project's folder.
 const CF_LEGACY_LOG_FOLDER_NAME_PROPERTY = "CF_LEGACY_LOG_FOLDER_NAME";
 const CF_LEGACY_RUN_LOG_FOLDER_ID_PROPERTY = "CF_LEGACY_RUN_LOG_FOLDER_ID";
@@ -39,7 +42,7 @@ function setupProjectGateway() {
     const name = String(props.getProperty(CF_SETUP_PROJECT_FOLDER) || "").trim().toLowerCase();
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))
       throw new Error("CF_SETUP_PROJECT_ID должен быть UUID профиля ScriptCat.");
-    if (!/^[a-z0-9][a-z0-9._-]{0,50}$/.test(name) || name.includes("..") || ["logs", "payloads"].includes(name))
+    if (!/^[a-z0-9][a-z0-9._-]{0,50}$/.test(name) || name.includes("..") || ["logs", "payloads", "artifacts"].includes(name))
       throw new Error("CF_SETUP_PROJECT_FOLDER должен быть безопасным отдельным именем папки.");
     const registry = projectRegistry_();
     if (Object.prototype.hasOwnProperty.call(registry, id)) throw new Error("Проект уже зарегистрирован; ключ и папки не меняются.");
@@ -54,9 +57,10 @@ function setupProjectGateway() {
     const folder = arena.createFolder(name);
     const logs = folder.createFolder(CF_LOGS_FOLDER_NAME);
     const payloads = folder.createFolder(CF_PAYLOADS_FOLDER_NAME);
+    const artifacts = folder.createFolder(CF_ARTIFACTS_FOLDER_NAME);
     const key = Utilities.getUuid().replace(/-/g, "") + Utilities.getUuid().replace(/-/g, "");
     registry[id] = { id: id, name: name, key: key, arenaId: arena.getId(),
-      folderId: folder.getId(), logsId: logs.getId(), payloadsId: payloads.getId() };
+      folderId: folder.getId(), logsId: logs.getId(), payloadsId: payloads.getId(), artifactsId: artifacts.getId() };
     props.setProperty(CF_PROJECTS_PROPERTY, JSON.stringify(registry));
     console.log("Project " + id + " · Arena/" + name + " · key (keep private): " + key);
     return { projectId: id, folder: name, key: key };
@@ -71,25 +75,55 @@ function projectRegistry_() {
   return value;
 }
 
+/**
+ * Идемпотентная миграция 1.6 → 1.7: у проекта появляется artifactsId без смены
+ * ключа и без переноса logs/payloads. Существующая единственная папка artifacts
+ * усыновляется; несколько одноимённых — ошибка (разбирает человек); нет — создаётся.
+ */
+function migrateProjectArtifacts_(project) {
+  if (project.artifactsId) {
+    try {
+      const existing = DriveApp.getFolderById(project.artifactsId);
+      const folder = DriveApp.getFolderById(project.folderId);
+      if (existing.getName() === CF_ARTIFACTS_FOLDER_NAME && isDirectChildOf_(existing, folder.getId())) return existing;
+    } catch (e) { /* папка исчезла — создаём заново ниже */ }
+  }
+  const folder = DriveApp.getFolderById(project.folderId);
+  const matches = folder.getFoldersByName(CF_ARTIFACTS_FOLDER_NAME);
+  const found = [];
+  while (matches.hasNext()) found.push(matches.next());
+  if (found.length > 1) throw new Error("В проекте несколько папок artifacts: сначала разберите их вручную.");
+  const artifacts = found.length === 1 ? found[0] : folder.createFolder(CF_ARTIFACTS_FOLDER_NAME);
+  const registry = projectRegistry_();
+  if (registry[project.id]) {
+    registry[project.id].artifactsId = artifacts.getId();
+    PropertiesService.getScriptProperties().setProperty(CF_PROJECTS_PROPERTY, JSON.stringify(registry));
+    project.artifactsId = artifacts.getId();
+  }
+  return artifacts;
+}
+
 function projectLayout_(project) {
   const arena = DriveApp.getFolderById(project.arenaId);
   const folder = DriveApp.getFolderById(project.folderId);
   const logs = DriveApp.getFolderById(project.logsId);
   const payloads = DriveApp.getFolderById(project.payloadsId);
+  const artifacts = migrateProjectArtifacts_(project);
   const root = DriveApp.getRootFolder();
   if (arena.getName() !== CF_ARENA_FOLDER_NAME || !isDirectChildOf_(arena, root.getId()) ||
       folder.getName() !== project.name || !isDirectChildOf_(folder, arena.getId()) ||
       logs.getName() !== CF_LOGS_FOLDER_NAME || !isDirectChildOf_(logs, folder.getId()) ||
-      payloads.getName() !== CF_PAYLOADS_FOLDER_NAME || !isDirectChildOf_(payloads, folder.getId()))
+      payloads.getName() !== CF_PAYLOADS_FOLDER_NAME || !isDirectChildOf_(payloads, folder.getId()) ||
+      artifacts.getName() !== CF_ARTIFACTS_FOLDER_NAME || !isDirectChildOf_(artifacts, folder.getId()))
     throw new Error("Папки проекта перемещены или переименованы: проверьте расположение и настройки шлюза.");
-  return { arena: arena, project: folder, logs: logs, payloads: payloads };
+  return { arena: arena, project: folder, logs: logs, payloads: payloads, artifacts: artifacts };
 }
 
 function doGet() {
   return json_({
     ok: true,
     service: "Relay Drive gateway",
-    version: "1.6",
+    version: "1.7",
   });
 }
 
@@ -112,11 +146,12 @@ function doPost(e) {
         return json_({
           ok: true,
           service: "Relay Drive gateway",
-          version: "1.6",
+          version: "1.7",
           ...(project ? { projectScoped: true, projectId: project.id, project: folderInfo_(layout.project) } : {}),
           arena: folderInfo_(layout.arena),
           logs: folderInfo_(layout.logs),
           payloads: folderInfo_(layout.payloads),
+          artifacts: folderInfo_(layout.artifacts),
         });
       });
     }
@@ -165,6 +200,36 @@ function doPost(e) {
       });
     }
 
+    if (request.action === "saveArtifact") {
+      const name = safeArtifactName_(request.name);
+      const content = String(request.content || "");
+      if (content.length > CF_ARTIFACT_MAX_BYTES) throw new Error("Артефакт превышает допустимый размер.");
+      const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+      const mime = CF_ARTIFACT_MIME[ext];
+      if (!mime) throw new Error("Артефакт только md/txt/json/csv.");
+      return withScriptLock_(function () {
+        const artifacts = layoutForRequest().artifacts;
+        const matches = artifacts.getFilesByName(name);
+        if (matches.hasNext()) {
+          const existing = matches.next();
+          verifyArtifactPlacement_(existing, artifacts);
+          return json_({ ok: true, fileId: existing.getId(), name: name, duplicate: true });
+        }
+        const file = artifacts.createFile(name, content, mime);
+        verifyArtifactPlacement_(file, artifacts);
+        return json_({ ok: true, fileId: file.getId(), name: name, duplicate: false });
+      });
+    }
+
+    if (request.action === "verifyArtifactPlacement") {
+      const fileId = String(request.fileId || "");
+      if (!/^[A-Za-z0-9_-]{10,}$/.test(fileId)) throw new Error("Некорректный Drive file ID.");
+      const file = DriveApp.getFileById(fileId);
+      const artifacts = layoutForRequest().artifacts;
+      verifyArtifactPlacement_(file, artifacts);
+      return json_({ ok: true, fileId: file.getId(), name: file.getName(), placed: true });
+    }
+
     const id = String(request.fileId || "");
     if (!/^[A-Za-z0-9_-]{10,}$/.test(id)) {
       throw new Error("Некорректный Drive file ID.");
@@ -175,11 +240,12 @@ function doPost(e) {
       const file = DriveApp.getFileById(id);
       if (project) {
         const layout = layoutForRequest();
-        if (!isDirectChildOf_(file, layout.logs.getId()) && !isDirectChildOf_(file, layout.payloads.getId()))
-          throw new Error("Чтение разрешено только из logs или payloads этого проекта.");
+        if (!isDirectChildOf_(file, layout.logs.getId()) && !isDirectChildOf_(file, layout.payloads.getId()) &&
+            !isDirectChildOf_(file, layout.artifacts.getId()))
+          throw new Error("Чтение разрешено только из logs, payloads или artifacts этого проекта.");
       }
       const mime = String(file.getMimeType() || "");
-      if (!mime.startsWith("text/")) {
+      if (!isReadableMime_(mime)) {
         throw new Error("Шлюз читает только текстовые файлы.");
       }
       return json_({
@@ -224,13 +290,14 @@ function withScriptLock_(operation) {
   }
 }
 
-/** Create the one owned root folder and its two gateway-managed children. */
+/** Create the one owned root folder and its gateway-managed children. */
 function ensureLayout_() {
   const root = DriveApp.getRootFolder();
   const arena = getFolderByName_(root, CF_ARENA_FOLDER_NAME) || root.createFolder(CF_ARENA_FOLDER_NAME);
   const logs = getFolderByName_(arena, CF_LOGS_FOLDER_NAME) || adoptLegacyLogs_(root, arena) || arena.createFolder(CF_LOGS_FOLDER_NAME);
   const payloads = getFolderByName_(arena, CF_PAYLOADS_FOLDER_NAME) || arena.createFolder(CF_PAYLOADS_FOLDER_NAME);
-  return { arena: arena, logs: logs, payloads: payloads };
+  const artifacts = getFolderByName_(arena, CF_ARTIFACTS_FOLDER_NAME) || arena.createFolder(CF_ARTIFACTS_FOLDER_NAME);
+  return { arena: arena, logs: logs, payloads: payloads, artifacts: artifacts };
 }
 
 /** Move and rename the v1.4 root folder only when Arena/logs does not exist. */
@@ -262,6 +329,29 @@ function safePayloadName_(value) {
   if (!name || name === "." || name === "..") name = "payload";
   if (!/\.md$/i.test(name)) name += ".md";
   return name;
+}
+
+/**
+ * Имя артефакта: <dispatch_id>_<run_id>__<slug>.<ext> либо
+ * manual__<project>__<slug>.<ext>. Только md/txt/json/csv, без путей.
+ */
+function safeArtifactName_(value) {
+  const name = String(value || "").trim();
+  const ok = /^(?:[0-9a-fA-F-]{36}_[0-9a-fA-F-]{36}|manual__[a-z0-9][a-z0-9._-]{0,50})__[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(md|txt|json|csv)$/.test(name);
+  if (!ok) throw new Error("Имя артефакта: <dispatch>_<run>__<slug>.<md|txt|json|csv> или manual__<project>__<slug>.<ext>.");
+  return name;
+}
+
+function isReadableMime_(mime) {
+  return mime.startsWith("text/") || mime === "application/json";
+}
+
+/** Артефакт обязан лежать прямым ребёнком artifacts; файл в корне/другой папке отклоняется. */
+function verifyArtifactPlacement_(file, artifacts) {
+  if (!isDirectChildOf_(file, artifacts.getId()))
+    throw new Error("Артефакт должен лежать прямо в папке artifacts этого проекта.");
+  if (!isReadableMime_(String(file.getMimeType() || "")))
+    throw new Error("Артефакт только текстовый (md/txt/json/csv).");
 }
 
 function isDirectChildOf_(file, folderId) {

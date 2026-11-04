@@ -91,14 +91,14 @@ failed = true;
 assert.deepEqual((await run(true)).map((r) => r.file), ['A.md']);
 assert.equal(deliveries.length, 1, 'при сбое GitHub сохранён прежний снимок');
 
-// Инварианты промпта: структурированный вопрос и разрешение по существу.
-has('ADR `proposed` в docs/decisions) — это тоже вопрос, и оно не работает без второго шага');
-has('тремя вариантами и default = «оставить как есть»');
-has('Оставлять `proposed` после ответа нельзя');
-has('Новые предложения ADR передавай через question в том же маркере');
-has('Старые файлы ADR proposed и их историю сохраняй');
-has('не удаляй их до безопасного переноса и фактического рассмотрения');
-has('Только фактический ответ приёмки или Мастера разрешает исполнителю');
-has('Нерешённое предложение — долг, а не состояние');
-has('оракул, который требует `Статус: proposed`, защищает открытый вопрос от ответа');
+// Инварианты ADR в декларативном промпте: вопрос по существу, default, proposed.
+const { PromptCompiler, planRequest, dispatchRequest } = await import('./helpers/prompt-env.mjs');
+const coord = PromptCompiler.compile(planRequest()).text;
+const exec = PromptCompiler.compile(dispatchRequest('Executor')).text;
+for (const t of [coord, exec]) {
+  assert.match(t, /question «ADR:»/, 'ADR только через question');
+  assert.match(t, /оставить как есть/, 'default = оставить как есть');
+  assert.match(t, /proposed/, 'proposed-файл не теряется');
+}
+assert.match(exec, /статус accepted\/rejected после ответа/, 'после ответа proposed не оставляют');
 console.log('relay-decisions-smoke: ok');

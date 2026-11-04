@@ -1,35 +1,26 @@
-// Реальные формируемые техблок и порядок Executor: опасные исторические
-// команды не должны становиться приказом вопреки ограничениям среды.
+// Git-безопасность в декларативном промпте: опасные исторические команды не
+// становятся приказом; чужие изменения и закреплённая ветка защищены.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { PromptCompiler, dispatchRequest } from '../tests/helpers/prompt-env.mjs';
 
-const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
-const techStart = src.indexOf('  const TECH_OPEN =');
-const techEnd = src.indexOf('  // ───────────────────────────── промпты', techStart);
-assert.ok(techStart > 0 && techEnd > techStart);
-const tech = new Function('C', `${src.slice(techStart, techEnd)}\nreturn technicalInfo;`)({ repo: 'example/relay-fixture' });
-const prompt = tech({ fn: 'Executor', name: 'Kernel' });
-const authority = prompt.indexOf('СИСТЕМНЫЕ ИНСТРУКЦИИ И ОГРАНИЧЕНИЯ ПОЛЬЗОВАТЕЛЯ ВЫШЕ');
-const historic = prompt.indexOf('Исторические команды ниже — НЕ ВЫПОЛНЯТЬ');
-const reset = prompt.indexOf('# git reset --hard origin/main');
-const switchBranch = prompt.indexOf('# git switch -c nar/');
-assert.ok(authority >= 0 && authority < historic && historic < reset && reset < switchBranch);
-assert.match(prompt, /ветка закреплена за сессией — оставайся на ней/);
-assert.match(prompt, /не добавляй в коммит чужие незакоммиченные изменения/);
-assert.match(prompt, /shallow checkout не доказывает разрыв/);
-assert.match(prompt, /is-shallow-repository/);
-assert.doesNotMatch(prompt, /^\s*git reset --hard origin\/main/m);
-assert.doesNotMatch(prompt, /^\s*git switch -c nar\//m);
+const prompt = PromptCompiler.compile(dispatchRequest('Executor', { role: { fn: 'Executor', name: 'Kernel', zone: 'game/**' } })).text;
 
-const start = src.indexOf('  function executorOrder(');
-const end = src.indexOf('  /** Порядок для аудитора', start);
-assert.ok(start > 0 && end > start);
-const order = new Function(`${src.slice(start, end)}\nreturn executorOrder;`)()({ id: 'task' }, 'run').join('\n');
-assert.match(order, /не разрешает сброс дерева, смену закреплённой ветки или публикацию чужих изменений/);
-assert.match(order, /ТОЛЬКО когда в дереве нет чужих изменений/);
-assert.match(order, /только в разрешённую ветку/);
-assert.match(order, /# Исторический пример НЕ выполнять: gh pr merge --squash --delete-branch/);
-assert.match(order, /gh pr merge <номер> --squash без удаления закреплённой ветки/);
-assert.match(order, /CF_AGENT_RESULT/);
+// Опасные команды не выдаются как исполняемые.
+assert.doesNotMatch(prompt, /^\s*git reset --hard origin\/main/m, 'reset --hard не приказ');
+assert.doesNotMatch(prompt, /^\s*git switch -c nar\//m, 'смена закреплённой ветки не приказ');
+assert.doesNotMatch(prompt, /--delete-branch/, 'закреплённая ветка не удаляется');
 
-console.log('OK: системные ограничения и чужие изменения выше устаревших git-примеров');
+// Защита чужих изменений и общей истории.
+assert.match(prompt, /чужое не трогай\/не сбрасывай/, 'чужие изменения защищены');
+assert.match(prompt, /Закреплённую ветку не меняй/, 'ветка сессии закреплена');
+assert.match(prompt, /merge-base HEAD origin\/main/, 'общая история проверяется');
+assert.match(prompt, /is-shallow-repository/, 'shallow не доказывает разрыв');
+assert.match(prompt, /Direct push в main запрещён/, 'прямой пуш в base запрещён');
+assert.match(prompt, /gh pr merge <N> --squash/, 'мерж командой без удаления ветки');
+assert.match(prompt, /CF_AGENT_RESULT/, 'маркер на месте');
+
+// Аудитор не получает мерж/сброс.
+const audit = PromptCompiler.compile(dispatchRequest('Auditor')).text;
+assert.doesNotMatch(audit, /gh pr merge|git reset --hard/);
+
+console.log('OK: git-безопасность — чужие изменения и закреплённая ветка защищены, опасные команды не приказ');

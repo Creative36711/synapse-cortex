@@ -18,6 +18,7 @@
 
 import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
+import { promptShim } from './helpers/prompt-shim.mjs';
 
 import { assertIndependentVersionSources, assertUserscriptVersionContract, readUserscriptVersionFields } from '../version-oracle.mjs';
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
@@ -87,11 +88,12 @@ assert.match(
   /if \(!expect && me\.fn !== "Reviewer"\) \{\s*\n\s*const item = answerPending\(\);/,
   'незавершённый ответ важнее нового хода',
 );
-assert.match(
-  src,
-  /if \(expect\.kind === "answer"\) \{\s*\n\s*line = `CF_ANSWER_RESULT/,
-  'напоминание о формате говорит на языке ответа',
-);
+{
+  const { PromptCompiler, reminderRequest, UUID } = await import('./helpers/prompt-env.mjs');
+  const rem = PromptCompiler.compile(reminderRequest('Reviewer', 'CF_ANSWER_RESULT')).text;
+  assert.match(rem, /CF_ANSWER_RESULT/, 'напоминание о формате говорит на языке ответа');
+  assert.ok(rem.includes(UUID.question), 'напоминание несёт question_id того же вопроса');
+}
 
 // ── 2. Остановки: Координатор — только с ролью, приёмка — только master ─────
 assert.match(
@@ -165,7 +167,8 @@ const api = new Function(
   'recordQuestionChange',
   'logThrottled',
   'withQuestionWriteLock', 'isUuid', 'retainRejectedResult',
-  `${block}
+  `${promptShim}
+${block}
    return { answerQueue, queueAnswer, dropAnswer, answerPending, answerPrompt, startAnswer, answerStep };`,
 )(
   { pageUrl: 'https://app.notion.com/p/Relay', reworkLimit: 3 },
@@ -284,18 +287,19 @@ const question = {
 {
   reset();
   const item = api.queueAnswer({ id: 'q-1' }, question, { roleName: 'Architect', card: 'NAR-5.1' });
-  const text = api.answerPrompt(mission, reviewer, item, 'turn-9');
+  const env = api.answerPrompt(mission, reviewer, item, 'turn-9');
+  const text = env.text;
   assert.match(text, /Миссия: NAR-5 · state-ui/, 'миссия в промпте');
-  assert.match(text, /ТЗ и оракул: https:\/\/github\.com\/example\/relay-fixture\/blob\/main\/docs\/agents\/tz-nar-5\.md/, 'оракул ссылкой');
+  assert.match(text, /ТЗ: https:\/\/github\.com\/example\/relay-fixture\/blob\/main\/docs\/agents\/tz-nar-5\.md/, 'оракул ссылкой');
   assert.match(text, /Вопрос задал: Architect · карточка «NAR-5\.1»/, 'кто и по какой карточке');
   assert.match(text, /0015-format-freeze\.md/, 'полный текст вопроса');
-  assert.match(text, /Варианты, которые предложил агент: Оставить как есть · Принять в NAR-5\.10/, 'варианты');
-  assert.match(text, /Вариант по умолчанию \(по нему работа идёт прямо сейчас\): Оставить как есть/, 'default назван');
-  assert.match(text, /отвечаешь вместо Мастера/, 'роль названа');
+  assert.match(text, /Варианты: Оставить как есть · Принять в NAR-5\.10/, 'варианты');
+  assert.match(text, /Вариант по умолчанию \(работа идёт по нему сейчас\): Оставить как есть/, 'default назван');
+  assert.match(text, /вместо Мастера/, 'роль названа');
   assert.match(text, /CF_ANSWER_RESULT \{"question_id":"q-1","turn_id":"turn-9","verdict":"answer","answer"/, 'маркер ответа');
   assert.match(text, /"verdict":"master","reason"/, 'маркер вызова Мастера');
-  assert.match(text, /Ничего не правь: ни карточки, ни код, ни документы/, 'приёмка не правит');
-  assert.match(text, /Ты — Warden/, 'контекст роли на месте');
+  assert.match(text, /ничего не правь/, 'приёмка не правит');
+  assert.match(text, /приёмка \(Reviewer\)/, 'контекст роли на месте');
 }
 
 // ── 7. Передача хода приёмке ───────────────────────────────────────────────

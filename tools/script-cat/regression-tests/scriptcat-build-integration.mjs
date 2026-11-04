@@ -10,7 +10,7 @@ const source = join(here, '..');
 const temp = mkdtempSync(join(tmpdir(), 'relay-build-probe-'));
 const run = (args) => spawnSync(process.execPath, args, { cwd: temp, encoding: 'utf8' });
 try {
-  for (const path of ['src', 'build.mjs', 'version-oracle.mjs', 'regulation-oracle.mjs', 'relay.user.js']) cpSync(join(source, path), join(temp, path), {recursive:true});
+  for (const path of ['src', 'build.mjs', 'version-oracle.mjs', 'regulation-oracle.mjs', 'coverage-oracle.mjs', 'contracts', 'relay.user.js']) cpSync(join(source, path), join(temp, path), {recursive:true});
   // Краткий регламент вшивается в бандл, поэтому источник и его версия нужны и здесь.
   for (const path of ['regulation-digest.md', 'REGULATION.md']) cpSync(join(source, '..', '..', 'docs', path), join(temp, 'docs', path), {recursive:true});
   let result = run(['build.mjs', '--check']); assert.equal(result.status, 0, result.stderr);

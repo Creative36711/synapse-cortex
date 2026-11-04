@@ -1,0 +1,172 @@
+  // ───────────────────────── блоки промптов ─────────────────────────
+  // Каждый блок — чистая функция ctx => текст. Блоки не читают DOM, Notion,
+  // GitHub, GM_* и часы: все факты приходят в ctx. Одинаковый ctx даёт
+  // одинаковый текст и хеш. ruleIds связывают блок с обязательными правилами
+  // регламента (contracts/agent-protocol.json); verbatim-поля не входят в overhead.
+  const PROMPT_BLOCKS = (() => {
+    const B = {};
+    const def = (id, spec) => { B[id] = { id, version: 1, audience: ["Executor", "Auditor", "Coordinator", "Reviewer"], ruleIds: [], verbatim: false, ...spec }; };
+    const line = (label, value) => (String(value || "").trim() ? `${label}: ${String(value).trim()}` : "");
+
+    def("identity.task", { ruleIds: [], render: (c) => [
+      `Карточка «${c.task?.title || c.task?.id}» · dispatch ${c.task?.id} · run ${c.task?.runId}` + (c.mission?.id ? ` · миссия ${c.mission.id}` : ""),
+      `Адресат: ${c.role?.name} (${c.role?.fn}).`,
+    ].join("\n") });
+
+    def("identity.mission", { render: (c) => [
+      `Миссия: ${c.mission?.name || c.mission?.id}.`,
+      `mission_id: ${c.mission?.id}`,
+      c.turnId ? `turn_id: ${c.turnId}` : "",
+      c.mission?.tzUrl ? `ТЗ: ${c.mission.tzUrl}` : "",
+      Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
+    ].filter(Boolean).join("\n") });
+
+    def("repo.target", { render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return [
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок Arena может быть без общей истории: пустой merge-base в shallow не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+      ].join("\n");
+    } });
+
+    def("repo.boundary", { ruleIds: ["R-REPO-BOUNDARY"], render: () =>
+      "D-022: пиши только в целевой repo. synapse (MIT) — роли ядра; cortex закрыт и ролям ядра не виден; ссылка на cortex в synapse — дефект." });
+
+    def("authority.core", { ruleIds: ["R-ZONES", "R-SECRETS"], render: (c) =>
+      `Зона (${c.role?.zone || "своя"}) — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай.` });
+
+    def("authority.executor", { ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
+      "Исполнитель: правишь зону+Scope, PR мержишь сам (gh pr merge <N> --squash). Чужая правка — карточкой владельцу." });
+
+    def("authority.auditor", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: () =>
+      "Аудитор: только чтение и проверка; ни ветки/коммита/пуша/PR. Находки — в отчёт, чинит исполнитель. Новые проверки можно, ослаблять нельзя." });
+
+    def("authority.coordinator", { ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
+      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
+
+    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
+      "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
+
+    def("git.executor", { ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return `GIT: fetch origin ${base}; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
+    } });
+
+    def("git.auditor", { ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      return `GIT read-only: истина — origin/${base}. fetch origin ${base}; log --oneline -5 origin/${base}; show origin/${base}:<путь>. Работа — PR в ${base}: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
+    } });
+
+    def("evidence.rule", { ruleIds: ["R-EVIDENCE"], render: () =>
+      "Доказательство: not run/тайм-аут/зелёный CI/мок ≠ pass; нужны команда, код возврата, артефакт, SHA. Визуал — сам открыл PNG и описал." });
+
+    def("task.intent", { verbatim: true, render: (c) => line("Намерение", c.task?.intent || c.task?.title) });
+    def("task.invariants", { verbatim: true, render: (c) => line("Инварианты", c.task?.invariants || "не заданы — держи поведение неизменным") });
+    def("task.acceptance", { verbatim: true, ruleIds: ["R-EVIDENCE"], render: (c) => line("Оракул (как принимают)", c.task?.acceptance || "не задан") });
+    def("task.scope", { verbatim: true, render: (c) => line("Scope", c.task?.scope || "не задан") });
+    def("task.freedom", { verbatim: true, render: (c) => line("Свободно", c.task?.freedom || "как решишь, если проходят инварианты") });
+    def("task.assignment", { verbatim: (c) => Boolean(String(c.task?.payload || "").trim()), render: (c) => {
+      const body = String(c.task?.payload || "").trim();
+      if (body) return `ЗАДАНИЕ\n${body}`;
+      return "ЗАДАНИЕ: карточка и есть задание (поля выше). Не хватает — реши обратимо, запиши (неясно/решил/откат) в docs/decisions если Scope разрешает, иначе в отчёт.";
+    } });
+
+    def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
+      'Вопрос — полем question в маркере {"text","options","default","hours"}; default обязателен (работа идёт по нему), ответ придёт строкой; ≤1 за ход. Опрос «можно?» в чате — остановка, не делай.' });
+
+    def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
+      "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
+
+    def("phases.bans", { ruleIds: ["R-PHASES"], render: () =>
+      "Фазы 0–4: без платежей/каталога/загрузки/аккаунтов до их фаз; без запуска кода пользователей; без доли/валюты/комиссии; без платной инфра без лимита; ядро не open source без OSI; без пустых сервисов." });
+
+    def("i18n.rule", { ruleIds: ["R-I18N"], audience: ["Executor"], render: () =>
+      "i18n: 8 локалей (en,ru,zh-Hans,ja,pt-BR,de,fr,ko); текст только в каталогах; диагностика код+параметры; локаль не меняет правил." });
+
+    def("card.fields", { ruleIds: ["R-CARD-FIELDS"], audience: ["Executor", "Auditor"], render: () =>
+      "Поля карточки (Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check) ставит скрипт; отчёт — поле report маркера." });
+
+    def("answers.delta", { verbatim: true, render: (c) => [c.queue?.answersLine, c.queue?.openLine, c.queue?.answerLine].filter(Boolean).join("\n") });
+    def("queue.snapshot", { verbatim: true, render: (c) => [
+      c.queue?.summary ? `Очередь: ${c.queue.summary}` : "",
+      c.queue?.ready, c.queue?.rework, c.queue?.draft,
+    ].filter(Boolean).join("\n") });
+    def("queue.drafts", { verbatim: true, render: (c) => c.queue?.draft || "" });
+
+    def("queue.coordinator", { ruleIds: ["R-QUEUE", "R-NO-REVIEWER-DISPATCH"], audience: ["Coordinator"], render: () =>
+      "Очередь: Running ставит транспорт и сам вернёт в Ready без хода — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID той же миссии, Accepted, без Check=fail. Rework: переделка — в Ready отдельным шагом; Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи молча. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто после хода — незаконченный ход. Выполнено — «Итог» + next:\"done\" (передача приёмке). Running в очереди — это работа, которая идёт прямо сейчас. Движок ставит Running и Submitted; Accepted, Rework и Ready ставишь ты." });
+
+    def("review.evidence", { verbatim: true, render: (c) => [
+      c.queue?.acceptedCount != null ? `Принятых карточек: ${c.queue.acceptedCount}.` : "",
+      c.queue?.accepted,
+      c.mission?.result ? `ИТОГ МИССИИ:\n${c.mission.result}` : "ИТОГ МИССИИ: поле «Итог» пусто — повод не принимать.",
+    ].filter(Boolean).join("\n") });
+    def("review.protocol", { ruleIds: ["R-EVIDENCE", "R-VERIFY-GITHUB"], audience: ["Reviewer"], render: () =>
+      "Смотри, выполнено ли то, о чём миссия, а не только «всё ли выдано». Каждый пункт оракула закрывай командой или артефактом; нельзя запустить команду — это замечание. Accepted — состояние карточки, не доказательство pass; Check=fail и остатки не скрывай. Заявленное в «Итоге» сверь с реально сделанным карточками." });
+
+    def("answer.question", { verbatim: true, render: (c) => [
+      c.question?.role ? `Вопрос задал: ${c.question.role}` + (c.question.card ? ` · карточка «${c.question.card}»` : "") : "",
+      "ВОПРОС",
+      c.question?.fullText || c.question?.text,
+      c.question?.options?.length ? `Варианты: ${c.question.options.join(" · ")}` : "",
+      c.question?.fallback ? `Вариант по умолчанию (работа идёт по нему сейчас): ${c.question.fallback}` : "",
+      c.question?.sourceUrl && !String(c.question?.fullText || "").includes(c.question.sourceUrl) ? `Материал: ${c.question.sourceUrl}` : "",
+    ].filter(Boolean).join("\n") });
+    def("answer.protocol", { ruleIds: ["R-QUESTIONS"], audience: ["Reviewer"], render: () =>
+      "Отвечай по существу: что делать, где граница, по какому признаку считать сделанным. Ответ самодостаточен — агент увидит его без твоего чата. По ADR решай в пределах делегированных полномочий, сам оракул/файлы не меняй. Мастера зови только когда без него физически нельзя (новый агент, доступ, решение по ТЗ)." });
+    def("answer.resume", { audience: ["Reviewer"], render: () =>
+      "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
+
+    const markerJson = (c, name) => {
+      if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
+      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
+      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
+      const auditor = c.role?.fn === "Auditor";
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
+    };
+    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => [
+      "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
+      markerJson(c, "CF_AGENT_RESULT"),
+    ].join("\n") });
+    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => [
+      "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
+      markerJson(c, "CF_COORDINATOR_RESULT"),
+    ].join("\n") });
+    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
+      c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
+      markerJson(c, "CF_REVIEW_RESULT"),
+    ].filter(Boolean).join("\n") });
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+      "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+      c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
+      markerJson(c, "CF_ANSWER_RESULT"),
+    ].filter(Boolean).join("\n") });
+
+    def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
+      const thin = c.reminder?.why === "thin";
+      return [
+        `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
+        thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.` : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
+        "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
+      ].join("\n");
+    } });
+
+    def("pilot.brief", { audience: ["pilot"], verbatim: true, render: (c) => c.pilot?.brief || "" });
+    def("pilot.stop", { audience: ["pilot"], render: () =>
+      "Финал — отчёт текстом: что сделано, как запущено, артефакты, журнал затруднений и допущения. Командные маркеры не используй." });
+    def("pilot.repo", { audience: ["pilot"], render: (c) =>
+      `Репо: ${c.pilot?.repo || "Creative36711/synapse"}@${c.pilot?.startSha || "main"}, read-only; запись только в локальный sandbox.` });
+
+    def("delivery.recovery", { render: () =>
+      "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
+    def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
+    def("drive.layout", { ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
+      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads, обычно не нужен; журнал попытки — logs; свободные результаты — artifacts." });
+    def("delivery.retry", { render: (c) => {
+      const id = String(c.task?.id || "");
+      const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
+      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.`;
+    } });
+
+    return B;
+  })();

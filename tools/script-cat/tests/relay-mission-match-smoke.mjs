@@ -3,9 +3,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
-assert.match(src, /второй такой же номер не создавай/, 'Координатор по-прежнему предупреждён о дубликатах');
-assert.match(src, /пиши полное название для человека/, 'читаемое название миссии остаётся в постановке');
-assert.match(src, /Mission ID этой миссии/, 'привязка очереди теперь по UUID');
+// Декларативный промпт Координатора сохраняет предупреждение о дубликатах.
+const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+const coordText = PromptCompiler.compile(planRequest()).text;
+assert.match(coordText, /Дубль номера правь, не создавай/, 'Координатор предупреждён о дубликатах');
+assert.match(src, /cardMissionId/, 'привязка очереди по UUID на месте');
 const cut = (a, b) => { const i = src.indexOf(a), j = src.indexOf(b, i + a.length); assert(i >= 0 && j > i, a); return src.slice(i, j); };
 const uuid = cut('  const isUuid = ', '  /**');
 const binding = cut('  const cardMissionId = ', '  // ───────────────────────────── сообщения чата');

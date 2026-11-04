@@ -288,6 +288,9 @@
         ghostAfterUpdate = null;
         await releaseUndelivered(gone, "обновление скрипта: задание не уходило");
       }
+      // Эфемерные пилоты SYN-P1 читаются до командного транспорта и живут в
+      // отдельном namespace; на странице команды consumePilot возвращает false.
+      if (await consumePilot()) return;
       if (await consumePending(fromToggle)) return;
       // Фантом старой версии снят, повторять нечего: без нажатия не начинаем ход.
       if (revived === "dropped" && !auto && !fromToggle) return;

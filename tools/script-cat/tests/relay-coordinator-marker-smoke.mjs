@@ -53,17 +53,12 @@ assert.ok(
   'подмена идёт до применения решения',
 );
 
-// ── 3. Промпт: строку не собирают по памяти ───────────────────────────────
-const promptFrom = src.indexOf('  function coordinatorPrompt(');
-const promptTo = src.indexOf('  // ───────────────────────────── ход исполнителя', promptFrom);
-const prompt = src.slice(promptFrom, promptTo);
-assert.match(prompt, /Строку копируй целиком, подставляя только next/, 'промпт просит копировать строку');
-assert.match(prompt, /mission_id и turn_id — из этого промпта/, 'сказано, откуда брать id');
-assert.match(
-  prompt,
-  /CF_COORDINATOR_RESULT \{"mission_id":"\$\{mission\.id\}","turn_id":"\$\{turnId\}",/,
-  'готовая строка с настоящим turn_id на месте',
-);
+// ── 3. Промпт: строку не собирают по памяти (декларативный компилятор) ─────
+const { PromptCompiler, planRequest, UUID } = await import('./helpers/prompt-env.mjs');
+const prompt = PromptCompiler.compile(planRequest()).text;
+assert.match(prompt, /mission_id и turn_id копируй из этого промпта/, 'сказано, откуда брать id');
+assert.ok(prompt.includes(UUID.mission) && prompt.includes(UUID.turn), 'готовая строка с настоящими ID');
+assert.match(prompt, /CF_COORDINATOR_RESULT \{"mission_id":"/, 'маркер Координатора в промпте');
 
 // ── 4. Решение всё равно проходит проверку роли и Ready ───────────────────
 assert.match(src, /const route = decisionRoute\(decision\.next, \{/, 'решение проверяется в decisionRoute');
