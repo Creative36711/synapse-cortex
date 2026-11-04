@@ -120,8 +120,23 @@
       budget: { overhead: 250 },
     });
 
+    // Provisioning: отдельный административный запрос, не миссия и не карточка.
+    def("admin.provision", {
+      audience: ["Coordinator", "Reviewer"], marker: "CF_AGENT_PROVISION_RESULT",
+      blocks: ["identity.provision", "authority.provision", "provision.candidates", "provision.policy", "marker.provision"],
+      requiredFacts: ["provision.requestId", "provision.candidates"],
+      forbidden: ["identity.task", "identity.mission", "mission.returned", "queue.snapshot", "queue.coordinator",
+        "answers.delta", "git.executor", "git.auditor", "task.intent", "task.invariants", "task.acceptance",
+        "task.scope", "task.freedom", "task.assignment", "review.evidence", "review.protocol", "answer.question",
+        "answer.protocol", "answer.resume", "drive.layout", "delivery.retry", "delivery.recovery", "delivery.tool_limit",
+        "reminder.marker", "pilot.brief", "pilot.stop", "pilot.repo", "pilot.continue",
+        "marker.agent", "marker.coordinator", "marker.review", "marker.answer"],
+      budget: { overhead: 1800 },
+    });
+
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
+      if (kind === "provision") return "admin.provision";
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";

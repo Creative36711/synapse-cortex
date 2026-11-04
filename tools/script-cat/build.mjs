@@ -17,7 +17,9 @@ const parts = [
   '16-arena-send.js', '17-arena-polls.js', '18-state-recovery.js', '19-pull-requests.js',
   'prompt-marker-registry.js', 'prompt-blocks.js', 'prompt-profiles.js', 'prompt-compiler.js',
   '20-technical-context.js', '21-prompts.js', '22-executor.js', '23-coordinator.js', '24-feedback.js',
-  '25-legacy-adr.js', '26-review.js', '27-review-answers.js', 'pilot-transport.js', '30-tool-limit.js', '28-cycle.js', '29-boot.js',
+  '25-legacy-adr.js', '26-review.js', '27-review-answers.js', 'pilot-transport.js', '30-tool-limit.js',
+  '31-provision-core.js', '32-provision-dom.js', '33-provision-flow.js', '34-provision-ui.js',
+  '28-cycle.js', '29-boot.js',
 ];
 const read = (name) => readFile(join(here, 'src', name), 'utf8');
 // Каталог docs ищем вверх от комплекта: так сборка работает и в репозитории,

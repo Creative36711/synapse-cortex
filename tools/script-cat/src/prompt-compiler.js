@@ -141,6 +141,8 @@
         const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_AGENT_PROVISION_RESULT") {
+        if (c.provision?.requestId && !eq(obj.request_id, c.provision.requestId)) return "request_id маркера не совпадает с ctx";
       }
       return null;
     }

@@ -26,3 +26,10 @@
 ## Проверка
 `npm run verify` и наборы `test:prompts`, `test:delivery`, `test:pilot`,
 `test:docs` должны быть зелёными до боевого запуска.
+
+## Provisioning Arena-агентов (1.10.0)
+1. В профиле ScriptCat включите provisioning только после согласия Мастера: задайте allowlist точных `owner/repo`, bootstrap-пробник без внутренних токенов, лимиты и режим manual/auto. По умолчанию всё выключено.
+2. В Notion «Роли» добавьте аддитивные поля: Agent Admin (checkbox), Agent State (select), Agent Job ID, Agent Created At, Previous Agent URL. Отметьте `Agent Admin=true` у действующего Coordinator или Reviewer.
+3. Для создания тестовой роли поставьте `Agent State=запрошен`, пустой Agent URL, допустимую функцию и repo из allowlist. Для замены — заполненный URL и `Agent State=запрошен`.
+4. Нажмите «🤖 Агенты», проверьте кандидатов и выдайте запрос. Создание начнётся только после маркера одобрения админ-роли. Во время provisioning автоцикл выключен.
+5. Живую приёмку D-027 (create/replace/негативные проверки) проводите только после отдельного подтверждения Мастера и паузы цикла. Откат: выключить provisioning, снять Agent State, вернуть прежний Agent URL/Статус вручную; старый URL при replace хранится в Previous Agent URL.

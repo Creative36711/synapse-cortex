@@ -14,6 +14,37 @@
 - Вопрос: Ждёт, Решено, Принят дефолт.
 - Миссия: Активна, Возвращена, Завершена.
 
+## Provisioning Arena-агентов (1.10.0)
+Аддитивные поля базы «Роли» (старые поля не переименовываются):
+
+| Поле | Тип | Значение | Кто пишет |
+|---|---|---|---|
+| Agent Admin | checkbox | право одобрения provisioning; default false | Мастер |
+| Agent State | select | не требуется / запрошен / создаётся / создан / ошибка; пусто = не требуется | Мастер ставит «запрошен», ScriptCat ведёт состояние |
+| Agent Job ID | rich_text | UUID job provisioning | ScriptCat |
+| Agent Created At | date | момент создания новой сессии | ScriptCat |
+| Previous Agent URL | url | старый Agent URL при replace | ScriptCat |
+
+ScriptCat при provisioning пишет только: `Agent URL`, `Previous Agent URL`,
+`Agent State`, `Agent Job ID`, `Agent Created At`, `Статус=Активна` после
+проверок. ScriptCat не пишет: `Роль`, `Функция`, `Зона записи`, `Гейт`,
+`Репозиторий`, `Agent Admin`. Страницы через `POST pages` не создаются — только
+`patch(pageId, properties)`.
+
+Кандидат: `Agent State=запрошен`, имя роли ≤100, функция
+Coordinator/Executor/Auditor/Reviewer (в Notion встречается и `Auditory` —
+совместимо), repo нормализуется в точный `owner/repo` и есть в allowlist профиля,
+роль не админ, нет Running/Submitted и активного хода. Пустой `Agent URL` →
+`create`, заполненный → `replace`. Заполненный URL без `Agent State=запрошен` не
+трогается. Админ-роли не создаются/заменяются/архивируются provisioning.
+
+Перед патчем строка перечитывается fresh: тот же URL — идемпотентно; другой новый
+URL или активная роль с другим URL — пауза `provision-conflict` без перезаписи;
+строка исчезла — пауза. Автоактивация требует валидный URL, совпадение repo и
+имени sidebar, вариант в «Запросы → Кому» для Executor/Auditor (добавляется
+аддитивно), отсутствие второго активного Coordinator, сохранение активного
+Reviewer и отсутствие активной работы по роли.
+
 ## Правила очереди
 - Running ставит транспорт и сам возвращает в Ready без хода — не перевыдавай.
 - Dependency — UUID карточек той же миссии, Accepted, без Check=fail.

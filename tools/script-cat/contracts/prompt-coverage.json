@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.0",
+  "protocolVersion": "1.1",
   "roleProfile": {
     "Executor": "executor.card",
     "Auditor": "auditor.card",
@@ -31,11 +31,13 @@
       "marker.agent",
       "marker.answer",
       "marker.coordinator",
+      "marker.provision",
       "marker.review",
       "reminder.marker"
     ],
     "R-MASTER-ONLY": [
       "authority.coordinator",
+      "authority.provision",
       "authority.reviewer"
     ],
     "R-NO-REVIEWER-DISPATCH": [
@@ -79,6 +81,10 @@
     ]
   },
   "profileRules": {
+    "admin.provision": [
+      "R-MARKER",
+      "R-MASTER-ONLY"
+    ],
     "auditor.card": [
       "R-CARD-FIELDS",
       "R-EVIDENCE",
@@ -177,6 +183,10 @@
     ]
   },
   "profileAudience": {
+    "admin.provision": [
+      "Coordinator",
+      "Reviewer"
+    ],
     "auditor.card": [
       "Auditor"
     ],
@@ -225,6 +235,7 @@
     ]
   },
   "profileGitWrite": {
+    "admin.provision": [],
     "auditor.card": [],
     "continuation.answer": [],
     "continuation.dispatch": [],

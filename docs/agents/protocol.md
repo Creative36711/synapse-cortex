@@ -3,7 +3,9 @@
 ## Виды ходов (kind)
 `dispatch` (рабочая карточка), `plan` (очередь Координатора), `review` (приёмка
 миссии), `answer` (ответ на вопрос), `reminder` (напоминание о маркере),
-`retry` (компактный повтор), `pilot` (эфемерный прогон SYN-P1).
+`retry` (компактный повтор), `pilot` (эфемерный прогон SYN-P1),
+`provision` (административный запрос создания/замены Arena-агентов, не миссия и
+не рабочая карточка). Контракт: `protocolVersion 1.1` (аддитивно к 1.0).
 
 ## Профили и бюджеты overhead
 | Профиль | Роль | Маркер | Overhead |
@@ -23,6 +25,7 @@
 | continuation.review | Reviewer | CF_REVIEW_RESULT | ≤700 |
 | continuation.answer | Reviewer | CF_ANSWER_RESULT | ≤700 |
 | continuation.pilot | pilot | нет | ≤250 |
+| admin.provision | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | ≤1800 |
 
 Total-лимиты: Executor ≤6500, Auditor ≤5500, Coordinator ≤7500, Review ≤7000,
 Answer ≤6000, reminder ≤900. Доставка: мягкий 6000, жёсткий 9000. Acceptance,
@@ -74,6 +77,23 @@ message to continue where it left off.» — отдельный класс `tool
   chars/utf8Bytes. Исходный watermark не сдвигается: финальный отчёт собирает части
   до лимита и после; continuation-сообщение ScriptCat не становится частью отчёта.
 - Pilot SYN-P1: `continuation.pilot` без CF_* и внутренних ссылок, свой namespace.
+
+## Provisioning Arena-агентов (1.10.0)
+`admin.provision` — отдельный административный профиль. Аудитория: активная роль
+с `Agent Admin=true` (предпочтительно Coordinator, иначе Reviewer). Обязательные
+факты: `provision.requestId`, `provision.candidates`. Блоки: `identity.provision`,
+`authority.provision`, `provision.candidates`, `provision.policy`,
+`marker.provision`. Запрещены mission/queue/git/pilot-блоки и обычные маркеры
+ходов. Overhead ≤1800. Ответ завершается одним `CF_AGENT_PROVISION_RESULT` с
+тем же `request_id`; `jobs` содержит только `role_page_id` из отправленных
+кандидатов, `action` только `create|replace`. Пустой `jobs` допустим. Команды
+`archive/delete/activate/admin` как отдельные команды запрещены; архивация
+старого агента — внутреннее следствие `replace`, а не команда маркера.
+
+Provisioning не пишет `K.pending/K.expect`, не создаёт страницы Notion и не
+запускает рабочий цикл. Во время запроса/job автоцикл выключен; после успеха
+восстанавливается, если не было паузы. Право одобрения проверяется по свежей
+строке Notion, а не по имени роли.
 
 ## Инварианты
 - #37: `Check=fail` не выдаётся как Rework+Ready одним ответом.

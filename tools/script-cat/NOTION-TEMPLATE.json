@@ -61,6 +61,44 @@
         },
         "Репозиторий": {
           "rich_text": {}
+        },
+        "Agent Admin": {
+          "checkbox": {}
+        },
+        "Agent State": {
+          "select": {
+            "options": [
+              {
+                "name": "не требуется",
+                "color": "default"
+              },
+              {
+                "name": "запрошен",
+                "color": "yellow"
+              },
+              {
+                "name": "создаётся",
+                "color": "blue"
+              },
+              {
+                "name": "создан",
+                "color": "green"
+              },
+              {
+                "name": "ошибка",
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "Agent Job ID": {
+          "rich_text": {}
+        },
+        "Agent Created At": {
+          "date": {}
+        },
+        "Previous Agent URL": {
+          "url": {}
         }
       }
     },

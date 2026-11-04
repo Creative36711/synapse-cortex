@@ -11,7 +11,7 @@ const root = join(here, '..', '..', '..');
 const contract = JSON.parse(readFileSync(join(root, 'tools/script-cat/contracts/agent-protocol.json'), 'utf8'));
 
 // 1. Контракт: версия и sourceSha.
-assert.equal(contract.protocolVersion, '1.0');
+assert.equal(contract.protocolVersion, '1.1');
 assert.match(contract.sourceSha, /^[0-9a-f]{40}$/, 'sourceSha — 40-hex');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).

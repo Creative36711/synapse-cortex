@@ -17,6 +17,45 @@
   const REPO_ENTRY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const BRANCH_ENTRY = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
 
+  // Provisioning Arena-агентов: выключен по умолчанию и не содержит проектных
+  // имён. Bootstrap-пробник задаётся владельцем профиля; пустой пробник не
+  // отправляется. Значения ниже — аддитивные настройки старых профилей.
+  const PROVISION_DEFAULTS = Object.freeze({
+    agentProvisionEnabled: false,
+    agentProvisionMode: "manual",
+    agentProvisionRepoAllowlist: [],
+    agentBootstrapPrompt: "",
+    agentProvisionMaxJobs: 3,
+    agentProvisionDailyMax: 5,
+    agentBootstrapWaitMs: 600000,
+    agentUrlWaitMs: 30000,
+    agentRenameAttempts: 3,
+    agentProvisionAutoActivate: true,
+    agentProvisionArchiveOld: true,
+  });
+  const provisionInt = (value, fallback, min, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
+  };
+  function normalizeProvisionConfig(profile = {}) {
+    const allow = Array.isArray(profile.agentProvisionRepoAllowlist)
+      ? [...new Set(profile.agentProvisionRepoAllowlist.map((x) => String(x || "").trim()).filter(Boolean))]
+      : [];
+    return {
+      agentProvisionEnabled: profile.agentProvisionEnabled === true,
+      agentProvisionMode: profile.agentProvisionMode === "auto" ? "auto" : "manual",
+      agentProvisionRepoAllowlist: allow,
+      agentBootstrapPrompt: String(profile.agentBootstrapPrompt || ""),
+      agentProvisionMaxJobs: provisionInt(profile.agentProvisionMaxJobs, PROVISION_DEFAULTS.agentProvisionMaxJobs, 1, 20),
+      agentProvisionDailyMax: provisionInt(profile.agentProvisionDailyMax, PROVISION_DEFAULTS.agentProvisionDailyMax, 1, 100),
+      agentBootstrapWaitMs: provisionInt(profile.agentBootstrapWaitMs, PROVISION_DEFAULTS.agentBootstrapWaitMs, 1000, 3600000),
+      agentUrlWaitMs: provisionInt(profile.agentUrlWaitMs, PROVISION_DEFAULTS.agentUrlWaitMs, 1000, 300000),
+      agentRenameAttempts: provisionInt(profile.agentRenameAttempts, PROVISION_DEFAULTS.agentRenameAttempts, 1, 10),
+      agentProvisionAutoActivate: profile.agentProvisionAutoActivate !== false,
+      agentProvisionArchiveOld: profile.agentProvisionArchiveOld !== false,
+    };
+  }
+
   /**
    * Привести профиль к единой форме без смены UUID и без сброса состояния.
    * У старых профилей (без `repos`) единственный репозиторий из `repo`/`branch`
@@ -37,6 +76,7 @@
     }
     if (repos.length) p.repos = repos;
     if (!Array.isArray(p.roleRepos)) p.roleRepos = [];
+    Object.assign(p, normalizeProvisionConfig(p));
     return p;
   }
 
@@ -103,8 +143,10 @@
           !reposLower.has(String(m.repo || "").toLowerCase())) return false;
     }
     const folder = String(p.driveFolder || "");
-    return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
-      !["logs", "payloads", "artifacts"].includes(folder);
+    if (!/^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) || folder.includes("..") ||
+      ["logs", "payloads", "artifacts"].includes(folder)) return false;
+    const prov = normalizeProvisionConfig(p);
+    return prov.agentProvisionRepoAllowlist.every((r) => REPO_ENTRY.test(r) && !r.includes(".."));
   }
   function selectedProfileId() {
     try { return sessionStorage.getItem(PROFILE_SESSION_KEY) || LEGACY_PROFILE_ID; }
@@ -137,6 +179,7 @@
     projectName: ACTIVE_PROFILE.name, driveFolder: ACTIVE_PROFILE.driveFolder,
     repos: Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : [],
     roleRepos: Array.isArray(ACTIVE_PROFILE.roleRepos) ? ACTIVE_PROFILE.roleRepos : [],
+    ...normalizeProvisionConfig(ACTIVE_PROFILE),
   });
   Object.freeze(C);
   const projectApproved = () => !ACTIVE_PROFILE.invalid && !ACTIVE_PROFILE.legacy &&
@@ -174,6 +217,10 @@
     pilots: "cfn-pilots-v1",
     pilotWait: "cfn-pilot-wait:",
     pilotTranscript: "cfn-pilot-transcript:",
+    // Provisioning Arena-агентов: отдельный namespace, не K.pending/K.expect.
+    provision: "cfn-agent-provision-v1",
+    provisionRequest: "cfn-agent-provision-request-v1",
+    provisionLock: "cfn-agent-provision-lock",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.
@@ -194,4 +241,5 @@
     collapse: "cfn-collapse",
     count: "cfn-log-count",
     debug: "cfn-debug-toggle",
+    agents: "cfn-agents",
   };
