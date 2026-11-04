@@ -6,8 +6,16 @@
     "CF_COORDINATOR_RESULT": {
       "role": "Coordinator",
       "turn": "plan",
-      "required": ["mission_id", "turn_id", "status", "next"],
-      "optional": ["question", "need"],
+      "required": [
+        "mission_id",
+        "turn_id",
+        "status",
+        "next"
+      ],
+      "optional": [
+        "question",
+        "need"
+      ],
       "idSource": "mission_id и turn_id копируются из текущего промпта Координатора",
       "example": {
         "mission_id": "40c6f0cf-5705-81ae-ab6c-efac6bad62f0",
@@ -16,15 +24,36 @@
         "next": "Executor Core"
       },
       "invalid": [
-        { "mission_id": "<миссия>", "turn_id": "<ход>", "status": "completed", "next": "<роль|done>" },
-        { "mission_id": "00000000-0000-0000-0000-000000000000", "turn_id": "11111111-1111-1111-1111-111111111111", "status": "completed", "next": "Executor Core" }
+        {
+          "mission_id": "<миссия>",
+          "turn_id": "<ход>",
+          "status": "completed",
+          "next": "<роль|done>"
+        },
+        {
+          "mission_id": "00000000-0000-0000-0000-000000000000",
+          "turn_id": "11111111-1111-1111-1111-111111111111",
+          "status": "completed",
+          "next": "Executor Core"
+        }
       ]
     },
     "CF_AGENT_RESULT": {
       "role": "Executor|Auditor",
       "turn": "dispatch",
-      "required": ["dispatch_id", "run_id", "status"],
-      "optional": ["check", "report", "pr", "merged", "question", "artifacts"],
+      "required": [
+        "dispatch_id",
+        "run_id",
+        "status"
+      ],
+      "optional": [
+        "check",
+        "report",
+        "pr",
+        "merged",
+        "question",
+        "artifacts"
+      ],
       "idSource": "dispatch_id и run_id копируются из карточки текущего хода",
       "example": {
         "dispatch_id": "a709d6df-4698-4a98-b111-90d22de42894",
@@ -36,15 +65,33 @@
         "merged": true
       },
       "invalid": [
-        { "dispatch_id": "<dispatch>", "run_id": "<run>", "status": "submitted" },
-        { "dispatch_id": "00000000-0000-0000-0000-000000000000", "run_id": "11111111-1111-1111-1111-111111111111", "status": "submitted" }
+        {
+          "dispatch_id": "<dispatch>",
+          "run_id": "<run>",
+          "status": "submitted"
+        },
+        {
+          "dispatch_id": "00000000-0000-0000-0000-000000000000",
+          "run_id": "11111111-1111-1111-1111-111111111111",
+          "status": "submitted"
+        }
       ]
     },
     "CF_REVIEW_RESULT": {
       "role": "Reviewer",
       "turn": "review",
-      "required": ["mission_id", "turn_id", "verdict"],
-      "optional": ["summary", "remarks", "reason", "dispatch_id", "run_id"],
+      "required": [
+        "mission_id",
+        "turn_id",
+        "verdict"
+      ],
+      "optional": [
+        "summary",
+        "remarks",
+        "reason",
+        "dispatch_id",
+        "run_id"
+      ],
       "idSource": "mission_id и turn_id — из промпта приёмки; для исторической карточки добавляются dispatch_id/run_id",
       "example": {
         "mission_id": "40c6f0cf-5705-81ae-ab6c-efac6bad62f0",
@@ -53,15 +100,30 @@
         "remarks": "1) оракул не закрыт: npm run verify даёт fail 2 2) долг без карточки"
       },
       "invalid": [
-        { "mission_id": "<миссия>", "turn_id": "<ход>", "verdict": "accept|rework" },
-        { "mission_id": "00000000-0000-0000-0000-000000000000", "turn_id": "11111111-1111-1111-1111-111111111111", "verdict": "accept" }
+        {
+          "mission_id": "<миссия>",
+          "turn_id": "<ход>",
+          "verdict": "accept|rework"
+        },
+        {
+          "mission_id": "00000000-0000-0000-0000-000000000000",
+          "turn_id": "11111111-1111-1111-1111-111111111111",
+          "verdict": "accept"
+        }
       ]
     },
     "CF_ANSWER_RESULT": {
       "role": "Reviewer",
       "turn": "answer",
-      "required": ["question_id", "turn_id", "verdict"],
-      "optional": ["answer", "reason"],
+      "required": [
+        "question_id",
+        "turn_id",
+        "verdict"
+      ],
+      "optional": [
+        "answer",
+        "reason"
+      ],
       "idSource": "question_id и turn_id — из промпта вопроса; после verdict: master используется тот же turn_id",
       "example": {
         "question_id": "46208c7d-7c36-41df-ac99-2a38d79dbcf2",
@@ -70,58 +132,397 @@
         "answer": "Оставить контракт как есть; границу считать по полю Scope карточки."
       },
       "invalid": [
-        { "question_id": "<вопрос>", "turn_id": "<ход>", "verdict": "answer", "answer": "<решение>" },
-        { "question_id": "00000000-0000-0000-0000-000000000000", "turn_id": "11111111-1111-1111-1111-111111111111", "verdict": "answer", "answer": "чужой ход" }
+        {
+          "question_id": "<вопрос>",
+          "turn_id": "<ход>",
+          "verdict": "answer",
+          "answer": "<решение>"
+        },
+        {
+          "question_id": "00000000-0000-0000-0000-000000000000",
+          "turn_id": "11111111-1111-1111-1111-111111111111",
+          "verdict": "answer",
+          "answer": "чужой ход"
+        }
       ]
     }
   },
   "markerMatrix": [
-    { "turn": "план/очередь", "role": "Coordinator", "marker": "CF_COORDINATOR_RESULT", "ids": ["mission_id", "turn_id"] },
-    { "turn": "рабочая карточка", "role": "Executor", "marker": "CF_AGENT_RESULT", "ids": ["dispatch_id", "run_id"] },
-    { "turn": "проверка карточки", "role": "Auditor", "marker": "CF_AGENT_RESULT", "ids": ["dispatch_id", "run_id"] },
-    { "turn": "приёмка миссии", "role": "Warden/Reviewer", "marker": "CF_REVIEW_RESULT", "ids": ["mission_id", "turn_id"] },
-    { "turn": "ответ на вопрос", "role": "Warden/Reviewer", "marker": "CF_ANSWER_RESULT", "ids": ["question_id", "turn_id"] },
-    { "turn": "историческая карточка Reviewer", "role": "Reviewer", "marker": "CF_AGENT_RESULT + при требовании оракула CF_REVIEW_RESULT", "ids": ["dispatch_id", "run_id"] }
+    {
+      "turn": "план/очередь",
+      "role": "Coordinator",
+      "marker": "CF_COORDINATOR_RESULT",
+      "ids": [
+        "mission_id",
+        "turn_id"
+      ]
+    },
+    {
+      "turn": "рабочая карточка",
+      "role": "Executor",
+      "marker": "CF_AGENT_RESULT",
+      "ids": [
+        "dispatch_id",
+        "run_id"
+      ]
+    },
+    {
+      "turn": "проверка карточки",
+      "role": "Auditor",
+      "marker": "CF_AGENT_RESULT",
+      "ids": [
+        "dispatch_id",
+        "run_id"
+      ]
+    },
+    {
+      "turn": "приёмка миссии",
+      "role": "Warden/Reviewer",
+      "marker": "CF_REVIEW_RESULT",
+      "ids": [
+        "mission_id",
+        "turn_id"
+      ]
+    },
+    {
+      "turn": "ответ на вопрос",
+      "role": "Warden/Reviewer",
+      "marker": "CF_ANSWER_RESULT",
+      "ids": [
+        "question_id",
+        "turn_id"
+      ]
+    },
+    {
+      "turn": "историческая карточка Reviewer",
+      "role": "Reviewer",
+      "marker": "CF_AGENT_RESULT + при требовании оракула CF_REVIEW_RESULT",
+      "ids": [
+        "dispatch_id",
+        "run_id"
+      ]
+    }
   ],
   "statuses": {
-    "card": ["Draft", "Ready", "Running", "Submitted", "Accepted", "Rework"],
-    "question": ["Ждёт", "Решено", "Принят дефолт"],
-    "mission": ["Активна", "Возвращена", "Завершена"]
+    "card": [
+      "Draft",
+      "Ready",
+      "Running",
+      "Submitted",
+      "Accepted",
+      "Rework"
+    ],
+    "question": [
+      "Ждёт",
+      "Решено",
+      "Принят дефолт"
+    ],
+    "mission": [
+      "Активна",
+      "Возвращена",
+      "Завершена"
+    ]
   },
   "notionOwnership": [
-    { "fields": "Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check", "owner": "ScriptCat", "forbidden": "вписывать вручную «для порядка»" },
-    { "fields": "Намерение, Инварианты, Acceptance, Scope, Кому, Sequence", "owner": "Coordinator", "forbidden": "менять оракул миссии без ADR/решения" },
-    { "fields": "Draft → Ready, разбор Submitted, Accepted/Rework", "owner": "Coordinator", "forbidden": "выдавать Reviewer обычную рабочую карточку" },
-    { "fields": "роли, Agent URL, доступы, проект", "owner": "Мастер", "forbidden": "создавать/менять роли самовольно" },
-    { "fields": "вердикт миссии и ответ на вопрос", "owner": "Warden", "forbidden": "править код/карточки вместо вердикта" }
+    {
+      "fields": "Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check",
+      "owner": "ScriptCat",
+      "forbidden": "вписывать вручную «для порядка»"
+    },
+    {
+      "fields": "Намерение, Инварианты, Acceptance, Scope, Кому, Sequence",
+      "owner": "Coordinator",
+      "forbidden": "менять оракул миссии без ADR/решения"
+    },
+    {
+      "fields": "Draft → Ready, разбор Submitted, Accepted/Rework",
+      "owner": "Coordinator",
+      "forbidden": "выдавать Reviewer обычную рабочую карточку"
+    },
+    {
+      "fields": "роли, Agent URL, доступы, проект",
+      "owner": "Мастер",
+      "forbidden": "создавать/менять роли самовольно"
+    },
+    {
+      "fields": "вердикт миссии и ответ на вопрос",
+      "owner": "Warden",
+      "forbidden": "править код/карточки вместо вердикта"
+    }
   ],
   "drive": {
     "root": "Arena/<project>",
     "folders": {
-      "logs": { "purpose": "машинный журнал попытки, append-only", "name": "<dispatch_id>_<run_id>.md", "creator": "ScriptCat через Gateway" },
-      "payloads": { "purpose": "входные большие задания", "name": "свободное безопасное имя", "creator": "Gateway по указанию ScriptCat/Coordinator" },
-      "artifacts": { "purpose": "свободные результаты агентов", "name": "<dispatch_id>_<run_id>__<slug>.<ext>", "manualName": "manual__<project>__<slug>.<ext>", "creator": "агент через Gateway или Drive-коннектор с проверкой ScriptCat" }
+      "logs": {
+        "purpose": "машинный журнал попытки, append-only",
+        "name": "<dispatch_id>_<run_id>.md",
+        "creator": "ScriptCat через Gateway"
+      },
+      "payloads": {
+        "purpose": "входные большие задания",
+        "name": "свободное безопасное имя",
+        "creator": "Gateway по указанию ScriptCat/Coordinator"
+      },
+      "artifacts": {
+        "purpose": "свободные результаты агентов",
+        "name": "<dispatch_id>_<run_id>__<slug>.<ext>",
+        "manualName": "manual__<project>__<slug>.<ext>",
+        "creator": "агент через Gateway или Drive-коннектор с проверкой ScriptCat"
+      }
     },
     "forbidden": "файлы в корне Диска не являются ни журналом, ни payload, ни валидным артефактом хода",
-    "artifactMimeWhitelist": ["text/plain", "text/markdown", "application/json", "text/csv"],
-    "artifactMaxBytes": 262144
+    "artifactMimeWhitelist": [
+      "text/plain",
+      "text/markdown",
+      "application/json",
+      "text/csv"
+    ],
+    "artifactMaxBytes": 262144,
+    "gatewayVersion": "1.7.1",
+    "artifactSizeSemantics": "лимит 262144 считается в UTF-8 байтах (Utilities.newBlob(content).getBytes().length), не в длине JS-строки",
+    "duplicatePolicy": "совпало имя и содержимое — duplicate; совпало имя, но содержимое другое — явный конфликт (не молчаливый старый отчёт)"
   },
   "rules": {
-    "R-ROLES": { "title": "Роли и функции (D-021)", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] },
-    "R-REPO-BOUNDARY": { "title": "Границы репозиториев (D-022)", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] },
-    "R-ZONES": { "title": "Зоны и гейты, оракул не ослаблять", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] },
-    "R-GIT": { "title": "Git-ритуал и границы записи", "requiredFor": ["Executor", "Auditor"] },
-    "R-EVIDENCE": { "title": "Доказательство вместо отчёта", "requiredFor": ["Executor", "Auditor", "Reviewer"] },
-    "R-QUESTIONS": { "title": "Вопросы и ADR через question", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] },
-    "R-MASTER-ONLY": { "title": "Что решает только Мастер", "requiredFor": ["Coordinator", "Reviewer"] },
-    "R-PHASES": { "title": "Запреты фаз 0–4", "requiredFor": ["Executor", "Coordinator"] },
-    "R-I18N": { "title": "Мультиязычность не «потом»", "requiredFor": ["Executor"] },
-    "R-MARKER": { "title": "Маркер последней строкой, не вместо отчёта", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] },
-    "R-CARD-FIELDS": { "title": "Поля карточки ставит скрипт", "requiredFor": ["Executor", "Auditor"] },
-    "R-D028": { "title": "Состояние — производное от факта", "requiredFor": ["Coordinator", "Reviewer"] },
-    "R-VERIFY-GITHUB": { "title": "Проверять по GitHub, а не по словам агента", "requiredFor": ["Auditor", "Reviewer"] },
-    "R-QUEUE": { "title": "Очередь, Rework, Dependency, Sequence", "requiredFor": ["Coordinator"] },
-    "R-NO-REVIEWER-DISPATCH": { "title": "Reviewer не получает рабочую карточку", "requiredFor": ["Coordinator"] },
-    "R-SECRETS": { "title": "Секреты не попадают в чат/логи/Git", "requiredFor": ["Executor", "Auditor", "Coordinator", "Reviewer"] }
+    "R-ROLES": {
+      "title": "Роли и функции (D-021)",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-REPO-BOUNDARY": {
+      "title": "Границы репозиториев (D-022)",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-ZONES": {
+      "title": "Зоны и гейты, оракул не ослаблять",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-GIT": {
+      "title": "Git-ритуал и границы записи",
+      "requiredFor": [
+        "Executor",
+        "Auditor"
+      ]
+    },
+    "R-EVIDENCE": {
+      "title": "Доказательство вместо отчёта",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Reviewer"
+      ]
+    },
+    "R-QUESTIONS": {
+      "title": "Вопросы и ADR через question",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-MASTER-ONLY": {
+      "title": "Что решает только Мастер",
+      "requiredFor": [
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-PHASES": {
+      "title": "Запреты фаз 0–4",
+      "requiredFor": [
+        "Executor",
+        "Coordinator"
+      ]
+    },
+    "R-I18N": {
+      "title": "Мультиязычность не «потом»",
+      "requiredFor": [
+        "Executor"
+      ]
+    },
+    "R-MARKER": {
+      "title": "Маркер последней строкой, не вместо отчёта",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-CARD-FIELDS": {
+      "title": "Поля карточки ставит скрипт",
+      "requiredFor": [
+        "Executor",
+        "Auditor"
+      ]
+    },
+    "R-D028": {
+      "title": "Состояние — производное от факта",
+      "requiredFor": [
+        "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-VERIFY-GITHUB": {
+      "title": "Проверять по GitHub, а не по словам агента",
+      "requiredFor": [
+        "Auditor",
+        "Reviewer"
+      ]
+    },
+    "R-QUEUE": {
+      "title": "Очередь, Rework, Dependency, Sequence",
+      "requiredFor": [
+        "Coordinator"
+      ]
+    },
+    "R-NO-REVIEWER-DISPATCH": {
+      "title": "Reviewer не получает рабочую карточку",
+      "requiredFor": [
+        "Coordinator"
+      ]
+    },
+    "R-SECRETS": {
+      "title": "Секреты не попадают в чат/логи/Git",
+      "requiredFor": [
+        "Executor",
+        "Auditor",
+        "Coordinator",
+        "Reviewer"
+      ]
+    }
+  },
+  "delivery": {
+    "softLimitChars": 6000,
+    "hardLimitChars": 9000,
+    "errorClasses": [
+      "editor_not_found",
+      "send_disabled",
+      "captcha",
+      "auth",
+      "agent_unavailable",
+      "tool_call_limit",
+      "rate_limit",
+      "arena_generic_error",
+      "network",
+      "budget_exceeded",
+      "unknown"
+    ],
+    "errorClassOrder": "tool_call_limit определяется раньше budget_exceeded, rate_limit и arena_generic_error; слово limit само по себе не означает budget_exceeded",
+    "compactRetryRoleSafety": "delivery.compact/retry ролевой: Auditor — только чтение (без коммитов/push/PR merge), Reviewer рабочую выдачу не получает (guard), Executor мержит сам"
+  },
+  "toolCallLimit": {
+    "statusText": "The agent reached the tool-call limit for this turn. Send a message to continue where it left off.",
+    "semantics": "ход уже начался, часть работы могла быть сделана; это не отказ доставки, не captcha/auth/rate и не забытый маркер",
+    "action": "короткое сообщение-продолжение в тот же чат; не повтор задания, не compact-retry, не напоминание о маркере",
+    "detect": "role=status/alert в транскрипте (amber — доп. признак), не в pre/code/diff/textarea/редакторе; привязка к ближнему chat-message; дедуп по tool-limit:<messageId>",
+    "forbidden": [
+      "повтор исходного задания",
+      "compact-retry как при недоставленном",
+      "обычное напоминание о маркере",
+      "новый Run ID/turn_id/question_id",
+      "изменение карточки Notion/PR/Check/Submitted At/Output Drive File ID",
+      "budget_exceeded только по слову limit"
+    ],
+    "continueMax": 2,
+    "stateFields": [
+      "toolLimitContinuations",
+      "lastToolLimitMessageId",
+      "lastToolLimitAt",
+      "toolLimitNoProgress",
+      "continuationWatermark"
+    ],
+    "notMixedWith": [
+      "arenaResend",
+      "tries",
+      "branchResend"
+    ],
+    "journalOutcomes": [
+      "tool_limit_continued",
+      "tool_limit_paused",
+      "tool_limit_no_progress"
+    ],
+    "pauseBeforeLimit": [
+      "после continuation нет новых содержательных сообщений, только повторный лимит",
+      "continuation не удалось отправить",
+      "страница/роль не совпадает с ожиданием",
+      "ход завершён маркером, но статус лимита остался в DOM"
+    ],
+    "profiles": {
+      "continuation.dispatch": {
+        "kind": "dispatch",
+        "audience": [
+          "Executor",
+          "Auditor"
+        ],
+        "marker": "CF_AGENT_RESULT",
+        "requiredFacts": [
+          "task.id",
+          "task.runId"
+        ],
+        "overheadMax": 700
+      },
+      "continuation.plan": {
+        "kind": "plan",
+        "audience": [
+          "Coordinator"
+        ],
+        "marker": "CF_COORDINATOR_RESULT",
+        "requiredFacts": [
+          "mission.id",
+          "turnId"
+        ],
+        "overheadMax": 700
+      },
+      "continuation.review": {
+        "kind": "review",
+        "audience": [
+          "Reviewer"
+        ],
+        "marker": "CF_REVIEW_RESULT",
+        "requiredFacts": [
+          "mission.id",
+          "turnId"
+        ],
+        "overheadMax": 700
+      },
+      "continuation.answer": {
+        "kind": "answer",
+        "audience": [
+          "Reviewer"
+        ],
+        "marker": "CF_ANSWER_RESULT",
+        "requiredFacts": [
+          "question.id",
+          "turnId"
+        ],
+        "overheadMax": 700
+      },
+      "continuation.pilot": {
+        "kind": "pilot",
+        "audience": [
+          "pilot"
+        ],
+        "marker": null,
+        "requiredFacts": [],
+        "overheadMax": 250,
+        "note": "только если активен пилотный ход; без CF_* и внутренних ссылок"
+      }
+    },
+    "watermark": "исходный watermark не сдвигается: финальный журнал собирает части до лимита и отчёт после; continuation-сообщение ScriptCat не становится частью отчёта агента"
   }
 }

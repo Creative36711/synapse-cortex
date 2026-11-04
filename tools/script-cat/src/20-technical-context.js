@@ -30,6 +30,7 @@
         kind: meta.kind || "", ref: meta.ref || "", role: meta.role || "",
         attempt: meta.attempt || 1, outcome: meta.outcome || "queued",
         errorClass: meta.errorClass || "",
+        messageId: meta.messageId || "",
       });
       GM_setValue(key, list.slice(-200));
     } catch (e) { dbg("prompt-journal", String(e?.message || e)); }
@@ -41,6 +42,9 @@
     if (/captcha|recaptcha|security verification|подтвердите, что вы человек/.test(t)) return "captcha";
     if (/sign in|log in|unauthorized|\b401\b|authentication|войдите|авторизац/.test(t)) return "auth";
     if (/agent[^\n]{0,24}(unavailable|not found)|агент[^\n]{0,24}недоступ/.test(t)) return "agent_unavailable";
+    // tool-call limit — ход уже начался; это не budget/rate/generic. Проверяем
+    // раньше budget|лимит|превышен, иначе слово «limit» уводит в budget_exceeded.
+    if (/the agent reached the tool-call limit for this turn|send a message to continue where it left off|tool[- ]call limit for this turn|лимит вызовов инструментов|достиг лимита инструментов/.test(t)) return "tool_call_limit";
     if (/rate limit|too many requests|\b429\b|слишком много запросов/.test(t)) return "rate_limit";
     if (/something went wrong|please try again|попробуйте ещё|что-то пошло не так/.test(t)) return "arena_generic_error";
     if (/send[^\n]{0,24}(disabled|недоступ)|кнопка[^\n]{0,24}неактив/.test(t)) return "send_disabled";

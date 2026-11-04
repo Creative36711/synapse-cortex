@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.9.0
+// @version      1.9.1
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -70,6 +70,7 @@
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
     arenaResendMax: 1, // один минимальный повтор после ошибки Arena; второй отказ — пауза
+    toolLimitContinueMax: 2, // продолжений после tool-call limit; дальше — пауза и Мастер
     arenaRetryMs: 180000, // ошибка старше трёх минут уже не про нашу отправку
     maxReloadAttempts: 3, // максимум автоматических перезагрузок страницы при ошибке Arena
     reloadCountPrefix: "cf-auto-error-reload-count:", // префикс ключа счётчика перезагрузок
@@ -511,7 +512,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.9.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.9.1";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -4794,6 +4795,35 @@
 
   // ───────────────────────── ошибка на экране ─────────────────────────
   /**
+   * Tool-call limit — отдельное состояние Arena: ход уже начался, часть работы
+   * могла быть сделана. Это не отказ доставки, не captcha/auth/rate и не забытый
+   * маркер. Правильное действие — короткое сообщение-продолжение в тот же чат
+   * (см. 30-tool-limit.js), а не повтор задания и не общая пауза по UI-ошибке.
+   */
+  const TOOL_LIMIT_RE = /the agent reached the tool-call limit for this turn|send a message to continue where it left off|tool[- ]call limit for this turn|лимит вызовов инструментов|достиг лимита инструментов/i;
+  const TOOL_LIMIT_EXCLUDE = "pre, code, textarea, .shiki, .hljs, .prism, .monaco-editor, [data-language], [data-diff], [class*='diff'], [class*='code-block'], [contenteditable='true'], [contenteditable='']";
+
+  /**
+   * Видимый статус tool-call limit в транскрипте (role=status/alert, amber —
+   * лишь дополнительный признак). Ищем в сообщениях чата, не в pre/code/diff/
+   * редакторе; привязываем к ближайшему chat-message. Без id — хеш текста+позиция.
+   */
+  function detectToolCallLimit() {
+    const nodes = messages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      for (const el of node.querySelectorAll('[role="status"], [role="alert"]')) {
+        if (!visible(el) || el.closest(TOOL_LIMIT_EXCLUDE)) continue;
+        const text = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text || !TOOL_LIMIT_RE.test(text)) continue;
+        const messageId = nodeId(node) || `h${textHash(text)}:${i}`;
+        return { messageId, text: text.slice(0, 300), index: i };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Arena показывает сбой двумя способами: алертом внутри последнего
    * пользовательского сообщения и красной карточкой в интерфейсе. Оба —
    * повод остановиться, а не «подождать и попробовать ещё раз»: повтор поверх
@@ -4827,6 +4857,8 @@
         if (card.closest("pre, code, textarea, .shiki, .hljs, .prism, .monaco-editor, [data-language], [data-diff], [class*='diff'], [class*='code-block']")) continue;
         const text = String(card.innerText || card.textContent || "").trim();
         if (!text) continue;
+        // Tool-call limit — не UI-ошибка: его обрабатывает продолжение хода.
+        if (TOOL_LIMIT_RE.test(text)) continue;
         if (text.length < 400 || keywords.test(text)) {
           card.dataset.cfnSeen = "1";
           return text.replace(/\s+/g, " ").slice(0, 300);
@@ -4849,6 +4881,9 @@
   }
 
   function monitorVisibleErrors() {
+    // Tool-call limit обрабатывается продолжением хода (handleToolCallLimit в
+    // тике стоит раньше). Здесь не превращаем его в общую паузу по UI-ошибке.
+    if (detectToolCallLimit()) return false;
     const alert = latestUserMessageAlert();
     if (alert) {
       const key = `alert:${alert.messageId}`;
@@ -8327,24 +8362,52 @@
       const auditor = c.role?.fn === "Auditor";
       return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
     };
-    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => [
-      "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
-      markerJson(c, "CF_AGENT_RESULT"),
-    ].join("\n") });
-    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => [
-      "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
-      markerJson(c, "CF_COORDINATOR_RESULT"),
-    ].join("\n") });
-    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.",
+        "Если продолжить нельзя — назови блокер, не выдумывай результат.",
+        `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted"}`,
+      ].join("\n");
+      return [
+        "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
+        markerJson(c, "CF_AGENT_RESULT"),
+      ].join("\n");
+    } });
+    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда ход завершён, сдай полный отчёт и последней строкой CF_COORDINATOR_RESULT с этими IDs.",
+        "Если без Мастера нельзя — используй blocked/need по правилам хода.",
+        `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`,
+      ].join("\n");
+      return [
+        "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
+        markerJson(c, "CF_COORDINATOR_RESULT"),
+      ].join("\n");
+    } });
+    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
+        "Если доказательств не хватает — не принимай миссию.",
+        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
+      ].join("\n");
+      return [
       `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
-    ].filter(Boolean).join("\n") });
-    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
-      "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
-      c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
-      markerJson(c, "CF_ANSWER_RESULT"),
-    ].filter(Boolean).join("\n") });
+      ].filter(Boolean).join("\n");
+    } });
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
+        "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,
+      ].join("\n");
+      return [
+        "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+        c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
+        markerJson(c, "CF_ANSWER_RESULT"),
+      ].filter(Boolean).join("\n");
+    } });
 
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
@@ -8369,8 +8432,35 @@
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
-      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.`;
+      const fn = c.role?.fn || "Executor";
+      // Compact-retry не должен нарушать роль: Auditor — только чтение,
+      // Reviewer рабочую выдачу не получает (guard), Executor мержит сам.
+      const boundary = fn === "Auditor"
+        ? "Только чтение и проверка: без коммитов, push и PR merge. Оракул не ослабляй."
+        : fn === "Reviewer"
+          ? "Ничего не правь: только проверка и вердикт по правилам приёмки."
+          : "Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.";
+      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. ${boundary}`;
     } });
+
+    // ── continuation после tool-call limit: тот же ход, новые IDs не создаём ──
+    def("delivery.tool_limit", { render: (c) => {
+      if (c.kind === "plan") return "Продолжи текущий ход Координатора после лимита инструментов. Это не новый ход и не новая миссия.\nНе трогай git. Разбери очередь с текущего места и продолжи план.";
+      if (c.kind === "review") return "Продолжи приёмку миссии после лимита инструментов. Это не новая приёмка и не новый ход.\nНе правь код и карточки. Дочитай доказательства и вынеси вердикт.";
+      if (c.kind === "answer") return "Продолжи ответ на вопрос после лимита инструментов. Это не новый вопрос и не новый ход.";
+      return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
+    } });
+    def("identity.continue", { render: (c) => {
+      if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
+      if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
+      return `IDs прежние: dispatch_id=${c.task?.id}, run_id=${c.task?.runId}.`;
+    } });
+    def("role.boundary.continue", { ruleIds: ["R-ZONES", "R-GIT"], audience: ["Executor", "Auditor"], render: (c) =>
+      c.role?.fn === "Auditor"
+        ? "Только чтение и проверка: без коммитов, push и PR."
+        : "Работай только в своём Scope и по правилам задания." });
+    def("pilot.continue", { audience: ["pilot"], render: () =>
+      "Продолжи пилотный ход с того места, где он остановился. Не начинай сначала.\nНе используй внутренние знания, командные маркеры и закрытые документы.\nЗаверши публичный отчёт по брифу: что сделано, как запущено, артефакты и затруднения." });
 
     return B;
   })();
@@ -8456,8 +8546,57 @@
       budget: { overhead: 250 },
     });
 
+    // ── continuation после tool-call limit: тот же ход, без новых IDs ──
+    // Аудитория строго по типу хода; маркер исходного хода; запрещены блоки
+    // полного задания, очереди, регламента и pilot-блоки. Overhead ≤ 700.
+    const contForbidden = ["identity.task", "identity.mission", "repo.target", "repo.boundary",
+      "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+      "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
+      "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
+      "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",
+      "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "drive.layout", "mission.returned",
+      "delivery.retry", "delivery.recovery", "reminder.marker", "pilot.brief", "pilot.stop", "pilot.repo"];
+    def("continuation.dispatch", {
+      audience: ["Executor", "Auditor"], marker: "CF_AGENT_RESULT",
+      blocks: ["delivery.tool_limit", "role.boundary.continue", "identity.continue", "marker.agent"],
+      requiredFacts: ["task.id", "task.runId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.plan", {
+      audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.coordinator"],
+      requiredFacts: ["mission.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.review", {
+      audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.review"],
+      requiredFacts: ["mission.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.answer", {
+      audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
+      requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.pilot", {
+      audience: ["pilot"], marker: null,
+      blocks: ["pilot.continue"], requiredFacts: [],
+      forbidden: contForbidden.concat(["marker.agent", "marker.coordinator", "marker.review", "marker.answer"]),
+      budget: { overhead: 250 },
+    });
+
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
+      // tool-call limit — продолжение того же хода, не compact/retry/reminder.
+      if (tier === "tool_limit") {
+        if (kind === "pilot") return "continuation.pilot";
+        if (kind === "plan") return "continuation.plan";
+        if (kind === "review") return "continuation.review";
+        if (kind === "answer") return "continuation.answer";
+        return "continuation.dispatch";
+      }
       if (kind === "pilot") return "pilot.synapse";
       if (kind === "reminder") return "reminder.marker";
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
@@ -8515,7 +8654,7 @@
       const profileId = c.profileId || PROMPT_PROFILES.select(kind, fn, tier);
       const profile = PROMPT_PROFILES.profiles[profileId];
       if (!profile) return err("unknown_profile", `нет профиля для kind=${kind} fn=${fn} tier=${tier}`);
-      if (kind === "pilot" && profileId !== "pilot.synapse") return err("unknown_profile", "pilot обязан использовать pilot.synapse");
+      if (kind === "pilot" && !["pilot.synapse", "continuation.pilot"].includes(profileId)) return err("unknown_profile", "pilot обязан использовать pilot.synapse или continuation.pilot");
 
       for (const fact of profile.requiredFacts) {
         const v = get(c, fact);
@@ -8542,7 +8681,7 @@
         if (cond && !cond(c)) continue;
         // Аудитория: pilot-профиль не принимает командные блоки и наоборот.
         const aud = block.audience || [];
-        const isPilotProfile = profileId === "pilot.synapse";
+        const isPilotProfile = profileId === "pilot.synapse" || profileId === "continuation.pilot";
         const isPilotBlock = aud.includes("pilot");
         if (isPilotProfile !== isPilotBlock) {
           return err("forbidden_block", isPilotProfile ? `командный блок ${id} попал в pilot-профиль` : `pilot-блок ${id} попал в командный профиль`);
@@ -8667,6 +8806,7 @@
         kind: meta.kind || "", ref: meta.ref || "", role: meta.role || "",
         attempt: meta.attempt || 1, outcome: meta.outcome || "queued",
         errorClass: meta.errorClass || "",
+        messageId: meta.messageId || "",
       });
       GM_setValue(key, list.slice(-200));
     } catch (e) { dbg("prompt-journal", String(e?.message || e)); }
@@ -8678,6 +8818,9 @@
     if (/captcha|recaptcha|security verification|подтвердите, что вы человек/.test(t)) return "captcha";
     if (/sign in|log in|unauthorized|\b401\b|authentication|войдите|авторизац/.test(t)) return "auth";
     if (/agent[^\n]{0,24}(unavailable|not found)|агент[^\n]{0,24}недоступ/.test(t)) return "agent_unavailable";
+    // tool-call limit — ход уже начался; это не budget/rate/generic. Проверяем
+    // раньше budget|лимит|превышен, иначе слово «limit» уводит в budget_exceeded.
+    if (/the agent reached the tool-call limit for this turn|send a message to continue where it left off|tool[- ]call limit for this turn|лимит вызовов инструментов|достиг лимита инструментов/.test(t)) return "tool_call_limit";
     if (/rate limit|too many requests|\b429\b|слишком много запросов/.test(t)) return "rate_limit";
     if (/something went wrong|please try again|попробуйте ещё|что-то пошло не так/.test(t)) return "arena_generic_error";
     if (/send[^\n]{0,24}(disabled|недоступ)|кнопка[^\n]{0,24}неактив/.test(t)) return "send_disabled";
@@ -12691,6 +12834,220 @@
     return true;
   }
 
+  // ───────────────────────── tool-call limit: продолжение хода ─────────────────────────
+  // Arena: "The agent reached the tool-call limit for this turn. Send a message
+  // to continue where it left off." Ход уже начался, часть работы могла быть
+  // сделана. Отправляем КОРОТКОЕ сообщение-продолжение в тот же чат: не повторяем
+  // задание, не шлём compact-retry и не напоминаем о маркере, не создаём новые
+  // Run/turn/question IDs и не трогаем карточку Notion/PR/терминальные поля.
+  //
+  // Состояние живёт в ожидании (K.expect) отдельными полями и НЕ смешивается с
+  // arenaResend (повтор недоставленного), tries (напоминания) и branchResend
+  // (повтор из-за слитой ветки): toolLimitContinuations, lastToolLimitMessageId,
+  // lastToolLimitAt, toolLimitNoProgress, continuationWatermark.
+  //
+  // Отправка идёт напрямую (ensureComposer → writePrompt → deliver), а не через
+  // K.pending/consumePending: провал продолжения НЕ должен откатывать карточку в
+  // Ready — работа по ней уже началась. Исходный watermark не сдвигается, поэтому
+  // финальный журнал (runAnswer) собирает весь ход: части до лимита + отчёт после.
+
+  const markerForExpect = (e) =>
+    e.kind === "plan" ? "CF_COORDINATOR_RESULT"
+      : e.kind === "review" ? "CF_REVIEW_RESULT"
+        : e.kind === "answer" ? "CF_ANSWER_RESULT"
+          : "CF_AGENT_RESULT";
+
+  const toolLimitRoleFn = (e) =>
+    e.kind === "plan" ? "Coordinator"
+      : (e.kind === "review" || e.kind === "answer") ? "Reviewer"
+        : (e.roleFn || "Executor");
+
+  /** Запись исхода tool-limit в журнал попытки. Без секретов и полных текстов. */
+  function journalToolLimit(expect, status, outcome, envelope) {
+    const env = envelope || expect.prompt;
+    if (!env || !env.metrics) return;
+    recordPromptAttempt(env, {
+      kind: expect.kind, ref: expect.ref, role: expect.roleName,
+      attempt: (Number(expect.toolLimitContinuations) || 0) + 1,
+      outcome, errorClass: "tool_call_limit", messageId: status.messageId,
+    });
+  }
+
+  /** Активный пилотный ход на текущей странице (собственный namespace). */
+  function activePilotOnPage() {
+    const waits = listPilots()
+      .map((p) => GM_getValue(K.pilotWait + p.id, null))
+      .filter((w) => w && w.status === "running" && Number(w.sentAt));
+    return waits.find(pilotOnPage) || null;
+  }
+
+  /**
+   * Оркестратор: вызывается в тике ДО monitorVisibleErrors. Возвращает true,
+   * если ход занят продолжением/паузой по tool-limit. Пилот — в своём namespace.
+   */
+  async function handleToolCallLimit() {
+    const status = detectToolCallLimit();
+    if (!status) return false;
+    const pilotWait = activePilotOnPage();
+    if (pilotWait) return continuePilotToolLimit(pilotWait, status);
+    const expect = GM_getValue(K.expect, null);
+    if (!expect || GM_getValue(K.pending, null)) return false;
+    return continueToolLimitTurn(expect, status);
+  }
+
+  async function continueToolLimitTurn(expect, status) {
+    // Страница должна быть того агента, которого ждём.
+    const me = roleFromPath();
+    if (!me || norm(me) !== norm(expect.roleId)) return false;
+    if (!["dispatch", "plan", "review", "answer"].includes(expect.kind)) return false;
+    // Одно и то же статусное сообщение не порождает два продолжения.
+    if (expect.lastToolLimitMessageId === status.messageId) return false;
+    // Агент ещё генерирует / виден Stop — ждём, не вмешиваемся.
+    if (stillWorking()) return false;
+    // Доставка исходного хода не подтверждена и ход не начинался — не продолжаем.
+    if (!expect.sentAt) return false;
+    const replies = messagesAfter(expect.watermark || "", expect.seen);
+    const started = expect.verified === true || replies.length > 0;
+    if (!started) return false;
+    // Ход уже завершён маркером, а статус лимита остался в DOM — не продолжаем.
+    const markerName = markerForExpect(expect);
+    if (replies.some((m) => String(m.raw || "").includes(markerName))) return false;
+
+    // Рабочая карточка Reviewer: продолжение не шаблонизировано, guard запрещает
+    // рабочую выдачу — честно зовём Мастера, карточку не меняем.
+    if (expect.kind === "dispatch" && (expect.roleFn === "Reviewer" || norm(expect.roleName) === norm("Warden"))) {
+      journalToolLimit(expect, status, "tool_limit_paused");
+      pause(
+        `Лимит инструментов на рабочей карточке Reviewer «${expect.ref}»: продолжение не шаблонизировано, карточку и IDs не меняю. Нужен Мастер.`,
+        { kind: "tool-limit", ref: expect.ref, runId: expect.runId || "" },
+      );
+      return true;
+    }
+
+    const done = Number(expect.toolLimitContinuations) || 0;
+    if (done >= C.toolLimitContinueMax) {
+      journalToolLimit(expect, status, "tool_limit_paused");
+      pause(
+        `Лимит инструментов достигнут снова после ${done} продолжений (предел ${C.toolLimitContinueMax}). ` +
+          "Ход не завершён; карточку, PR и IDs не меняю. Нужен Мастер: проверьте страницу агента.",
+        { kind: "tool-limit", ref: expect.ref, runId: expect.runId || "", turnId: expect.turnId || "" },
+      );
+      return true;
+    }
+    // После продолжения нет новых содержательных сообщений — только повторный
+    // лимит. Продолжать бессмысленно: пауза раньше лимита.
+    if (done > 0) {
+      const since = messagesAfter(expect.continuationWatermark || expect.watermark || "", expect.seen);
+      const substantive = since.filter((m) => String(m.text || "").trim() && !TOOL_LIMIT_RE.test(String(m.text || "")));
+      if (!substantive.length) {
+        journalToolLimit(expect, status, "tool_limit_no_progress");
+        pause(
+          "После продолжения агент не дал новых содержательных сообщений — только повторный лимит инструментов. " +
+            "Продолжать бессмысленно; карточку и IDs не меняю. Нужен Мастер.",
+          { kind: "tool-limit", ref: expect.ref, runId: expect.runId || "" },
+        );
+        return true;
+      }
+    }
+
+    const fn = toolLimitRoleFn(expect);
+    const ctx = {
+      kind: expect.kind, role: { fn, name: expect.roleName || fn },
+      turnId: expect.turnId || "", delivery: { tier: "tool_limit", attempt: done + 1 },
+    };
+    if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId };
+    else if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId, masterEscalated: expect.masterEscalated === true };
+    else ctx.mission = { id: expect.missionId || expect.ref };
+    const envelope = compileOrPause(ctx, `tool-limit continuation ${expect.kind}`);
+    if (!envelope) { journalToolLimit(expect, status, "tool_limit_paused"); return true; } // пауза уже поставлена
+
+    const busy = await busySettled();
+    if (busy) return false;
+    const { editor } = await ensureComposer();
+    const failSend = (why) => {
+      journalToolLimit(expect, status, "tool_limit_paused", envelope);
+      pause(
+        `Не удалось отправить продолжение после лимита инструментов (${why}). Карточку, PR и IDs не меняю; нужен Мастер.`,
+        { kind: "tool-limit", ref: expect.ref, runId: expect.runId || "" },
+      );
+      return true;
+    };
+    if (!editor) return failSend("поле ввода недоступно");
+    if (composerText(editor)) clearComposer(editor);
+    if (!writePrompt(editor, envelope.text)) return failSend("текст не встал в редактор");
+    const contMark = lastMessageId();
+    const delivery = await deliver(editor, envelope.text);
+    if (delivery.captcha) { captchaPause(); return true; }
+    if (!delivery.ok) return failSend(String(delivery.reason || "отправка не прошла").toLowerCase());
+
+    // IDs, карточка, PR и терминальные поля прежние. Исходный watermark НЕ
+    // сдвигаем: финальный журнал соберёт части до лимита и отчёт после.
+    GM_setValue(K.expect, {
+      ...expect,
+      prompt: envelope,
+      toolLimitContinuations: done + 1,
+      lastToolLimitMessageId: status.messageId,
+      lastToolLimitAt: Date.now(),
+      toolLimitNoProgress: false,
+      continuationWatermark: delivery.msgId || contMark,
+      sentAt: Date.now(), verified: true,
+      tries: 0, lastReplySig: "", lastReplyAt: 0,
+    });
+    recordPromptAttempt(envelope, {
+      kind: expect.kind, ref: expect.ref, role: expect.roleName, attempt: done + 1,
+      outcome: "tool_limit_continued", errorClass: "tool_call_limit", messageId: status.messageId,
+    });
+    log(
+      `Лимит инструментов: отправлено продолжение ${done + 1}/${C.toolLimitContinueMax} тому же ходу ` +
+        `(${envelope.metrics.chars} символов). IDs прежние, карточка и терминальные поля не тронуты.`,
+      true, { ntfy: "quiet", title: "Relay: tool-call limit" },
+    );
+    return true;
+  }
+
+  /** Продолжение пилотного хода: без CF_* и внутренних ссылок, свой namespace. */
+  async function continuePilotToolLimit(wait, status) {
+    if (wait.lastToolLimitMessageId === status.messageId) return false;
+    if (stillWorking()) return false;
+    const pilot = getPilot(wait.id);
+    const done = Number(wait.toolLimitContinuations) || 0;
+    const stop = (outcome, why) => {
+      GM_setValue(K.pilotWait + wait.id, { ...wait, status: "tool-limit-paused", lastToolLimitMessageId: status.messageId, lastToolLimitAt: Date.now() });
+      if (wait.prompt?.metrics) recordPromptAttempt(wait.prompt, { kind: "pilot", ref: wait.id, role: "pilot", attempt: done + 1, outcome, errorClass: "tool_call_limit", messageId: status.messageId });
+      pause(`Пилот ${pilot?.variant || ""}: ${why} Сырой транскрипт сохранён; нужен Мастер.`, { kind: "pilot-tool-limit", ref: wait.id });
+      return true;
+    };
+    if (done >= C.toolLimitContinueMax) return stop("tool_limit_paused", `лимит инструментов после ${done} продолжений (предел ${C.toolLimitContinueMax}).`);
+    if (done > 0) {
+      const since = messagesAfter(wait.continuationWatermark || wait.watermark || "");
+      if (!since.filter((m) => String(m.text || "").trim() && !TOOL_LIMIT_RE.test(String(m.text || ""))).length) {
+        return stop("tool_limit_no_progress", "после продолжения нет новых содержательных сообщений, только повторный лимит.");
+      }
+    }
+    const envelope = PromptCompiler.compile({
+      kind: "pilot", role: { fn: "pilot", name: `pilot-${pilot?.variant || ""}` },
+      delivery: { tier: "tool_limit", attempt: done + 1 },
+    });
+    if (!envelope.ok) return stop("tool_limit_paused", `продолжение не собрано (${envelope.error.message}).`);
+    const busy = await busySettled();
+    if (busy) return false;
+    const { editor } = await ensureComposer();
+    if (!editor) return true;
+    if (composerText(editor)) clearComposer(editor);
+    if (!writePrompt(editor, envelope.text)) return true;
+    const contMark = lastMessageId();
+    const delivery = await deliver(editor, envelope.text);
+    if (delivery.captcha) { captchaPause(); return true; }
+    if (!delivery.ok) { log(`Пилот: продолжение не отправилось (${delivery.reason}).`, true); return true; }
+    GM_setValue(K.pilotWait + wait.id, {
+      ...wait, toolLimitContinuations: done + 1, lastToolLimitMessageId: status.messageId,
+      lastToolLimitAt: Date.now(), continuationWatermark: delivery.msgId || contMark, prompt: envelope,
+    });
+    recordPromptAttempt(envelope, { kind: "pilot", ref: wait.id, role: "pilot", attempt: done + 1, outcome: "tool_limit_continued", errorClass: "tool_call_limit", messageId: status.messageId });
+    log(`Пилот ${pilot?.variant || ""}: продолжение ${done + 1}/${C.toolLimitContinueMax} после лимита инструментов (без командных маркеров).`, true, { ntfy: "quiet" });
+    return true;
+  }
+
   // ───────────────────────────── цикл ─────────────────────────────
   let busy = false;
   /** Сколько раз подряд шаг снимали с блокировки по тишине. */
@@ -12942,6 +13299,8 @@
         captchaPause();
         return;
       }
+      // Tool-call limit — продолжение того же хода, раньше общей паузы по ошибке.
+      if (await handleToolCallLimit()) return;
       // Ошибка на экране важнее любого шага: сначала остановиться.
       if (monitorVisibleErrors()) return;
       await setup(false);

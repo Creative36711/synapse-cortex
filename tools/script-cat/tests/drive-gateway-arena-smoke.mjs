@@ -167,7 +167,10 @@ function loadGateway(drive) {
     }),
   };
   const MimeType = { PLAIN_TEXT: 'text/plain' };
-  const Utilities = { getUuid: () => `uuid-${++seq}-0000-0000-0000-000000000000` };
+  const Utilities = {
+    getUuid: () => `uuid-${++seq}-0000-0000-0000-000000000000`,
+    newBlob: (s) => ({ getBytes: () => new Uint8Array(Buffer.from(String(s), 'utf8')) }),
+  };
 
   const factory = new Function(
     'DriveApp',
@@ -334,7 +337,7 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   const { call } = loadGateway(drive);
   const ping = call({ action: 'ping' });
   assert.equal(ping.ok, true);
-  assert.equal(ping.version, '1.7');
+  assert.equal(ping.version, '1.7.1');
   assert.equal(ping.arena.name, 'Arena');
   assert.equal(ping.logs.name, 'logs');
   assert.equal(ping.payloads.name, 'payloads');
@@ -355,14 +358,25 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   assert.ok(artifacts && artifacts.files.length === 1, 'артефакт лежит в Arena/artifacts');
   assert.equal(artifacts.files[0].parent, artifacts, 'файл создан внутри artifacts');
   assert.equal(artifacts.files[0].mime, 'text/markdown');
-  const again = call({ action: 'saveArtifact', name, content: 'другой' });
-  assert.equal(again.fileId, res.fileId, 'повтор того же имени идемпотентен');
+  const again = call({ action: 'saveArtifact', name, content: '# отчёт' });
+  assert.equal(again.fileId, res.fileId, 'повтор того же имени и содержимого идемпотентен');
   assert.equal(again.duplicate, true);
   assert.equal(artifacts.files[0].content, '# отчёт', 'duplicate не перезаписывает');
+  // то же имя, другое содержимое — явный конфликт, а не молчаливый старый отчёт
+  const conflict = call({ action: 'saveArtifact', name, content: 'другой отчёт' });
+  assert.equal(conflict.ok, false, 'разное содержимое под тем же именем отклоняется');
+  assert.match(conflict.error, /конфликт/i);
+  assert.equal(artifacts.files[0].content, '# отчёт', 'конфликт не перезаписывает файл');
   // имя вне контракта отклоняется
   assert.equal(call({ action: 'saveArtifact', name: '../../evil.md', content: 'x' }).ok, false);
   assert.equal(call({ action: 'saveArtifact', name: `${d}_${r}__x.exe`, content: 'x' }).ok, false);
   assert.equal(call({ action: 'saveArtifact', name, content: 'x'.repeat(262145) }).ok, false, 'размер ограничен');
+  // кириллица: проходит по string.length, но превышает лимит в UTF-8 байтах
+  const cyr = 'я'.repeat(140000); // 140000 символов, 280000 байт
+  assert.ok(cyr.length <= 262144, 'по длине строки проходит');
+  const cyrRes = call({ action: 'saveArtifact', name: `${d}_${r}__cyr.md`, content: cyr });
+  assert.equal(cyrRes.ok, false, 'кириллический текст за байтовым лимитом отклоняется');
+  assert.match(cyrRes.error, /UTF-8/);
   assert.equal(artifacts.files.length, 1, 'отказы не создают файлов');
   // read разрешён из artifacts; append — нет
   assert.equal(call({ action: 'read', fileId: res.fileId }).content, '# отчёт');
@@ -374,4 +388,4 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   assert.equal(call({ action: 'verifyArtifactPlacement', fileId: res.fileId }).ok, true);
 }
 
-console.log('OK: локальный Apps Script harness Gateway 1.7 — Arena/{logs,payloads,artifacts}, saveArtifact, placement, valid IDs и idempotency; live Drive не затронут');
+console.log('OK: локальный Apps Script harness Gateway 1.7.1 — Arena/{logs,payloads,artifacts}, saveArtifact, placement, valid IDs и idempotency; live Drive не затронут');

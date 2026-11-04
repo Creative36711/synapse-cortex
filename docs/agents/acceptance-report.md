@@ -1,12 +1,117 @@
-# Отчёт Warden — приёмка пакета ScriptCat 1.9.0
+# Отчёт Warden — приёмка ScriptCat 1.9.1 (поверх 1.9.0)
 
-Дата среза: 2026-11-04. База: `origin/main` = `7bed48d`. Ветка:
-`arena/c016c5f8-synapse-cortex`. Пакет: «Prompt Composer + Compact Delivery +
-Agent Protocol Docs + Ephemeral Pilots» + Gateway 1.7 (artifacts).
+Дата среза: 2026-11-04. База пакета 1.9.1: `origin/main` =
+`505da91969e8f94c69ec91cf005ba15e722906a7` (смерженный 1.9.0). Ветка сессии:
+`arena/0ad2819b-synapse-cortex`. SHA результата — squash-merge-коммит PR в `main`
+(указан в описании PR и итоговом сообщении Мастера).
 
-Версии: **ScriptCat 1.9.0** (`@version` и runtime fallback совпадают, оракул
-версий зелёный), **Drive Gateway 1.7**, digest регламента 1.5, protocolVersion
-контракта 1.0.
+Версии: **ScriptCat 1.9.1** (`@version` и runtime fallback совпадают, оракул
+версий зелёный), **Drive Gateway 1.7.1**, digest регламента 1.5, protocolVersion
+контракта 1.0 (маркерный протокол не менялся; continuation и классы отказов
+добавлены аддитивно).
+
+## Пакет 1.9.1 — tool-call limit continuation + исправления
+
+### Что добавлено
+- Новое состояние Arena «The agent reached the tool-call limit for this turn…»
+  обрабатывается отдельным классом `tool_call_limit` (раньше `budget_exceeded`,
+  `rate_limit`, `arena_generic_error`). Ход уже начался — шлём короткое
+  сообщение-продолжение в тот же чат, а не повтор задания/compact/напоминание.
+- Декларативные профили `continuation.dispatch/plan/review/answer/pilot`,
+  минимальные блоки `delivery.tool_limit`, `identity.continue`,
+  `role.boundary.continue` + существующие `marker.*` (маркер — последний блок).
+- Состояние `toolLimitContinuations`, `lastToolLimitMessageId`, `lastToolLimitAt`,
+  `toolLimitNoProgress`, `continuationWatermark`; лимит `toolLimitContinueMax = 2`;
+  дедуп по `tool-limit:<messageId>`; паузы по отсутствию прогресса/провалу отправки/
+  несовпадению страницы/роли/уже завершённому маркером ходу.
+- Журнал: `tool_limit_continued`/`tool_limit_paused`/`tool_limit_no_progress`,
+  `errorClass: tool_call_limit`, `profileId: continuation.*`, attempt, messageId,
+  chars/utf8Bytes. Исходный watermark не сдвигается — финальный отчёт собирает
+  части до лимита и после; continuation ScriptCat не попадает в отчёт агента.
+
+### Исправления после 1.9.0
+- **Compact-retry ролевой.** `delivery.retry` больше не даёт Auditor инструкций
+  коммита/push/PR merge: Auditor — read-only граница, Reviewer рабочую выдачу не
+  получает (guard), Executor мержит сам. Coverage-карта проверяет git-границы
+  compact/recovery/continuation по роли (`profileGitWrite`, `profileAudience`).
+- **Gateway artifact size в UTF-8 байтах.** `Utilities.newBlob(content).getBytes()
+  .length` вместо `content.length`; лимит 262144 байт сохранён. Кириллический текст,
+  проходящий по `string.length`, но превышающий байтовый лимит, отклоняется.
+- **Duplicate artifact.** Совпало имя и содержимое — `duplicate`; имя совпало,
+  содержимое другое — явный конфликт, а не молчаливый старый отчёт.
+- **classifyArenaFailure.** `tool_call_limit` добавлен до проверки `budget|лимит|
+  превышен`.
+
+### Таблица continuation-профилей (замеры компилятора)
+| Профиль | kind | Аудитория | Маркер | Overhead (факт/лимит) |
+|---|---|---|---|---|
+| continuation.dispatch | dispatch | Executor/Auditor | CF_AGENT_RESULT | 687/700 (Executor), 686/700 (Auditor) |
+| continuation.plan | plan | Coordinator | CF_COORDINATOR_RESULT | 598/700 |
+| continuation.review | review | Reviewer | CF_REVIEW_RESULT | 547/700 |
+| continuation.answer | answer | Reviewer | CF_ANSWER_RESULT | 483/700 |
+| continuation.pilot | pilot | pilot | нет | 233/250 |
+
+### Пример фактического continuation (dispatch Executor, IDs обезличены)
+```
+Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.
+Не начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.
+
+Работай только в своём Scope и по правилам задания.
+
+IDs прежние: dispatch_id=<dispatch-uuid>, run_id=<run-uuid>.
+
+Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.
+Если продолжить нельзя — назови блокер, не выдумывай результат.
+CF_AGENT_RESULT {"dispatch_id":"<dispatch-uuid>","run_id":"<run-uuid>","status":"submitted"}
+```
+
+### Доказательство сохранения IDs и терминальных полей
+Интеграционный тест (`tool-limit-continuation-integration`) на макете DOM/GM с
+реальным компилятором проверяет: после продолжения `ref/runId/missionId/turnId/
+dispatchSentAt/logId/pr` и исходный `watermark` не изменились, новый Run ID не
+создан, карточка не откатана (`cardRolled` отсутствует); dispatch сохраняет
+dispatch/run, plan — mission/turn (и не становится dispatch), review — mission/turn,
+answer — question/turn и `masterEscalated`. Нотация: Notion/Drive в тесте не
+вызываются вовсе (боевых записей нет).
+
+### Результаты целевых тестов
+- **compact Auditor:** read-only граница присутствует, `gh pr merge`/`git commit`/
+  `git push` отсутствуют; compact Executor мержит сам — зелёный.
+- **artifact bytes:** кириллица 140000 символов (280000 байт) при `string.length ≤
+  262144` отклоняется с ошибкой UTF-8; duplicate с другим содержимым — конфликт —
+  зелёный.
+- **classify:** `classifyArenaFailure("tool-call limit…") = tool_call_limit`, а не
+  `budget_exceeded`; `rate limit` → `rate_limit` — зелёный.
+
+### Команды проверок (все зелёные)
+- `npm run verify` → test **78 pass / 0 fail**, regression **15 pass / 0 fail**,
+  tool-limit **2 pass / 0 fail**; `scriptcat:check` и coverage `--check` зелёные
+  (16 ruleId, git-границы профилей).
+- `npm run test:prompts` / `test:delivery` / `test:pilot` / `test:docs` /
+  `test:tool-limit` — все pass, 0 fail.
+
+### Что осталось за окном D-027 (боевой запуск НЕ выполнялся)
+- [ ] ≥10 доставок, ≥95% успешных.
+- [ ] Coordinator recovery после обрыва.
+- [ ] Вопрос после `verdict: master`.
+- [ ] Artifacts в бою (байтовый лимит и конфликт дубликата на реальном Drive).
+- [ ] Пилот SYN-P1 по URL Мастера.
+- [ ] Tool-call limit continuation в тестовом/боевом чате, если безопасно
+      воспроизвести. **Локальный DOM/harness проверен; живое доказательство
+      отсутствует** — состояние Arena воспроизведено только на макете.
+- [ ] Обновление боевого ScriptCat до 1.9.1 и Gateway до 1.7.1 — только в окно
+      D-027 после отдельного подтверждения Мастера.
+
+### Известные ограничения
+- Живого состояния tool-call limit в бою не наблюдалось: детектор и транспорт
+  проверены на макете DOM/GM и реальном компиляторе, не на живой Arena.
+- Tool-limit на рабочей карточке Reviewer не шаблонизирован (guard запрещает
+  рабочую выдачу) — честная пауза и вызов Мастера, без откатa карточки.
+- Gateway 1.7.1 проверяется локальным harness; live Drive не затронут.
+
+---
+
+## Пакет 1.9.0 (база, смержена ранее) — справочно
 
 ## 1. Что проверено локально (зелёный оракул)
 

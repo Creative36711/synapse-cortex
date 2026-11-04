@@ -79,8 +79,57 @@
       budget: { overhead: 250 },
     });
 
+    // ── continuation после tool-call limit: тот же ход, без новых IDs ──
+    // Аудитория строго по типу хода; маркер исходного хода; запрещены блоки
+    // полного задания, очереди, регламента и pilot-блоки. Overhead ≤ 700.
+    const contForbidden = ["identity.task", "identity.mission", "repo.target", "repo.boundary",
+      "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+      "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
+      "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
+      "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",
+      "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "drive.layout", "mission.returned",
+      "delivery.retry", "delivery.recovery", "reminder.marker", "pilot.brief", "pilot.stop", "pilot.repo"];
+    def("continuation.dispatch", {
+      audience: ["Executor", "Auditor"], marker: "CF_AGENT_RESULT",
+      blocks: ["delivery.tool_limit", "role.boundary.continue", "identity.continue", "marker.agent"],
+      requiredFacts: ["task.id", "task.runId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.plan", {
+      audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.coordinator"],
+      requiredFacts: ["mission.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.review", {
+      audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.review"],
+      requiredFacts: ["mission.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.answer", {
+      audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
+      requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.pilot", {
+      audience: ["pilot"], marker: null,
+      blocks: ["pilot.continue"], requiredFacts: [],
+      forbidden: contForbidden.concat(["marker.agent", "marker.coordinator", "marker.review", "marker.answer"]),
+      budget: { overhead: 250 },
+    });
+
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
+      // tool-call limit — продолжение того же хода, не compact/retry/reminder.
+      if (tier === "tool_limit") {
+        if (kind === "pilot") return "continuation.pilot";
+        if (kind === "plan") return "continuation.plan";
+        if (kind === "review") return "continuation.review";
+        if (kind === "answer") return "continuation.answer";
+        return "continuation.dispatch";
+      }
       if (kind === "pilot") return "pilot.synapse";
       if (kind === "reminder") return "reminder.marker";
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";

@@ -21,7 +21,8 @@
     ],
     "R-GIT": [
       "git.auditor",
-      "git.executor"
+      "git.executor",
+      "role.boundary.continue"
     ],
     "R-I18N": [
       "i18n.rule"
@@ -73,7 +74,8 @@
       "review.protocol"
     ],
     "R-ZONES": [
-      "authority.core"
+      "authority.core",
+      "role.boundary.continue"
     ]
   },
   "profileRules": {
@@ -88,6 +90,21 @@
       "R-SECRETS",
       "R-VERIFY-GITHUB",
       "R-ZONES"
+    ],
+    "continuation.answer": [
+      "R-MARKER"
+    ],
+    "continuation.dispatch": [
+      "R-GIT",
+      "R-MARKER",
+      "R-ZONES"
+    ],
+    "continuation.pilot": [],
+    "continuation.plan": [
+      "R-MARKER"
+    ],
+    "continuation.review": [
+      "R-MARKER"
     ],
     "coordinator.plan": [
       "R-D028",
@@ -158,5 +175,72 @@
       "R-VERIFY-GITHUB",
       "R-ZONES"
     ]
+  },
+  "profileAudience": {
+    "auditor.card": [
+      "Auditor"
+    ],
+    "continuation.answer": [
+      "Reviewer"
+    ],
+    "continuation.dispatch": [
+      "Executor",
+      "Auditor"
+    ],
+    "continuation.pilot": [
+      "pilot"
+    ],
+    "continuation.plan": [
+      "Coordinator"
+    ],
+    "continuation.review": [
+      "Reviewer"
+    ],
+    "coordinator.plan": [
+      "Coordinator"
+    ],
+    "coordinator.recovery": [
+      "Coordinator"
+    ],
+    "delivery.compact": [
+      "Executor",
+      "Auditor",
+      "Reviewer"
+    ],
+    "executor.card": [
+      "Executor"
+    ],
+    "pilot.synapse": [
+      "pilot"
+    ],
+    "reminder.marker": [],
+    "reviewer.answer": [
+      "Reviewer"
+    ],
+    "reviewer.card": [
+      "Reviewer"
+    ],
+    "reviewer.mission": [
+      "Reviewer"
+    ]
+  },
+  "profileGitWrite": {
+    "auditor.card": [],
+    "continuation.answer": [],
+    "continuation.dispatch": [],
+    "continuation.pilot": [],
+    "continuation.plan": [],
+    "continuation.review": [],
+    "coordinator.plan": [],
+    "coordinator.recovery": [],
+    "delivery.compact": [],
+    "executor.card": [
+      "git.executor"
+    ],
+    "pilot.synapse": [],
+    "reminder.marker": [],
+    "reviewer.answer": [],
+    "reviewer.card": [],
+    "reviewer.mission": []
   }
 }

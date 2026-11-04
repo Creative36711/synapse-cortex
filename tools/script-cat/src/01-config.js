@@ -22,6 +22,7 @@
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
     arenaResendMax: 1, // один минимальный повтор после ошибки Arena; второй отказ — пауза
+    toolLimitContinueMax: 2, // продолжений после tool-call limit; дальше — пауза и Мастер
     arenaRetryMs: 180000, // ошибка старше трёх минут уже не про нашу отправку
     maxReloadAttempts: 3, // максимум автоматических перезагрузок страницы при ошибке Arena
     reloadCountPrefix: "cf-auto-error-reload-count:", // префикс ключа счётчика перезагрузок

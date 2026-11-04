@@ -18,6 +18,11 @@
 | reminder.marker | любая | по виду хода | ≤700 |
 | delivery.compact | Executor/Auditor | CF_AGENT_RESULT | ≤1500 |
 | pilot.synapse | pilot | нет | ≤250 сверх брифа |
+| continuation.dispatch | Executor/Auditor | CF_AGENT_RESULT | ≤700 |
+| continuation.plan | Coordinator | CF_COORDINATOR_RESULT | ≤700 |
+| continuation.review | Reviewer | CF_REVIEW_RESULT | ≤700 |
+| continuation.answer | Reviewer | CF_ANSWER_RESULT | ≤700 |
+| continuation.pilot | pilot | нет | ≤250 |
 
 Total-лимиты: Executor ≤6500, Auditor ≤5500, Coordinator ≤7500, Review ≤7000,
 Answer ≤6000, reminder ≤900. Доставка: мягкий 6000, жёсткий 9000. Acceptance,
@@ -31,11 +36,44 @@ Scope, инварианты и ID не режутся молча: при пре�
 
 ## Доставка и повтор
 Классы отказов: `editor_not_found`/`send_disabled`, `captcha`, `auth`/
-`agent_unavailable`, `rate_limit`, `arena_generic_error`, `network`,
-`budget_exceeded`, `unknown`. Только `arena_generic_error` даёт один компактный
-повтор того же хода (plan → coordinator.recovery, dispatch → delivery.compact).
-Капча/auth/rate_limit — пауза до человека. Журнал попытки хранит профиль, блоки и
-их версии/хеши, метрики, попытку и исход (кольцо 200).
+`agent_unavailable`, `tool_call_limit`, `rate_limit`, `arena_generic_error`,
+`network`, `budget_exceeded`, `unknown`. Только `arena_generic_error` даёт один
+компактный повтор того же хода (plan → coordinator.recovery, dispatch →
+delivery.compact). Капча/auth/rate_limit — пауза до человека. Журнал попытки хранит
+профиль, блоки и их версии/хеши, метрики, попытку и исход (кольцо 200).
+
+Compact-retry ролевой: `delivery.compact` для Auditor содержит read-only границу
+(без коммитов, push и PR merge); Reviewer рабочую выдачу через compact не получает
+(guard); Executor мержит сам. Coverage-карта проверяет git-границы compact/recovery
+и continuation по роли, а не только по маркеру.
+
+## Tool-call limit: продолжение хода
+Состояние Arena «The agent reached the tool-call limit for this turn. Send a
+message to continue where it left off.» — отдельный класс `tool_call_limit`
+(определяется раньше `budget_exceeded`/`rate_limit`/`arena_generic_error`). Ход уже
+начался, часть работы могла быть сделана. Действие — короткое сообщение-продолжение
+в тот же чат (`continuation.*`), а не повтор задания, не compact-retry и не
+напоминание о маркере.
+
+- Детект: `role=status`/`alert` в транскрипте (amber — доп. признак), не в
+  pre/code/diff/textarea/редакторе; привязка к ближнему `chat-message`; дедуп по
+  `tool-limit:<messageId>` (без id — хеш текста+позиция).
+- Продолжение сохраняет исходные IDs (dispatch/run, mission/turn, question/turn) и
+  маркер вида хода; маркер — только после фактического завершения. Overhead ≤700
+  (pilot ≤250). Запрещены блоки полного задания, очереди, регламента и pilot-блоки
+  в командных профилях. Ошибка компиляции continuation → пауза, не отправка.
+- Лимит `toolLimitContinueMax = 2`: исходный ход → 1-е продолжение → 2-е → пауза и
+  Мастер. Пауза раньше лимита: нет прогресса после продолжения, провал отправки,
+  несовпадение страницы/роли, ход уже завершён маркером.
+- Состояние: `toolLimitContinuations`, `lastToolLimitMessageId`, `lastToolLimitAt`,
+  `toolLimitNoProgress`, `continuationWatermark`. Не смешивается с `arenaResend`,
+  `tries`, `branchResend`. Карточка Notion, PR, Check, Submitted At, Output Drive
+  File ID и Run/turn/question IDs не меняются; новый Run ID не создаётся.
+- Журнал: `tool_limit_continued`/`tool_limit_paused`/`tool_limit_no_progress`,
+  `errorClass: tool_call_limit`, `profileId: continuation.*`, attempt, messageId,
+  chars/utf8Bytes. Исходный watermark не сдвигается: финальный отчёт собирает части
+  до лимита и после; continuation-сообщение ScriptCat не становится частью отчёта.
+- Pilot SYN-P1: `continuation.pilot` без CF_* и внутренних ссылок, свой namespace.
 
 ## Инварианты
 - #37: `Check=fail` не выдаётся как Rework+Ready одним ответом.
