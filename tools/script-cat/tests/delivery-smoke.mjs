@@ -39,6 +39,27 @@ for (const [text, want] of cases) assert.equal(classifyArenaFailure(text), want,
   assert.ok(pause.error.code, 'пауза несёт типизированную причину');
 }
 
+// 2b. D-034: большое задание → payload-указатель, а не инлайн и не пауза.
+{
+  const ref = { fileId: 'PAYLOAD_FILE_1', url: 'https://drive.google.com/file/d/PAYLOAD_FILE_1/view' };
+  const big = dispatchRequest('Auditor', { task: { ...dispatchRequest('Auditor').task, payload: 'подробное задание '.repeat(400), payloadRef: ref } });
+  // inline не влезает в жёсткий лимит, указатель — влезает
+  const d = PromptCompiler.forDelivery(big, { softLimit: 3000, hardLimit: 5500, payloadChannel: true });
+  assert.equal(d.strategy, 'payload', 'большое задание уходит указателем');
+  assert.ok(d.envelope.text.includes('PAYLOAD_FILE_1'), 'указатель несёт ID файла');
+  assert.ok(!d.envelope.text.includes('подробное задание'.repeat(5)), 'тело задания не инлайнится');
+  assert.ok(d.envelope.text.includes('Оракул (как принимают)'), 'оракул остаётся inline');
+  assert.ok(d.envelope.metrics.chars <= 5500, 'указатель в лимите');
+  // без канала payload — пауза, а не молчаливая обрезка
+  const noChannel = PromptCompiler.forDelivery(big, { softLimit: 3000, hardLimit: 5500, payloadChannel: false });
+  assert.equal(noChannel.strategy, 'pause');
+  // малое задание остаётся инлайном (full)
+  const small = dispatchRequest('Auditor', { task: { ...dispatchRequest('Auditor').task, payload: 'короткое задание', payloadRef: ref } });
+  const s = PromptCompiler.forDelivery(small, { softLimit: 6000, hardLimit: 5500, payloadChannel: true });
+  assert.equal(s.strategy, 'full');
+  assert.ok(s.envelope.text.includes('короткое задание'));
+}
+
 // 3. Compact/recovery сохраняют маркер и ID того же хода (повтор ≠ новый ход).
 {
   const rec = PromptCompiler.compile(planRequest({ delivery: { tier: 'recovery' } }));

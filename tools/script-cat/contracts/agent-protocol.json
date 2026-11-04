@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.2",
+  "protocolVersion": "1.3",
   "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
@@ -296,9 +296,9 @@
         "creator": "ScriptCat через Gateway"
       },
       "payloads": {
-        "purpose": "входные большие задания",
-        "name": "свободное безопасное имя",
-        "creator": "Gateway по указанию ScriptCat/Coordinator"
+        "purpose": "входные большие задания; большое задание доставляется указателем, не инлайном",
+        "name": "свободное безопасное имя; снимок прогона <dispatch_id>_<run_id>__assignment.md",
+        "creator": "Gateway по указанию ScriptCat/Coordinator; снимок прогона — ScriptCat через savePayload"
       },
       "artifacts": {
         "purpose": "свободные результаты агентов",
@@ -470,7 +470,23 @@
       "unknown"
     ],
     "errorClassOrder": "tool_call_limit определяется раньше budget_exceeded, rate_limit и arena_generic_error; слово limit само по себе не означает budget_exceeded",
-    "compactRetryRoleSafety": "delivery.compact/retry ролевой: Auditor — только чтение (без коммитов/push/PR merge), Reviewer рабочую выдачу не получает (guard), Executor мержит сам"
+    "compactRetryRoleSafety": "delivery.compact/retry ролевой: Auditor — только чтение (без коммитов/push/PR merge), Reviewer рабочую выдачу не получает (guard), Executor мержит сам",
+    "payloadChannel": {
+      "strategy": "full → payload-указатель → compact → pause; оракул/Scope/ID не режутся молча",
+      "pointerBlock": "task.assignment",
+      "pointerIsVerbatim": true,
+      "inlineMaxChars": 1500,
+      "snapshotName": "<dispatch_id>_<run_id>__assignment.md",
+      "snapshotCreator": "ScriptCat через Gateway savePayload (снимок на прогон)",
+      "oracleStaysInline": "Acceptance/Scope/инварианты остаются в промпте; payload-файл их не заменяет и не ослабляет",
+      "failurePolicy": "отказ savePayload/read — явная ошибка/пауза, не тихий инлайн"
+    },
+    "budgetDiagnostics": "budget_exceeded несёт разбивку по блокам (id/chars/overhead/verbatim); пауза называет топ блоков, съевших overhead",
+    "dispatchTotalByRole": {
+      "Executor": 6500,
+      "Auditor": 5500,
+      "Reviewer": 7000
+    }
   },
   "toolCallLimit": {
     "statusText": "The agent reached the tool-call limit for this turn. Send a message to continue where it left off.",
@@ -670,5 +686,13 @@
     "png": "image/png, base64, байтовый лимит 262144",
     "subdirs": "один уровень artifacts/<МИССИЯ> по явному запросу; создание подкаталога — решение Warden/Мастера, не импровизация агента",
     "compat": "старые UUID/manual имена и текстовые MIME сохранены; ключ и папки проекта не меняются; ретро-переименование запрещено"
+  },
+  "d034": {
+    "decision": "D-034",
+    "summary": "Бюджет overhead without raising limits + рабочий payload-канал",
+    "overheadDiet": "git.executor/git.auditor не повторяют base-ветку лишние разы; repo.target короче; заглушка task.assignment компактная. Бюджеты профилей не подняты.",
+    "auditorCardBudget": 2200,
+    "payloadChannel": "большое задание (>payloadInlineMax) фиксируется снимком savePayload на прогон и доставляется verbatim-указателем; оракул/Scope остаются inline",
+    "regression": "K-17-подобная карточка (длинный заголовок/зона/ветка) компилируется в auditor.card ≤2200 без подъёма бюджета"
   }
 }

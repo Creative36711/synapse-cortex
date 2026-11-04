@@ -21,10 +21,10 @@
       Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
     ].filter(Boolean).join("\n") });
 
-    def("repo.target", { render: (c) => {
+    def("repo.target", { version: 2, render: (c) => {
       const base = c.target?.baseBranch || "main";
       return [
-        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок Arena может быть без общей истории: пустой merge-base в shallow не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок бывает shallow: пустой merge-base не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
       ].join("\n");
     } });
 
@@ -46,14 +46,14 @@
     def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
       "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
 
-    def("git.executor", { ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
+    def("git.executor", { version: 2, ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
-      return `GIT: fetch origin ${base}; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
+      return `GIT: fetch origin; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
     } });
 
-    def("git.auditor", { ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
+    def("git.auditor", { version: 2, ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
-      return `GIT read-only: истина — origin/${base}. fetch origin ${base}; log --oneline -5 origin/${base}; show origin/${base}:<путь>. Работа — PR в ${base}: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
+      return `GIT read-only: истина — origin/${base}. fetch origin; log --oneline -5 origin/${base}; show origin/${base}:<путь>. PR: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
     } });
 
     def("evidence.rule", { ruleIds: ["R-EVIDENCE"], render: () =>
@@ -64,10 +64,17 @@
     def("task.acceptance", { verbatim: true, ruleIds: ["R-EVIDENCE"], render: (c) => line("Оракул (как принимают)", c.task?.acceptance || "не задан") });
     def("task.scope", { verbatim: true, render: (c) => line("Scope", c.task?.scope || "не задан") });
     def("task.freedom", { verbatim: true, render: (c) => line("Свободно", c.task?.freedom || "как решишь, если проходят инварианты") });
-    def("task.assignment", { verbatim: (c) => Boolean(String(c.task?.payload || "").trim()), render: (c) => {
+    def("task.assignment", { version: 2, verbatim: (c) => Boolean(String(c.task?.payload || "").trim()) || Boolean(c.task?.payloadPointer && c.task?.payloadRef?.fileId), render: (c) => {
+      // D-034: большое задание живёт в Drive payloads; в промпте — короткий
+      // указатель (verbatim), а не сам текст. Оракул/Scope остаются inline.
+      const ref = c.task?.payloadRef;
+      if (c.task?.payloadPointer && ref && ref.fileId) {
+        const url = ref.url || `https://drive.google.com/file/d/${ref.fileId}/view`;
+        return `ЗАДАНИЕ — в файле Drive, прочитай его до работы: ${url}\nФайл: ${ref.fileId}. Оракул и Scope выше обязательны; файл их не заменяет и не ослабляет.`;
+      }
       const body = String(c.task?.payload || "").trim();
       if (body) return `ЗАДАНИЕ\n${body}`;
-      return "ЗАДАНИЕ: карточка и есть задание (поля выше). Не хватает — реши обратимо, запиши (неясно/решил/откат) в docs/decisions если Scope разрешает, иначе в отчёт.";
+      return "ЗАДАНИЕ: карточка и есть задание (поля выше).";
     } });
 
     def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
@@ -188,8 +195,8 @@
     def("delivery.recovery", { render: () =>
       "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
-    def("drive.layout", { ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
-      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads, обычно не нужен; журнал попытки — logs; свободные результаты — artifacts." });
+    def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
+      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");

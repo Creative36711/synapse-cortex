@@ -117,4 +117,46 @@ for (const req of cases) {
   assert.equal(tight.strategy, 'pause');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены');
+// 9. D-034: регрессия K-17 — реальная карточка с длинным заголовком/зоной/веткой
+// влезает в бюджет auditor.card БЕЗ подъёма бюджета (скелет стал компактнее).
+{
+  const k17 = dispatchRequest('Auditor', {
+    task: { ...task(), title: 'SYN-1 · K-17 · Промежуточный независимый аудит O-4' },
+    role: { name: 'Spec Auditor', fn: 'Auditor', zone: 'docs/agents/**, tools/script-cat/**' },
+    target: { repo: 'Creative36711/synapse-cortex', baseBranch: 'arena/87031a47-synapse-cortex' },
+  });
+  const r = PromptCompiler.compile(k17);
+  assert.ok(r.ok, `K-17-подобная карточка компилируется: ${r.error?.message}`);
+  assert.ok(r.metrics.overheadChars <= 2200, `K-17 overhead ${r.metrics.overheadChars} ≤ 2200 без подъёма бюджета`);
+  // запас на будущие карточки: фиксированный скелет заметно ниже бюджета
+  const fixture = PromptCompiler.compile(dispatchRequest('Auditor'));
+  assert.ok(fixture.metrics.overheadChars <= 2050, `скелет auditor.card ${fixture.metrics.overheadChars} ≤ 2050`);
+}
+
+// 10. D-034: указатель на payload — verbatim, оракул/Scope остаются inline.
+{
+  const ref = { fileId: '1aq-ufiTecQR4rA2uVGKaHmNvi8LvrmLn', url: 'https://drive.google.com/file/d/1aq-ufiTecQR4rA2uVGKaHmNvi8LvrmLn/view' };
+  const r = PromptCompiler.compile(dispatchRequest('Auditor', { task: task({ payload: '', payloadRef: ref, payloadPointer: true }) }));
+  assert.ok(r.ok);
+  assert.ok(r.text.includes(ref.fileId), 'указатель несёт ID файла');
+  assert.ok(r.text.includes('прочитай его до работы'), 'агенту сказано прочитать файл');
+  assert.ok(r.text.includes('Оракул (как принимают)'), 'оракул остаётся inline');
+  assert.ok(r.text.includes('Scope'), 'Scope остаётся inline');
+  const assign = r.blocks.find((b) => b.id === 'task.assignment');
+  assert.ok(assign.verbatim, 'указатель — verbatim, не ест overhead');
+  // указатель не должен раздувать overhead против карточки без задания
+  const bare = PromptCompiler.compile(dispatchRequest('Auditor'));
+  assert.ok(r.metrics.overheadChars <= bare.metrics.overheadChars + 1, 'указатель не увеличивает overhead');
+}
+
+// 11. D-034: budget_exceeded несёт разбивку по блокам (диагностируемая пауза).
+{
+  const over = PromptCompiler.compile(dispatchRequest('Auditor', { delivery: { tier: 'full', hardLimit: 10 } }));
+  assert.equal(over.error.code, 'budget_exceeded');
+  assert.ok(Array.isArray(over.error.detail.blocks) && over.error.detail.blocks.length, 'есть разбивка по блокам');
+  const row = over.error.detail.blocks.find((b) => b.id === 'git.auditor');
+  assert.ok(row && row.overhead > 0 && typeof row.chars === 'number', 'блок несёт chars/overhead');
+  assert.ok(over.error.detail.blocks.some((b) => b.verbatim && b.overhead === 0), 'verbatim-блоки с нулевым overhead');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета)');

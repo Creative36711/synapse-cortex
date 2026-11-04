@@ -96,16 +96,19 @@
       const text = parts.map((p) => p.text).join("\n\n");
       const m = metrics(text, parts);
       const ruleIds = [...new Set(parts.flatMap((p) => p.ruleIds))];
+      // D-034: разбивка overhead по блокам — пауза должна говорить, какой блок
+      // съел бюджет, а не только «overhead N > лимита».
+      const breakdown = parts.map((p) => ({ id: p.id, chars: p.text.length, overhead: p.verbatim ? 0 : p.text.length, verbatim: p.verbatim }));
 
       if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
-        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead });
+        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead, blocks: breakdown });
       }
       const hard = c.delivery?.hardLimit || 0;
-      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard });
+      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard, blocks: breakdown });
 
       return {
         ok: true, text, profileId, tier, marker: markerName,
-        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim })),
+        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim, chars: p.text.length, overhead: p.verbatim ? 0 : p.text.length })),
         ruleIds, metrics: m, hash: hash(text),
       };
     }
@@ -147,13 +150,22 @@
       return null;
     }
 
-    // Стратегия доставки: full → compact → payload/пауза. Не режет оракул молча.
+    // Стратегия доставки: full → payload-указатель → compact → пауза. Не режет
+    // оракул молча. D-034: большое задание уходит указателем в Drive payloads
+    // (оракул/Scope остаются inline), а не инлайном, разрывающим total-лимит.
     function forDelivery(request, { softLimit = 6000, hardLimit = 9000, payloadChannel = false } = {}) {
       const full = compile({ ...request, delivery: { ...request.delivery, tier: "full", hardLimit } });
       if (full.ok && full.metrics.chars <= softLimit) return { strategy: "full", envelope: full };
+      if (payloadChannel && request.task?.payloadRef?.fileId) {
+        const pointer = compile({
+          ...request,
+          task: { ...request.task, payload: "", payloadPointer: true, payloadRef: request.task.payloadRef },
+          delivery: { ...request.delivery, tier: "full", hardLimit },
+        });
+        if (pointer.ok && pointer.metrics.chars <= hardLimit) return { strategy: "payload", envelope: pointer };
+      }
       const compact = compile({ ...request, delivery: { ...request.delivery, tier: "compact", hardLimit } });
       if (compact.ok && compact.metrics.chars <= hardLimit) return { strategy: "compact", envelope: compact };
-      if (payloadChannel && compact.ok) return { strategy: "payload", envelope: compact };
       const why = full.ok ? compact : full;
       return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
     }
