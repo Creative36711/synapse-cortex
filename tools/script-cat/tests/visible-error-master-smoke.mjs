@@ -29,12 +29,12 @@ const monitorEnd = source.indexOf('\n\n  // ────────────
 assert.ok(monitorStart > 0 && monitorEnd > monitorStart, 'monitorVisibleErrors is present');
 const monitorSource = source.slice(monitorStart, monitorEnd);
 assert.doesNotMatch(monitorSource, /\.click\(|sendButton|location\.reload\(\)/, 'the error monitor never clicks, resends, or reloads');
-const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = false, initiallySeen = [] } = {}) => {
+const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = false, initiallySeen = [], toolLimit = null } = {}) => {
   const seen = new Set(initiallySeen);
   const calls = { marked: [], retry: [], pause: [] };
   const monitor = new Function(
     'K', 'latestUserMessageAlert', 'alreadyReported', 'markReported', 'GM_getValue',
-    'retryRejectedHandoff', 'pause', 'detectVisibleErrorCard',
+    'retryRejectedHandoff', 'pause', 'detectVisibleErrorCard', 'detectToolCallLimit',
     `${monitorSource}\nreturn monitorVisibleErrors;`,
   )(
     keys,
@@ -45,6 +45,7 @@ const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = fal
     (...args) => { calls.retry.push(args); return retryResult; },
     (...args) => calls.pause.push(args),
     () => card,
+    () => toolLimit,
   );
   return { monitor, calls };
 };
@@ -118,6 +119,17 @@ const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = fal
   const { monitor, calls } = makeMonitor();
   assert.equal(monitor(), false);
   assert.equal(calls.retry.length, 0);
+  assert.equal(calls.pause.length, 0);
+}
+
+// 6. A tool-call limit status is deferred to the continuation handler, not
+//    turned into a generic UI-error Master pause.
+{
+  const { monitor, calls } = makeMonitor({
+    toolLimit: { messageId: 'limit-1', text: 'The agent reached the tool-call limit for this turn.' },
+    card: 'Some error card',
+  });
+  assert.equal(monitor(), false, 'tool-call limit не становится общей паузой по UI-ошибке');
   assert.equal(calls.pause.length, 0);
 }
 

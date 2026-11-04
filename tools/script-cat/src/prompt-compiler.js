@@ -39,7 +39,7 @@
       const profileId = c.profileId || PROMPT_PROFILES.select(kind, fn, tier);
       const profile = PROMPT_PROFILES.profiles[profileId];
       if (!profile) return err("unknown_profile", `нет профиля для kind=${kind} fn=${fn} tier=${tier}`);
-      if (kind === "pilot" && profileId !== "pilot.synapse") return err("unknown_profile", "pilot обязан использовать pilot.synapse");
+      if (kind === "pilot" && !["pilot.synapse", "continuation.pilot"].includes(profileId)) return err("unknown_profile", "pilot обязан использовать pilot.synapse или continuation.pilot");
 
       for (const fact of profile.requiredFacts) {
         const v = get(c, fact);
@@ -66,7 +66,7 @@
         if (cond && !cond(c)) continue;
         // Аудитория: pilot-профиль не принимает командные блоки и наоборот.
         const aud = block.audience || [];
-        const isPilotProfile = profileId === "pilot.synapse";
+        const isPilotProfile = profileId === "pilot.synapse" || profileId === "continuation.pilot";
         const isPilotBlock = aud.includes("pilot");
         if (isPilotProfile !== isPilotBlock) {
           return err("forbidden_block", isPilotProfile ? `командный блок ${id} попал в pilot-профиль` : `pilot-блок ${id} попал в командный профиль`);

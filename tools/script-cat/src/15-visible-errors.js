@@ -1,5 +1,34 @@
   // ───────────────────────── ошибка на экране ─────────────────────────
   /**
+   * Tool-call limit — отдельное состояние Arena: ход уже начался, часть работы
+   * могла быть сделана. Это не отказ доставки, не captcha/auth/rate и не забытый
+   * маркер. Правильное действие — короткое сообщение-продолжение в тот же чат
+   * (см. 30-tool-limit.js), а не повтор задания и не общая пауза по UI-ошибке.
+   */
+  const TOOL_LIMIT_RE = /the agent reached the tool-call limit for this turn|send a message to continue where it left off|tool[- ]call limit for this turn|лимит вызовов инструментов|достиг лимита инструментов/i;
+  const TOOL_LIMIT_EXCLUDE = "pre, code, textarea, .shiki, .hljs, .prism, .monaco-editor, [data-language], [data-diff], [class*='diff'], [class*='code-block'], [contenteditable='true'], [contenteditable='']";
+
+  /**
+   * Видимый статус tool-call limit в транскрипте (role=status/alert, amber —
+   * лишь дополнительный признак). Ищем в сообщениях чата, не в pre/code/diff/
+   * редакторе; привязываем к ближайшему chat-message. Без id — хеш текста+позиция.
+   */
+  function detectToolCallLimit() {
+    const nodes = messages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      for (const el of node.querySelectorAll('[role="status"], [role="alert"]')) {
+        if (!visible(el) || el.closest(TOOL_LIMIT_EXCLUDE)) continue;
+        const text = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text || !TOOL_LIMIT_RE.test(text)) continue;
+        const messageId = nodeId(node) || `h${textHash(text)}:${i}`;
+        return { messageId, text: text.slice(0, 300), index: i };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Arena показывает сбой двумя способами: алертом внутри последнего
    * пользовательского сообщения и красной карточкой в интерфейсе. Оба —
    * повод остановиться, а не «подождать и попробовать ещё раз»: повтор поверх
@@ -33,6 +62,8 @@
         if (card.closest("pre, code, textarea, .shiki, .hljs, .prism, .monaco-editor, [data-language], [data-diff], [class*='diff'], [class*='code-block']")) continue;
         const text = String(card.innerText || card.textContent || "").trim();
         if (!text) continue;
+        // Tool-call limit — не UI-ошибка: его обрабатывает продолжение хода.
+        if (TOOL_LIMIT_RE.test(text)) continue;
         if (text.length < 400 || keywords.test(text)) {
           card.dataset.cfnSeen = "1";
           return text.replace(/\s+/g, " ").slice(0, 300);
@@ -55,6 +86,9 @@
   }
 
   function monitorVisibleErrors() {
+    // Tool-call limit обрабатывается продолжением хода (handleToolCallLimit в
+    // тике стоит раньше). Здесь не превращаем его в общую паузу по UI-ошибке.
+    if (detectToolCallLimit()) return false;
     const alert = latestUserMessageAlert();
     if (alert) {
       const key = `alert:${alert.messageId}`;

@@ -249,6 +249,8 @@
         captchaPause();
         return;
       }
+      // Tool-call limit — продолжение того же хода, раньше общей паузы по ошибке.
+      if (await handleToolCallLimit()) return;
       // Ошибка на экране важнее любого шага: сначала остановиться.
       if (monitorVisibleErrors()) return;
       await setup(false);

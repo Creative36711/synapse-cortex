@@ -28,7 +28,7 @@ const PropertiesService = { getScriptProperties: () => ({ getProperty: (k) => pr
 const ContentService = { MimeType: { JSON: 'json' }, createTextOutput: (v) => ({ setMimeType() { return this; }, getContent: () => v }) };
 const LockService = { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) };
 const factory = new Function('DriveApp', 'PropertiesService', 'ContentService', 'MimeType', 'LockService', 'Utilities', `${source}\nreturn { doPost, setupGatewayKey, setupProjectGateway };`);
-const api = factory(drive, PropertiesService, ContentService, { PLAIN_TEXT: 'text/plain' }, LockService, { getUuid: randomUUID });
+const api = factory(drive, PropertiesService, ContentService, { PLAIN_TEXT: 'text/plain' }, LockService, { getUuid: randomUUID, newBlob: (s) => ({ getBytes: () => new Uint8Array(Buffer.from(String(s), 'utf8')) }) });
 const quiet = console.log; console.log = () => {};
 const legacyKey = api.setupGatewayKey();
 const A = '11111111-1111-4111-8111-111111111111', B = '22222222-2222-4222-8222-222222222222';
@@ -38,7 +38,7 @@ console.log = quiet;
 assert.notEqual(a.key, b.key); assert.notEqual(a.key, legacyKey); assert.notEqual(b.key, legacyKey);
 const call = (key, body) => JSON.parse(api.doPost({ postData: { contents: JSON.stringify({ ...body, key }) } }).getContent());
 const legacy = call(legacyKey, { action: 'ping' });
-assert.equal(legacy.version, '1.7'); assert(!legacy.projectScoped); assert.equal(legacy.artifacts.name, 'artifacts');
+assert.equal(legacy.version, '1.7.1'); assert(!legacy.projectScoped); assert.equal(legacy.artifacts.name, 'artifacts');
 for (const [profile, id] of [[a, A], [b, B]]) {
   const ping = call(profile.key, { action: 'ping', projectId: id });
   assert.equal(ping.ok, true); assert.equal(ping.projectScoped, true); assert.equal(ping.projectId, id);
@@ -107,4 +107,4 @@ assert.equal(artA.ok, true); assert.equal(find(artA.fileId).parent.name, 'artifa
 assert.equal(call(a.key, { action: 'read', projectId: A, fileId: artA.fileId }).content, '{"a":1}');
 assert.equal(call(b.key, { action: 'read', projectId: B, fileId: artA.fileId }).ok, false, 'чужой артефакт не читается');
 assert.equal(call(b.key, { action: 'saveArtifact', projectId: B, name: artName, content: '{}' }).fileId !== artA.fileId, true, 'имя не пересекает проекты');
-console.log('OK: Gateway 1.7 — два проекта, разные ключи, artifacts и миграция без смены ключа, границы чтения/записи, отказ при переносе и legacy');
+console.log('OK: Gateway 1.7.1 — два проекта, разные ключи, artifacts и миграция без смены ключа, границы чтения/записи, отказ при переносе и legacy');

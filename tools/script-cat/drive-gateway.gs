@@ -1,4 +1,4 @@
-/** Relay ScriptCat Drive gateway 1.7. Deploy as a web app executing as the owner. */
+/** Relay ScriptCat Drive gateway 1.7.1. Deploy as a web app executing as the owner. */
 const CF_KEY_PROPERTY = "CF_GATEWAY_KEY";
 const CF_PROJECTS_PROPERTY = "CF_GATEWAY_PROJECTS_V1";
 const CF_SETUP_PROJECT_ID = "CF_SETUP_PROJECT_ID";
@@ -123,7 +123,7 @@ function doGet() {
   return json_({
     ok: true,
     service: "Relay Drive gateway",
-    version: "1.7",
+    version: "1.7.1",
   });
 }
 
@@ -146,7 +146,7 @@ function doPost(e) {
         return json_({
           ok: true,
           service: "Relay Drive gateway",
-          version: "1.7",
+          version: "1.7.1",
           ...(project ? { projectScoped: true, projectId: project.id, project: folderInfo_(layout.project) } : {}),
           arena: folderInfo_(layout.arena),
           logs: folderInfo_(layout.logs),
@@ -203,7 +203,10 @@ function doPost(e) {
     if (request.action === "saveArtifact") {
       const name = safeArtifactName_(request.name);
       const content = String(request.content || "");
-      if (content.length > CF_ARTIFACT_MAX_BYTES) throw new Error("Артефакт превышает допустимый размер.");
+      // Размер — в UTF-8 байтах, а не в длине JS-строки: кириллица занимает 2
+      // байта на символ, и content.length пропустил бы файл за лимит.
+      const byteLength = Utilities.newBlob(content).getBytes().length;
+      if (byteLength > CF_ARTIFACT_MAX_BYTES) throw new Error("Артефакт превышает допустимый размер (UTF-8 байты).");
       const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
       const mime = CF_ARTIFACT_MIME[ext];
       if (!mime) throw new Error("Артефакт только md/txt/json/csv.");
@@ -213,6 +216,11 @@ function doPost(e) {
         if (matches.hasNext()) {
           const existing = matches.next();
           verifyArtifactPlacement_(existing, artifacts);
+          // Совпало имя — сверяем содержимое. Иначе молча вернули бы старый
+          // отчёт вместо нового; разное содержимое — явный конфликт.
+          const existingContent = existing.getBlob().getDataAsString("UTF-8");
+          if (existingContent !== content)
+            throw new Error("Артефакт с таким именем уже есть, но содержимое другое: конфликт. Возьмите новое имя.");
           return json_({ ok: true, fileId: existing.getId(), name: name, duplicate: true });
         }
         const file = artifacts.createFile(name, content, mime);

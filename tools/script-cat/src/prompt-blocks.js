@@ -123,24 +123,52 @@
       const auditor = c.role?.fn === "Auditor";
       return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
     };
-    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => [
-      "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
-      markerJson(c, "CF_AGENT_RESULT"),
-    ].join("\n") });
-    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => [
-      "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
-      markerJson(c, "CF_COORDINATOR_RESULT"),
-    ].join("\n") });
-    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
+    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.",
+        "Если продолжить нельзя — назови блокер, не выдумывай результат.",
+        `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted"}`,
+      ].join("\n");
+      return [
+        "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
+        markerJson(c, "CF_AGENT_RESULT"),
+      ].join("\n");
+    } });
+    def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда ход завершён, сдай полный отчёт и последней строкой CF_COORDINATOR_RESULT с этими IDs.",
+        "Если без Мастера нельзя — используй blocked/need по правилам хода.",
+        `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`,
+      ].join("\n");
+      return [
+        "Последней строкой ответа — ровно один маркер. mission_id и turn_id копируй из этого промпта. next — имя роли выдаваемой карточки или done. Остановка только next:\"blocked\" + need:\"<роль>\". Вопрос — поле question в том же JSON:",
+        markerJson(c, "CF_COORDINATOR_RESULT"),
+      ].join("\n");
+    } });
+    def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
+        "Если доказательств не хватает — не принимай миссию.",
+        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
+      ].join("\n");
+      return [
       `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
-    ].filter(Boolean).join("\n") });
-    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => [
-      "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
-      c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
-      markerJson(c, "CF_ANSWER_RESULT"),
-    ].filter(Boolean).join("\n") });
+      ].filter(Boolean).join("\n");
+    } });
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
+        "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,
+      ].join("\n");
+      return [
+        "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+        c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
+        markerJson(c, "CF_ANSWER_RESULT"),
+      ].filter(Boolean).join("\n");
+    } });
 
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
@@ -165,8 +193,35 @@
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
-      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.`;
+      const fn = c.role?.fn || "Executor";
+      // Compact-retry не должен нарушать роль: Auditor — только чтение,
+      // Reviewer рабочую выдачу не получает (guard), Executor мержит сам.
+      const boundary = fn === "Auditor"
+        ? "Только чтение и проверка: без коммитов, push и PR merge. Оракул не ослабляй."
+        : fn === "Reviewer"
+          ? "Ничего не правь: только проверка и вердикт по правилам приёмки."
+          : "Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.";
+      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. ${boundary}`;
     } });
+
+    // ── continuation после tool-call limit: тот же ход, новые IDs не создаём ──
+    def("delivery.tool_limit", { render: (c) => {
+      if (c.kind === "plan") return "Продолжи текущий ход Координатора после лимита инструментов. Это не новый ход и не новая миссия.\nНе трогай git. Разбери очередь с текущего места и продолжи план.";
+      if (c.kind === "review") return "Продолжи приёмку миссии после лимита инструментов. Это не новая приёмка и не новый ход.\nНе правь код и карточки. Дочитай доказательства и вынеси вердикт.";
+      if (c.kind === "answer") return "Продолжи ответ на вопрос после лимита инструментов. Это не новый вопрос и не новый ход.";
+      return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
+    } });
+    def("identity.continue", { render: (c) => {
+      if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
+      if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
+      return `IDs прежние: dispatch_id=${c.task?.id}, run_id=${c.task?.runId}.`;
+    } });
+    def("role.boundary.continue", { ruleIds: ["R-ZONES", "R-GIT"], audience: ["Executor", "Auditor"], render: (c) =>
+      c.role?.fn === "Auditor"
+        ? "Только чтение и проверка: без коммитов, push и PR."
+        : "Работай только в своём Scope и по правилам задания." });
+    def("pilot.continue", { audience: ["pilot"], render: () =>
+      "Продолжи пилотный ход с того места, где он остановился. Не начинай сначала.\nНе используй внутренние знания, командные маркеры и закрытые документы.\nЗаверши публичный отчёт по брифу: что сделано, как запущено, артефакты и затруднения." });
 
     return B;
   })();
