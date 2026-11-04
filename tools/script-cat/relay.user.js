@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.11.0
+// @version      1.12.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -561,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.11.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8489,6 +8489,12 @@
         markerJson(c, "CF_AGENT_RESULT"),
       ].join("\n");
     } });
+    // D-035: маркер стоит только в конце длинного plan-промпта, и Координатор
+    // после десятка tool-вызовов его «не видел» и честно отказывался выдать
+    // (правило «не восстанавливай по памяти»). Короткое напоминание в начале
+    // праймит маркер; авторитетный формат с IDs остаётся в конце.
+    def("coordinator.prime", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: () =>
+      "Заверши ход маркером последней строкой ответа. Формат и IDs — в конце промпта: скопируй их оттуда, не по памяти. Не забудь маркер." });
     def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход завершён, сдай полный отчёт и последней строкой CF_COORDINATOR_RESULT с этими IDs.",
@@ -8545,6 +8551,11 @@
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
     def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
       "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
+    // D-035: исполнитель/аудитор раньше не получали адрес папки артефактов
+    // (drive.layout — только Координатору) и клали отчёты в корень Диска.
+    // Блок короткий, чтобы влезть в бюджет auditor.card без его подъёма.
+    def("drive.artifacts", { ruleIds: ["R-EVIDENCE"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) =>
+      `Артефакты в Arena/${c.drive?.project || "<project>"}/artifacts, не корень Диска; ссылки в поле artifacts.` });
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
@@ -8608,28 +8619,28 @@
 
     def("executor.card", {
       audience: ["Executor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["queue.coordinator", "review.protocol", "pilot.brief", "pilot.stop"],
       budget: { overhead: 2800 },
     });
     def("auditor.card", {
       audience: ["Auditor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["git.executor", "queue.coordinator", "pilot.brief"],
       budget: { overhead: 2200 },
     });
     def("coordinator.plan", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["identity.mission", "mission.returned", "repo.boundary", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
       budget: { overhead: 3200 },
     });
     def("coordinator.recovery", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["identity.mission", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 1500 },
@@ -8651,7 +8662,7 @@
     });
     def("reviewer.card", {
       audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
       requiredFacts: ["task.id", "task.runId"],
       forbidden: ["git.executor"],
       budget: { overhead: 2000 },
@@ -9096,6 +9107,8 @@
       target: promptTarget(ctx),
       task: taskFacts(task, runId, payload, ctx.payloadRef || null, Boolean(ctx.payloadPointer)),
       mission: missionId ? { id: missionId } : undefined,
+      // D-035: адрес папки артефактов — иначе исполнитель/аудитор кладёт в корень.
+      drive: { project: C.driveFolder || C.projectName || "" },
       delivery: { tier: "full", attempt: 1 },
     };
     const delivery = PromptCompiler.forDelivery(request, {

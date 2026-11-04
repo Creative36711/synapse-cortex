@@ -159,4 +159,39 @@ for (const req of cases) {
   assert.ok(over.error.detail.blocks.some((b) => b.verbatim && b.overhead === 0), 'verbatim-блоки с нулевым overhead');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета)');
+// 12. D-035: маркер Координатора праймится в начале, формат остаётся в конце.
+{
+  for (const tier of ['full', 'recovery']) {
+    const r = PromptCompiler.compile(planRequest({ delivery: { tier } }));
+    assert.ok(r.ok, `plan/${tier} компилируется с праймом: ${r.error?.message}`);
+    assert.equal(r.blocks[0].id, 'coordinator.prime', 'прайм — первый блок');
+    assert.ok(r.text.split('\n')[0].includes('маркером последней строкой'), 'первая строка напоминает о маркере');
+    assert.ok(r.text.split('\n')[0].includes('в конце промпта'), 'прайм ссылается на формат в конце');
+    // ровно один маркер и он последний; прайм не несёт литерал маркера
+    const markerBlocks = r.blocks.filter((b) => b.id.startsWith('marker.'));
+    assert.equal(markerBlocks.length, 1, 'ровно один marker-блок');
+    assert.equal(r.blocks.at(-1).id, 'marker.coordinator', 'маркер — последний блок');
+    assert.ok(!r.text.split('\n')[0].includes('CF_COORDINATOR_RESULT'), 'прайм без литерала маркера');
+    assert.ok(r.text.trim().split('\n').at(-1).startsWith('CF_COORDINATOR_RESULT'), 'формат маркера в конце');
+  }
+}
+
+// 13. D-035: исполнитель/аудитор/ревьюер получают адрес папки артефактов, не корень.
+{
+  for (const fn of ['Executor', 'Auditor', 'Reviewer']) {
+    const r = PromptCompiler.compile(dispatchRequest(fn, { drive: { project: 'synapse' } }));
+    assert.ok(r.ok, `${fn} компилируется с drive.artifacts`);
+    const b = r.blocks.find((x) => x.id === 'drive.artifacts');
+    assert.ok(b, `${fn} несёт блок drive.artifacts`);
+    assert.ok(r.text.includes('Arena/synapse/artifacts'), `${fn} видит адрес папки artifacts`);
+    assert.ok(r.text.includes('не корень Диска'), `${fn} видит запрет корня`);
+    assert.ok(!b.verbatim, 'drive.artifacts не verbatim (честный overhead)');
+    // drive.layout по-прежнему только Координатору — исполнитель его не получает
+    assert.ok(!r.blocks.some((x) => x.id === 'drive.layout'), `${fn} не несёт coordinator drive.layout`);
+  }
+  // адрес берётся из ctx.drive.project, а не зашит
+  const custom = PromptCompiler.compile(dispatchRequest('Auditor', { drive: { project: 'other-proj' } }));
+  assert.ok(custom.text.includes('Arena/other-proj/artifacts'), 'project из ctx, не хардкод');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов)');

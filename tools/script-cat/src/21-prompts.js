@@ -69,6 +69,8 @@
       target: promptTarget(ctx),
       task: taskFacts(task, runId, payload, ctx.payloadRef || null, Boolean(ctx.payloadPointer)),
       mission: missionId ? { id: missionId } : undefined,
+      // D-035: адрес папки артефактов — иначе исполнитель/аудитор кладёт в корень.
+      drive: { project: C.driveFolder || C.projectName || "" },
       delivery: { tier: "full", attempt: 1 },
     };
     const delivery = PromptCompiler.forDelivery(request, {

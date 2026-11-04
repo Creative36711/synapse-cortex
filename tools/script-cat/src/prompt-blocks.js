@@ -141,6 +141,12 @@
         markerJson(c, "CF_AGENT_RESULT"),
       ].join("\n");
     } });
+    // D-035: маркер стоит только в конце длинного plan-промпта, и Координатор
+    // после десятка tool-вызовов его «не видел» и честно отказывался выдать
+    // (правило «не восстанавливай по памяти»). Короткое напоминание в начале
+    // праймит маркер; авторитетный формат с IDs остаётся в конце.
+    def("coordinator.prime", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: () =>
+      "Заверши ход маркером последней строкой ответа. Формат и IDs — в конце промпта: скопируй их оттуда, не по памяти. Не забудь маркер." });
     def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход завершён, сдай полный отчёт и последней строкой CF_COORDINATOR_RESULT с этими IDs.",
@@ -197,6 +203,11 @@
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
     def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
       "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
+    // D-035: исполнитель/аудитор раньше не получали адрес папки артефактов
+    // (drive.layout — только Координатору) и клали отчёты в корень Диска.
+    // Блок короткий, чтобы влезть в бюджет auditor.card без его подъёма.
+    def("drive.artifacts", { ruleIds: ["R-EVIDENCE"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) =>
+      `Артефакты в Arena/${c.drive?.project || "<project>"}/artifacts, не корень Диска; ссылки в поле artifacts.` });
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
