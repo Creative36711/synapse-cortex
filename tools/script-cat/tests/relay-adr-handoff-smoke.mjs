@@ -176,8 +176,12 @@ assert.match(refreshSrc, /answered\.has\(adrKeyOf\(row\.file\)\)/, 'решённ
 assert.match(refreshSrc, /if \(pending\.length\) await deliverProposals\(pending\);/, 'нерешённое уходит приёмке');
 assert.match(refreshSrc, /статус файла меняет исполнитель карточкой/, 'долг агентов назван, а не спрятан');
 
-// ── 5. Промпт приёмки знает про предложения ───────────────────────────────
-assert.match(src, /Если вопрос про предложение \(`docs\/decisions\/\*\.md`, статус `proposed`\)/, 'приёмка отвечает по существу');
-assert.match(src, /Статус файла меняет исполнитель карточкой, не ты\./, 'статус меняет не приёмка');
+// ── 5. Промпт приёмки знает про предложения (декларативно) ────────────────
+const { PromptCompiler, answerRequest, dispatchRequest } = await import('./helpers/prompt-env.mjs');
+const ans = PromptCompiler.compile(answerRequest()).text;
+assert.match(ans, /Отвечай по существу/, 'приёмка отвечает по существу');
+assert.match(ans, /сам оракул\/файлы не меняй/, 'статус/файлы меняет не приёмка');
+const exe = PromptCompiler.compile(dispatchRequest('Executor')).text;
+assert.match(exe, /статус accepted\/rejected после ответа/, 'статус файла меняет исполнитель');
 
 console.log('adr-handoff: 24 проверки — ok');

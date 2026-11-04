@@ -1008,7 +1008,13 @@
     return String(h);
   }
 
-  async function sendToRole(role, text, kind, ref, extra = {}) {
+  async function sendToRole(role, input, kind, ref, extra = {}) {
+    // Адаптеры передают envelope компилятора; null означает, что компиляция
+    // не прошла и пауза уже поставлена — в Arena ничего не уходит.
+    if (input == null) return false;
+    const envelope = typeof input === "object" && input && typeof input.text === "string" ? input : null;
+    const text = envelope ? envelope.text : String(input);
+    if (!text.trim()) return false;
     if (typeof projectRoleAllowed === "function" && !projectRoleAllowed(role)) return false;
     // Ранее выданную Reviewer карточку можно завершить и напомнить о маркере,
     // но новой рабочей выдачи через общий транспорт быть не должно.
@@ -1074,11 +1080,15 @@
       lastReplyAt: 0,
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
+      prompt: envelope || null,
       ...payload,
       sessionRepo,
       targetRepo,
       targetBranch,
     });
+    if (envelope) {
+      recordPromptAttempt(envelope, { kind, ref, role: role.name, attempt: payload.attempt || 1, outcome: "queued" });
+    }
     dbg("sendToRole: задание в очереди", { role: role.name, kind, ref, длина: text.length });
     GM_setValue("cfn-me", role.name);
     setStatus();
@@ -1389,6 +1399,7 @@
     const { editor, closed, overlay } = await ensureComposer();
     if (closed) log("Убрал плашку «задача выполнена» — она закрывала поле ввода.");
     if (!editor) {
+      journalDelivery(GM_getValue(K.expect, null), "editor_not_found", "editor_not_found");
       pendingSay(
         pending,
         `Не нашёл поле ввода на странице адресата (${composerDiagnostics()}): задание осталось в очереди и не потеряется.` +
@@ -1450,6 +1461,7 @@
     // «откат отправки» и значит, что `sentAt` не ставится.
     if (delivery.captcha) {
       const waiting = GM_getValue(K.expect, null);
+      journalDelivery(waiting, "captcha", "captcha");
       if (waiting) GM_setValue(K.expect, { ...waiting, captcha: true, sentAt: null, verified: false });
       // Очередь остаётся, но с отметкой: после решения капчи сначала надо
       // посмотреть, не дошло ли сообщение всё-таки. Отсчёт TTL начинается
@@ -1486,6 +1498,7 @@
       // этой же карточке пришёл бы, когда она уже не Running, и
       // `submitExecutor` честно отказался бы его записывать.
       const failed = GM_getValue(K.expect, null);
+      journalDelivery(failed, "failed", classifyArenaFailure(`${delivery.reason} ${delivery.detail || ""}`));
       const rolled = await releaseUndelivered(
         failed,
         `сообщение не ушло (${String(delivery.reason).toLowerCase()})`,
@@ -1532,6 +1545,7 @@
         ...(isDispatchAssignment(expect, pending, me) ? { dispatchSentAt: sentAt } : {}),
       });
       dbg("Send: доставка подтверждена, отметка внутри чата", { watermark: mark, via: delivery.via || "message" });
+      journalDelivery(expect, "delivered");
     }
     GM_setValue(K.pending, null);
     GM_setValue(K.deadSend, "");

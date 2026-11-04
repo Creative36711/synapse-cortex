@@ -12,6 +12,10 @@
     "scriptcat:check": "node tools/script-cat/build.mjs --check",
     "scriptcat:guard": "node tools/script-cat/portability-guard.mjs",
     "test": "node --test tools/script-cat/tests/*.mjs",
+    "test:prompts": "node --test tools/script-cat/tests/prompts-smoke.mjs",
+    "test:delivery": "node --test tools/script-cat/tests/delivery-smoke.mjs",
+    "test:pilot": "node --test tools/script-cat/tests/pilot-smoke.mjs",
+    "test:docs": "node --test tools/script-cat/tests/docs-smoke.mjs",
     "test:regression": "node --test tools/script-cat/regression-tests/*.mjs",
     "verify": "npm run scriptcat:check && npm run scriptcat:guard && npm run test && npm run test:regression"
   }

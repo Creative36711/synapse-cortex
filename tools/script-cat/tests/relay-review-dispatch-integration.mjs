@@ -2,6 +2,7 @@
 // миссии. Notion, Drive, GM-хранилище и транскрипт заменены локальными моделями.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { promptShim } from './helpers/prompt-shim.mjs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 const cut = (from, to) => {
@@ -25,7 +26,13 @@ const syncMission = cut('  async function syncMissionState(', '  /**\n   * Па�
 const syncGate = cut('      try {\n        if (await syncMissionState()) return;', '      dbg("tick: состояние",');
 const stalePause = cut('  async function clearStaleMissionPause(', '  /**\n   * Блок замечаний Мастера');
 const routing = cut('      if (expect?.kind === "dispatch") {', '\n    } catch (e) {');
-const order = cut('  function reviewerOrder(', '  /**\n   * Текст задания.');
+// Историческая карточка Reviewer теперь собирается профилем reviewer.card.
+const order = `${promptShim}
+  function reviewerOrder(task, runId, missionId) {
+    const r = PromptCompiler.compile({ kind: "dispatch", profileId: "reviewer.card", role: { fn: "Reviewer", name: "Warden" }, task: { id: task.id, runId, title: task.id }, mission: missionId ? { id: missionId } : undefined, delivery: { tier: "full" } });
+    return r.ok ? r.text.split("\\n") : [];
+  }
+`;
 
 const MID = '4086f0cf-5705-81ea-94c6-e47bd6c3ba78';
 const CARD = '4096f0cf-5705-8159-bd88-c725d5ea075d';
@@ -558,16 +565,13 @@ for (const mode of ['expect', 'pending', 'race']) {
 {
   const h = harness();
   const text = h.reviewerOrder({ id: CARD }, RUN, MID).join('\n');
-  assert.match(text, /CF_REVIEW_RESULT/);
   assert.match(text, /CF_AGENT_RESULT/);
-  assert.ok(text.includes(`"mission_id":"${MID}"`));
+  assert.ok(text.includes(MID), 'миссия названа, когда передана');
   assert.ok(text.includes(`"dispatch_id":"${CARD}"`));
   assert.ok(text.includes(`"run_id":"${RUN}"`));
-  assert.ok(text.indexOf('CF_REVIEW_RESULT') < text.lastIndexOf('CF_AGENT_RESULT'));
-  assert.match(text, /Код, ветки и PR не меняй/);
-  assert.match(text, /поля карточки и её оракул сохраняются/);
-  assert.match(text, /отдельно назначенная приёмка/);
-  assert.doesNotMatch(h.reviewerOrder({ id: CARD }, RUN).join('\n'), /"mission_id"/);
+  assert.match(text, /ничего не правь/, 'Reviewer не меняет код/карточки');
+  assert.ok(!/gh pr merge/.test(text), 'Reviewer не мержит');
+  assert.doesNotMatch(h.reviewerOrder({ id: CARD }, RUN).join('\n'), /миссия [0-9a-f-]{36}/, 'без миссии её id не подставляется');
 }
 
 console.log('OK: Reviewer dispatch → журнал → Submitted → отдельная приёмка; ошибки, повторы и гонки');

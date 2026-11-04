@@ -14,8 +14,11 @@ const version = source.match(/^\/\/ @version\s+(\d+\.\d+\.\d+)\s*$/m)?.[1];
 assert.ok(version, 'active userscript has a semantic version');
 
 const gatewaySource = await readFile(new URL('../drive-gateway.gs', import.meta.url), 'utf8');
-assert.match(gatewaySource, /Relay ScriptCat Drive gateway 1\.6/);
-assert.match(gatewaySource, /version: "1\.6"/);
+assert.match(gatewaySource, /Relay ScriptCat Drive gateway 1\.7/);
+assert.match(gatewaySource, /version: "1\.7"/);
+assert.match(gatewaySource, /CF_ARTIFACTS_FOLDER_NAME = "artifacts"/);
+assert.match(gatewaySource, /saveArtifact/);
+assert.match(gatewaySource, /verifyArtifactPlacement_/);
 assert.match(gatewaySource, /Same Dispatch\/Run pair|dispatchId.*runId/s, 'Gateway uses the dispatch/run identity');
 assert.match(gatewaySource, /CF_ARENA_FOLDER_NAME = "Arena"/);
 assert.match(gatewaySource, /CF_LOGS_FOLDER_NAME = "logs"/);

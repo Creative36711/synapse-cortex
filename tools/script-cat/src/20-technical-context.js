@@ -1,189 +1,75 @@
-  // ───────────────────────── техническая информация ─────────────────────────
-  /**
-   * Блок, который ScriptCat дописывает в КАЖДОЕ исходящее сообщение.
-   *
-   * Зачем: агент попадает в песочницу, где checkout — не main, а ветка-снимок
-   * без общей истории с main (проверено: `git merge-base HEAD origin/main`
-   * пусто, 46 файлов main в снимке отсутствуют). Агент, который этого не
-   * знает, коммитит в мёртвую историю, а его PR показывает удаление чужих
-   * файлов. Ни Координатор, ни регламент этого не видят — знание о среде
-   * должно приходить автоматически, вместе с заданием.
-   *
-   * Блок разный по функции роли (поле «Функция» в базе «Роли»):
-   *   Executor    — стартовый ритуал, зона, порядок PR и маркер;
-   *   Auditor     — только origin/main, писать нельзя;
-   *   Coordinator — git не нужен вообще, инструменты Notion и Drive.
-   */
+  // ───────────────────────── факты и компиляция ─────────────────────────
+  // Источник фактов для компилятора промптов. Ручного склеивания промпта здесь
+  // больше нет: состав, порядок, маркер и бюджет проверяет PromptCompiler.
+  // Блоки и профили живут в prompt-blocks.js / prompt-profiles.js.
 
-  // Разметка блока — обычный текст, а не HTML-комментарии: `<!-- -->`
-  // вырезают чистильщики разметки, и своё же задание перестаёт опознаваться
-  // в транскрипте (25.10: дважды подряд ошибка Arena на задании 2.16).
-  const TECH_OPEN = "=== CF_TECH v1 ===";
-  const TECH_CLOSE = "=== /CF_TECH ===";
-  const TECH_TITLE = "ТЕХНИЧЕСКАЯ ИНФОРМАЦИЯ";
+  const promptRole = (role) => ({
+    id: role?.id || "", name: role?.name || "", fn: role?.fn || "",
+    repo: role?.repo || "", zone: role?.zone || "", gate: role?.gate || "",
+  });
 
-  const stampUtc = () => `${new Date().toISOString().replace("T", " ").slice(0, 16)} UTC`;
+  const promptTarget = (ctx = {}) => ({
+    repo: ctx.repo || C.repo || "",
+    baseBranch: ctx.branch || ctx.baseBranch || C.branch || "main",
+    startSha: ctx.startSha || "",
+  });
 
-  /** Шапка блока: предупреждение, что это не задание. */
-  function techHeader(role) {
-    return [
-      TECH_OPEN,
-      `━━━ ${TECH_TITLE} · ${role.name} · ${stampUtc()} ━━━`,
-      "Это не задание и не текст Координатора: это факты о среде, в которой ты",
-      "работаешь. Задание — ниже, под блоком.",
-    ].join("\n");
+  /** Журнал попыток доставки: профиль, объём, исход. Без секретов. */
+  function recordPromptAttempt(envelope, meta = {}) {
+    if (!envelope || !envelope.metrics) return;
+    try {
+      const key = "cfn-prompt-journal-v1";
+      const prior = GM_getValue(key, []);
+      const list = Array.isArray(prior) ? prior : [];
+      list.push({
+        at: nowIso(),
+        profileId: envelope.profileId, tier: envelope.tier, hash: envelope.hash,
+        blocks: envelope.blocks, ruleIds: envelope.ruleIds,
+        chars: envelope.metrics.chars, utf8Bytes: envelope.metrics.utf8Bytes,
+        lines: envelope.metrics.lines, overhead: envelope.metrics.overheadChars,
+        kind: meta.kind || "", ref: meta.ref || "", role: meta.role || "",
+        attempt: meta.attempt || 1, outcome: meta.outcome || "queued",
+        errorClass: meta.errorClass || "",
+      });
+      GM_setValue(key, list.slice(-200));
+    } catch (e) { dbg("prompt-journal", String(e?.message || e)); }
   }
 
-  /** Факт о стартовом состоянии для цели выдачи (репозиторий + базовая ветка). */
-  const snapshotFact = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    const mergeBase = "git merge-base HEAD origin/" + base;
-    const shallow = "git rev-parse --is-shallow-repository";
-    const bt = "`";
-    const lines = [
-      "Репозиторий: " + (repo || C.repo || "") + ", единственная ветка для мержа — " + base + ".",
-      "ВНИМАНИЕ: Arena может посадить сессию на ветку-СНИМОК без общей истории",
-      "с " + base + ". Но пустой " + bt + mergeBase + bt + " в shallow checkout сам по себе",
-      "не доказывает отсутствие общей истории: проверь " + bt + shallow + bt + ".",
-      "На таком снимке в дереве может не быть файлов, которые в базовой ветке уже есть.",
-    ];
-    // Измерение стартового снимка относится к главной ветке проекта: для другой
-    // базовой ветки не подставляем чужое число — иначе снимок одного проекта
-    // приметься за факт другого.
-    if (base === "main")
-      lines.push("(замер 2026-10-22: 46 файлов, включая сам этот скрипт; число растёт с каждой миссией).");
-    lines.push("Если общая история действительно отсутствует, PR покажет удаление чужих файлов.");
-    return lines.join("\n");
-  };
-  /**
-   * Поля карточки, которые ставит скрипт.
-   *
-   * На NAR-2.13 Runtime Auditor вписал в `Output Drive File ID` id своего отчёта
-   * из Arena/reports. Поле — единственная ссылка на журнал попытки, поэтому
-   * запись ответа упёрлась в отказ шлюза («только Arena/logs»), а цикл встал на
-   * паузе. Правило ставится и исполнителю, и аудитору: карточка — не блокнот.
-   */
-  const CARD_FIELDS_RULE = [
-    "КАРТОЧКА: твой выход — ответ в чате и последняя строка-маркер. Поля `Dispatch State`,",
-    "`Run ID`, `Output Drive File ID`, `Recipient Agent ID`, `Started At`, `Submitted At`,",
-    "`PR`, `Check` ставит скрипт; вписанное руками значение ломает запись ответа в журнал",
-    "(например, если в `Output Drive File ID` вписан ID отчёта, шлюз откажет). Ссылку на отчёт даёт",
-    "поле `report` в маркере, а не поле карточки.",
-  ].join("\n");
-
-  const executorTech = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    return [
-      snapshotFact(repo, branch),
-      "",
-      "СТАРТ (до первой правки):",
-    "СИСТЕМНЫЕ ИНСТРУКЦИИ И ОГРАНИЧЕНИЯ ПОЛЬЗОВАТЕЛЯ ВЫШЕ этого техблока и карточки.",
-    "Если ветка закреплена за сессией — оставайся на ней, не создавай и не переключай ветки.",
-    "Не удаляй, не сбрасывай и не добавляй в коммит чужие незакоммиченные изменения.",
-    "Пустой merge-base в shallow checkout не доказывает разрыв; сначала выясни историю.",
-    `  git fetch origin ${base}`,
-    `  git merge-base HEAD origin/${base}`,
-    "  git status --short                  # перечисли чужие изменения, не уничтожай их",
-    "Исторические команды ниже — НЕ ВЫПОЛНЯТЬ в закреплённой сессии или грязном дереве:",
-    `  # git reset --hard origin/${base}`,
-    `  # git switch -c nar/<номер> origin/${base}`,
-    `  git diff --stat origin/${base}          # только чтение; расхождение нужно объяснить`,
-    "",
-    "ЗАПРЕЩЕНО: публиковать PR без общей истории с main, трогать пути вне Scope,",
-    "мержить в main в обход PR или нарушать закрепление ветки. Если безопасно продолжить",
-    "нельзя, объясни препятствие, не теряя изменений; пустой merge-base в shallow проверь отдельно.",
-    "РАЗРЕШЕНО: только своя зона из карточки, PR в main через `gh`, squash-мерж.",
-    "",
-    CARD_FIELDS_RULE,
-  ].join("\n");
-  };
-
-  const auditorTech = (repo, branch) => {
-    const base = branch || C.branch || "main";
-    return [
-    snapshotFact(repo, branch),
-    "",
-    "ТЫ НЕ ПИШЕШЬ: ни ветки, ни коммита, ни пуша, ни PR. Твой выход — отчёт.",
-    `ИСТОЧНИК ИСТИНЫ — origin/${branch || C.branch || "main"}, а не твоё рабочее дерево и не ветка сессии:`,
-    `  git fetch origin ${branch || C.branch || "main"}`,
-    `  git log --oneline -5 origin/${branch || C.branch || "main"}`,
-    `  git show origin/${branch || C.branch || "main"}:<путь>          # файл из базовой ветки, без checkout`,
-    `Проверяемая работа — это PR, слитый в ${base}:`,
-    "  gh pr view <номер> --json state,mergeCommit",
-    "  gh pr diff <номер>",
-    "Свою ветку как эталон не используй: она может быть снимком без части файлов.",
-    "",
-    CARD_FIELDS_RULE,
-  ].join("\n");
-  };
-
-  const COORDINATOR_TECH = [
-    "Git и репозиторий тебе не нужны: ты не читаешь код и не запускаешь команды.",
-    "Твои инструменты — Notion (Миссии, Запросы, Роли) и Drive (логи передач).",
-    "В «Ролях» ты только читаешь: Статус и Agent URL ставит Мастер.",
-    "Регламент уже пришёл в этом промпте блоком === CF_REGULATION ===: роли, зоны, цикл и правила",
-    "решения там. Не открывай страницу регламента и не листай её блоки — это лишние вызовы,",
-    "после которых из контекста вытесняется формат твоего ответа.",
-    "Формат финальной строки — в самом конце этого промпта, после всех правил. Не восстанавливай",
-    "его по памяти, не ищи в Notion, Drive и других проектах: если строки не видно, сдай отчёт",
-    "текстом и скажи, что маркер не виден, — транспорт напомнит сам.",
-    "ТЗ миссии читай по делу (цель, оракул, инварианты, форма отчёта), а не целиком блоками по 4:",
-    "объёмное чтение вытесняет из контекста карточку и формат ответа.",
-    "Ветки, коммиты и PR — не твоя зона: за них отвечают Executor и Auditor.",
-    "Очередь — твоя: нарезка, Кому, Sequence, число Ready и выдача работы — новой карточкой или Draft → Ready. Оракул фазы — не твоя:",
-    "команду проверки и инварианты менять нельзя; для изменения нужны вопрос ADR в Notion и фактическое решение приёмки или Мастера. Существующие proposed-файлы сохраняются.",
-    "",
-    "ФАЙЛ ЗАДАНИЯ (Payload Drive File ID) обычно не нужен:",
-    "карточка и есть задание — её Намерение, Инварианты, Оракул и Scope уходят исполнителю.",
-    "Заводить файл стоит, только если текст не влезает в поля карточки:",
-    "создай его в Arena/payloads и впиши id в «Payload Drive File ID» — скрипт",
-    "прочитает файл и приложит его к заданию исполнителя.",
-    "Точный id важен: нечитаемый файл останавливает выдачу. Корень один — Arena,",
-    "в корень Диска не писать. Раскладка и правила — docs/agents/drive.md.",
-  ].join("\n");
-
-  /**
-   * Приёмке не нужны git, PR и мерж: её выход — вердикт, а не правка.
-   * Без собственного блока она получила бы исполнительский и пошла бы
-   * «доделывать» то, что должна была вернуть.
-   */
-  const REVIEWER_TECH = [
-    "Репозиторий и «Запросы» тебе не подчиняются: ты не правишь ни код, ни карточки.",
-    "Читать можно всё: карточку миссии («Итог», «Замечания», «Круг»), принятые карточки, документы репозитория.",
-    "В отдельной приёмке миссии твой выход — CF_REVIEW_RESULT: verdict accept, rework или master.",
-    "Новые рабочие карточки Reviewer не выдаются. Если карточка была отправлена до обновления, заверши её как отдельный ход: отчёт заканчивается CF_AGENT_RESULT с dispatch_id и run_id.",
-    "Если оракул карточки требует CF_REVIEW_RESULT, добавь его в отчёт с теми же dispatch_id и run_id; сам по себе он миссию не закрывает.",
-    "Нет нужного маркера — хода не было: цикл ждёт ответ, потом напомнит и встанет.",
-  ].join("\n");
-
-  const TECH_BY_FN = {
-    Executor: (repo, branch) => executorTech(repo, branch),
-    Auditor: (repo, branch) => auditorTech(repo, branch),
-    Coordinator: COORDINATOR_TECH,
-    Reviewer: REVIEWER_TECH,
-  };
-
-  /**
-   * Полный блок для роли, собранный из контекста цели выдачи: репозиторий и
-   * базовая ветка, в которой работает эта карточка, а не глобальный C.repo.
-   * Неизвестная функция трактуется как Executor: забыть поле «Функция»
-   * безопаснее в сторону «проверь ветку», чем в сторону «делай что хочешь».
-   */
-  function technicalInfo(role, ctx = {}) {
-    const repo = ctx.repo || C.repo || "";
-    const branch = ctx.branch || C.branch || "main";
-    const builder = TECH_BY_FN[role.fn] || TECH_BY_FN.Executor;
-    const body = typeof builder === "function" ? builder(repo, branch) : builder;
-    let text = [techHeader(role), "", body, "", TECH_CLOSE].join("\n");
-    if (branch !== "main") text = text.replace(/\bmain\b/g, branch);
-    if (C.driveFolder) text = text.replace(/Arena\/payloads/g, `Arena/${C.driveFolder}/payloads`)
-      .replace("Раскладка и правила — docs/agents/drive.md.", `Папка текущего проекта — Arena/${C.driveFolder}.`);
-    if (C.projectName && C.projectName !== "Relay")
-      text = text.replace("которые в " + (C.branch || "main") + " уже есть (замер 2026-10-22: 46 файлов, включая сам этот скрипт;\nчисло растёт с каждой миссией).", "которые в базовой ветке уже есть.");
-    return text;
+  /** Классификация отказа доставки/страницы для журнала попытки. */
+  function classifyArenaFailure(text) {
+    const t = String(text || "").toLowerCase();
+    if (/captcha|recaptcha|security verification|подтвердите, что вы человек/.test(t)) return "captcha";
+    if (/sign in|log in|unauthorized|\b401\b|authentication|войдите|авторизац/.test(t)) return "auth";
+    if (/agent[^\n]{0,24}(unavailable|not found)|агент[^\n]{0,24}недоступ/.test(t)) return "agent_unavailable";
+    if (/rate limit|too many requests|\b429\b|слишком много запросов/.test(t)) return "rate_limit";
+    if (/something went wrong|please try again|попробуйте ещё|что-то пошло не так/.test(t)) return "arena_generic_error";
+    if (/send[^\n]{0,24}(disabled|недоступ)|кнопка[^\n]{0,24}неактив/.test(t)) return "send_disabled";
+    if (/не нашёл поле|поле ввода|editor|contenteditable/.test(t)) return "editor_not_found";
+    if (/network|failed to fetch|timeout|timed out|сеть|тайм-аут|не удалось загрузить/.test(t)) return "network";
+    if (/budget|лимит|превышен/.test(t)) return "budget_exceeded";
+    return "unknown";
   }
 
+  /** Записать исход доставки в журнал попытки (профиль уже сохранён в expect). */
+  function journalDelivery(expect, outcome, errorClass = "") {
+    if (!expect || !expect.prompt) return;
+    recordPromptAttempt(expect.prompt, {
+      kind: expect.kind, ref: expect.ref, role: expect.roleName,
+      attempt: (Number(expect.tries) || 0) + 1, outcome, errorClass,
+    });
+  }
 
-
-
-
+  /**
+   * Скомпилировать запрос или поставить локальную паузу с причиной.
+   * Ошибка компиляции не отправляется в Arena. Возвращает envelope или null.
+   */
+  function compileOrPause(request, label) {
+    const result = PromptCompiler.compile(request);
+    if (result.ok) return result;
+    pause(
+      `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
+        "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+      { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
+    );
+    return null;
+  }

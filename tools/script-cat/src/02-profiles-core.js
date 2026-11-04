@@ -104,7 +104,7 @@
     }
     const folder = String(p.driveFolder || "");
     return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
-      !["logs", "payloads"].includes(folder);
+      !["logs", "payloads", "artifacts"].includes(folder);
   }
   function selectedProfileId() {
     try { return sessionStorage.getItem(PROFILE_SESSION_KEY) || LEGACY_PROFILE_ID; }
@@ -170,6 +170,10 @@
     collapsed: "cfn-panel-collapsed",
     stateV: "cfn-state-v",
     rolesCache: "cfn-roles-cache",
+    // Эфемерные пилоты SYN-P1: отдельный namespace, НЕ K.pending/K.expect.
+    pilots: "cfn-pilots-v1",
+    pilotWait: "cfn-pilot-wait:",
+    pilotTranscript: "cfn-pilot-transcript:",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.

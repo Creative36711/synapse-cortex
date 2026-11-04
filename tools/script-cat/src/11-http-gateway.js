@@ -252,8 +252,8 @@
       // ни read, ни запись, даже если адрес и ключ ошибочно принадлежат Relay.
       const ping = await gatewayWithCredentials("ping", "", { projectId: ACTIVE_PROFILE.id }, credentials);
       if (!ping || ping.projectScoped !== true || ping.projectId !== ACTIVE_PROFILE.id ||
-          ping.project?.name !== ACTIVE_PROFILE.driveFolder) {
-        const error = new Error("Шлюз не подтвердил этот проект и папку: нужен проектный шлюз 1.6.");
+          ping.project?.name !== ACTIVE_PROFILE.driveFolder || ping.artifacts?.name !== "artifacts") {
+        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.7.");
         error.relay = "gateway"; error.refused = true; error.reason = error.message; throw error;
       }
       return gatewayWithCredentials(action, fileId, { ...extra, projectId: ACTIVE_PROFILE.id }, credentials);

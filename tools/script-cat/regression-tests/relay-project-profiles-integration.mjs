@@ -104,7 +104,7 @@ let transport = gateway(A, async (action, _file, extra) => { seen.push({ action,
 await assert.rejects(() => transport('createLog', '', {}), /не подтвердил этот проект/);
 assert.deepEqual(seen.map((r) => r.action), ['ping']);
 seen.length = 0;
-transport = gateway({ ...A, legacy: false }, async (action, _file, extra) => { seen.push({ action, extra }); return action === 'ping' ? { ok: true, projectScoped: true, projectId: A.id, project: { name: A.driveFolder } } : { ok: true, fileId: 'a-file' }; });
+transport = gateway({ ...A, legacy: false }, async (action, _file, extra) => { seen.push({ action, extra }); return action === 'ping' ? { ok: true, projectScoped: true, projectId: A.id, project: { name: A.driveFolder }, artifacts: { name: 'artifacts' } } : { ok: true, fileId: 'a-file' }; });
 assert.equal((await transport('createLog', '', { dispatchId: id(3) })).fileId, 'a-file');
 assert.deepEqual(seen.map((r) => r.action), ['ping', 'createLog']);
 assert.equal(seen[1].extra.projectId, A.id);
@@ -126,7 +126,8 @@ assert.equal(sent.length, 0, 'токен не отправляется для ч
 assert.equal((await verifyFn.verifyMergeClaim({}, 'secret')).status, 'unknown', 'без номера PR подтверждение невозможно');
 assert.equal(sent.length, 0, 'без номера PR сетевого запроса нет');
 assert.equal((await verifyFn.verifyMergeClaim({pr:null, merged:true}, 'secret')).status, 'boundary', 'заявка о мерже без номера отклоняется');
-const noPrSource = cut('  const prDeclined = (result) => {', '  // ───────────────────────── техническая информация');
+const prStart = src.indexOf('  const prDeclined = (result) => {');
+const noPrSource = src.slice(prStart, src.indexOf('  };', prStart) + 4);
 const declinedFor = (legacy) => new Function('ACTIVE_PROFILE', 'hasMergedClaim', `${noPrSource}\nreturn prDeclined;`)({legacy}, (r)=>r?.merged===true);
 assert.equal(declinedFor(false)({pr:null,merged:false}), true, 'новая работа без PR по-прежнему разрешена');
 assert.equal(declinedFor(false)({pr:null,merged:true}), false, 'противоречивый маркер не обходит проверку PR');

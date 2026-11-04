@@ -1,0 +1,160 @@
+  // ───────────────────────── компилятор промптов ─────────────────────────
+  // compilePrompt(request) выбирает профиль, проверяет факты/аудиторию/маркер/
+  // бюджет и возвращает envelope либо типизированную ошибку. Ошибки компиляции
+  // не отправляются в Arena: вызывающий ставит локальную паузу с причиной.
+  const PromptCompiler = (() => {
+    const enc = typeof TextEncoder !== "undefined" ? new TextEncoder() : null;
+    const utf8Bytes = (s) => (enc ? enc.encode(s).length : Buffer.byteLength(s, "utf8"));
+    const hash = (s) => { // FNV-1a 32-bit, детерминированный
+      let h = 0x811c9dc5;
+      for (let i = 0; i < s.length; i += 1) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+      return ("00000000" + h.toString(16)).slice(-8);
+    };
+    const get = (obj, path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+    const err = (code, message, detail) => ({ ok: false, error: { code, message, detail } });
+
+    const reminderMarkerBlock = (name) => ({
+      CF_AGENT_RESULT: "marker.agent", CF_COORDINATOR_RESULT: "marker.coordinator",
+      CF_REVIEW_RESULT: "marker.review", CF_ANSWER_RESULT: "marker.answer",
+    }[name] || null);
+
+    function metrics(text, parts) {
+      const verbatimChars = parts.filter((p) => p.verbatim).reduce((a, p) => a + p.text.length, 0);
+      return {
+        chars: text.length,
+        utf8Bytes: utf8Bytes(text),
+        lines: text.split("\n").length,
+        overheadChars: Math.max(0, text.length - verbatimChars),
+      };
+    }
+
+    function compile(request) {
+      const c = request || {};
+      const kind = c.kind;
+      const fn = c.role?.fn || "";
+      const tier = c.delivery?.tier || "full";
+      if (kind === "pilot" && fn !== "pilot") {
+        return err("unknown_profile", `pilot требует роль pilot, получено «${fn || "неизвестно"}»`);
+      }
+      const profileId = c.profileId || PROMPT_PROFILES.select(kind, fn, tier);
+      const profile = PROMPT_PROFILES.profiles[profileId];
+      if (!profile) return err("unknown_profile", `нет профиля для kind=${kind} fn=${fn} tier=${tier}`);
+      if (kind === "pilot" && profileId !== "pilot.synapse") return err("unknown_profile", "pilot обязан использовать pilot.synapse");
+
+      for (const fact of profile.requiredFacts) {
+        const v = get(c, fact);
+        if (v === undefined || v === null || String(v).trim() === "") return err("missing_fact", `не хватает обязательного факта ${fact} для ${profileId}`);
+      }
+
+      // Разрешаем маркер для reminder и собираем список блоков.
+      let blockIds = profile.blocks.slice();
+      let markerName = profile.marker;
+      if (kind === "reminder") {
+        markerName = c.reminder?.markerName || null;
+        const mb = reminderMarkerBlock(markerName);
+        if (!mb) return err("marker_mismatch", `reminder не знает маркер ${markerName}`);
+        blockIds = blockIds.filter((id) => !id.startsWith("marker."));
+        blockIds = ["reminder.marker", mb];
+      }
+
+      const parts = [];
+      for (const id of blockIds) {
+        const block = PROMPT_BLOCKS[id];
+        if (!block) return err("unknown_profile", `неизвестный блок ${id}`);
+        if (profile.forbidden.includes(id)) return err("forbidden_block", `блок ${id} запрещён профилем ${profileId}`);
+        const cond = profile.conditions?.[id];
+        if (cond && !cond(c)) continue;
+        // Аудитория: pilot-профиль не принимает командные блоки и наоборот.
+        const aud = block.audience || [];
+        const isPilotProfile = profileId === "pilot.synapse";
+        const isPilotBlock = aud.includes("pilot");
+        if (isPilotProfile !== isPilotBlock) {
+          return err("forbidden_block", isPilotProfile ? `командный блок ${id} попал в pilot-профиль` : `pilot-блок ${id} попал в командный профиль`);
+        }
+        if (!isPilotProfile && fn && !aud.includes(fn)) {
+          return err("forbidden_block", `блок ${id} не предназначен роли ${fn}`);
+        }
+        const text = String(block.render(c) || "").trim();
+        if (!text) continue;
+        const verbatim = typeof block.verbatim === "function" ? block.verbatim(c) : Boolean(block.verbatim);
+        parts.push({ id, version: block.version, text, verbatim, ruleIds: block.ruleIds || [], hash: hash(text) });
+      }
+
+      // Маркер ровно один и последний смысловой блок.
+      if (markerName) {
+        const markerParts = parts.filter((p) => p.id.startsWith("marker."));
+        if (markerParts.length !== 1) return err("marker_mismatch", `ожидался ровно один маркер ${markerName}, найдено ${markerParts.length}`);
+        if (parts[parts.length - 1].id !== markerParts[0].id) return err("marker_mismatch", "маркер должен быть последним смысловым блоком");
+        const mtext = markerParts[0].text;
+        if (!mtext.includes(markerName)) return err("marker_mismatch", `маркер ${markerName} отсутствует в последнем блоке`);
+        const idCheck = validateMarkerIds(markerName, mtext, c);
+        if (idCheck) return err("marker_mismatch", idCheck);
+      } else if (parts.some((p) => p.id.startsWith("marker."))) {
+        return err("forbidden_block", "профиль без маркера не должен содержать marker-блок");
+      }
+
+      const text = parts.map((p) => p.text).join("\n\n");
+      const m = metrics(text, parts);
+      const ruleIds = [...new Set(parts.flatMap((p) => p.ruleIds))];
+
+      if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
+        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead });
+      }
+      const hard = c.delivery?.hardLimit || 0;
+      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard });
+
+      return {
+        ok: true, text, profileId, tier, marker: markerName,
+        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim })),
+        ruleIds, metrics: m, hash: hash(text),
+      };
+    }
+
+    const firstJsonObject = (text, from) => {
+      const start = text.indexOf("{", from);
+      if (start === -1) return null;
+      let depth = 0, inStr = false, esc = false;
+      for (let i = start; i < text.length; i += 1) {
+        const ch = text[i];
+        if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+        if (ch === '"') inStr = true;
+        else if (ch === "{") depth += 1;
+        else if (ch === "}") { depth -= 1; if (depth === 0) return text.slice(start, i + 1); }
+      }
+      return null;
+    };
+
+    function validateMarkerIds(name, mtext, c) {
+      const at = mtext.indexOf(name);
+      const raw = firstJsonObject(mtext, at);
+      if (!raw) return "маркер без JSON";
+      let obj;
+      try { obj = JSON.parse(raw); } catch { return "маркерный JSON не разбирается"; }
+      const eq = (a, b) => String(a || "").replace(/-/g, "").toLowerCase() === String(b || "").replace(/-/g, "").toLowerCase();
+      if (name === "CF_AGENT_RESULT") {
+        if (c.task?.id && !eq(obj.dispatch_id, c.task.id)) return "dispatch_id маркера не совпадает с ctx";
+        if (c.task?.runId && !eq(obj.run_id, c.task.runId)) return "run_id маркера не совпадает с ctx";
+      } else if (name === "CF_COORDINATOR_RESULT" || name === "CF_REVIEW_RESULT") {
+        if (c.mission?.id && !eq(obj.mission_id, c.mission.id)) return "mission_id маркера не совпадает с ctx";
+        if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_ANSWER_RESULT") {
+        const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
+        if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
+        if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      }
+      return null;
+    }
+
+    // Стратегия доставки: full → compact → payload/пауза. Не режет оракул молча.
+    function forDelivery(request, { softLimit = 6000, hardLimit = 9000, payloadChannel = false } = {}) {
+      const full = compile({ ...request, delivery: { ...request.delivery, tier: "full", hardLimit } });
+      if (full.ok && full.metrics.chars <= softLimit) return { strategy: "full", envelope: full };
+      const compact = compile({ ...request, delivery: { ...request.delivery, tier: "compact", hardLimit } });
+      if (compact.ok && compact.metrics.chars <= hardLimit) return { strategy: "compact", envelope: compact };
+      if (payloadChannel && compact.ok) return { strategy: "payload", envelope: compact };
+      const why = full.ok ? compact : full;
+      return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
+    }
+
+    return { compile, forDelivery, metrics, hash, reminderMarkerBlock };
+  })();

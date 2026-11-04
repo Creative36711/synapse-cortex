@@ -40,7 +40,7 @@ assert.ok(iMerged > -1 && iClosed > iMerged && iContinue > iClosed, 'поряд�
 // 4. Признак мержа берётся из маркера, а не из бейджа.
 assert.match(src, /result\.merged === true/, 'маркер может заявить merged: true');
 assert.match(src, /status.*=== "merged"/s, 'status: "merged" тоже принимается');
-assert.match(src, /"pr":<номер PR>,"merged":true/, 'в шаблоне маркера требуются pr и merged');
+assert.match(src, /"pr":"<URL\|null>","merged":true/, 'в шаблоне маркера требуются pr и merged');
 
 // 5. Закрытие без мержа: причина в лог, Rework с ответом, ход Координатору.
 const closedPath = src.slice(src.indexOf('merged === "unconfirmed") && !hasMergedClaim(result)'));

@@ -173,12 +173,11 @@ assert.match(
 );
 
 // ── 5. Координатору сказано, когда файл нужен, а когда нет ────────────────
-const techFrom = src.indexOf('  const COORDINATOR_TECH = [');
-const techTo = src.indexOf('  const TECH_BY_FN', techFrom);
-const tech = src.slice(techFrom, techTo);
+const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+const tech = PromptCompiler.compile(planRequest()).text;
 assert.match(tech, /Payload Drive File ID/, 'поле названо');
 assert.match(tech, /обычно не нужен/, 'сказано, что файл не обязателен');
-assert.match(tech, /Arena\/payloads/, 'названа папка');
+assert.match(tech, /Arena\/<project>\/payloads/, 'названа папка');
 assert.match(tech, /docs\/agents\/drive\.md/, 'есть ссылка на раскладку Диска');
 assert.doesNotMatch(tech, /кнопк|Continue|интерфейс/i, 'про интерфейс Координатору не рассказывают');
 

@@ -2,6 +2,7 @@
 // моделируются локально. Оракул требует все страницы или честную ошибку.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { promptShim } from '../tests/helpers/prompt-shim.mjs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 function cut(a, b) {
@@ -70,10 +71,10 @@ function make({ mode = 'ok' } = {}) {
   );
   const api = new Function('reviewerRole', 'missionRound', 'tasks', 'pause', 'uid', 'log', 'sendToRole',
     'rt', 'taskTitle', 'taskRole', 'technicalInfo', 'roleContext', 'C',
-    `${reviewBlock}\nreturn { reviewCards, reviewPrompt, startReview };`)(
+    `${promptShim}\n${reviewBlock}\nreturn { reviewCards, reviewPrompt, startReview };`)(
     async () => ({ id: 'w', name: 'Warden', fn: 'Reviewer' }), () => 1, tasks,
     (text, context) => pauses.push({ text, context }), () => 'turn-1', (text) => logs.push(text),
-    async (role, text, kind, ref, extra) => { sends.push({ role, text, kind, ref, extra }); return true; },
+    async (role, text, kind, ref, extra) => { sends.push({ role, text: (text && text.text) || text, kind, ref, extra }); return true; },
     rt, taskTitle, taskRole, () => 'TECH', () => 'Ты Warden', { reworkLimit: 3 },
   );
   return { query, tasks, ...api, calls, pauses, sends, logs };
@@ -102,12 +103,12 @@ const queue = { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework, 0 Draft' };
   assert.equal(h.sends.length, 1);
   assert.equal(h.sends[0].kind, 'review');
   assert.equal(h.sends[0].ref, mission.id);
-  assert.match(h.sends[0].text, /ПРИНЯТЫЕ КАРТОЧКИ \(35;/);
+  assert.match(h.sends[0].text, /Принятых карточек: 35/);
   assert.match(h.sends[0].text, /STAB-1\.35/);
   assert.match(h.sends[0].text, /STAB-1\.29.*Check=fail/);
   assert.match(h.sends[0].text, /Accepted — состояние карточки, не доказательство pass/);
   assert.match(h.sends[0].text, /CF_REVIEW_RESULT/);
-  assert.match(h.sends[0].text, /Предел доработок: 3/);
+  assert.match(h.sends[0].text, /Предел доработок 3/);
 }
 for (const mode of ['offline', 'invalid', 'missing-flag', 'missing-cursor', 'repeated-cursor']) {
   const h = make({ mode });

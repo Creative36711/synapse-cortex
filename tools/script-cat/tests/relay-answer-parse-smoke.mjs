@@ -233,18 +233,14 @@ assert.match(src, /lastSend: "cfn-last-send"/, 'память о последне
 assert.match(src, /last\.roleId\) === norm\(role\.id\) && last\.hash === textHash\(text\)/, 'сверяются роль и текст');
 
 // ── 5. В чате нет слова ScriptCat ───────────────────────────────────────────
-const chatFrom = src.indexOf('function techHeader(role) {');
-const chatTo = src.indexOf('function roleContext(role) {');
-const chatText = src.slice(chatFrom, chatTo);
-assert.ok(chatText.length > 0, 'блок исходящих текстов найден');
-assert.ok(!/ScriptCat/.test(chatText), 'в блоке, который уходит агентам, нет «ScriptCat»');
-
-const reminderFrom = src.indexOf('function markerReminder(role, expect, attempt, markerName, why = "") {');
-const reminderTo = src.indexOf('function stillWorking() {');
-const reminderText = src.slice(reminderFrom, reminderTo);
+const { PromptCompiler, dispatchRequest, planRequest, reminderRequest } = await import('./helpers/prompt-env.mjs');
+for (const req of [dispatchRequest('Executor'), dispatchRequest('Auditor'), planRequest()]) {
+  const t = PromptCompiler.compile(req).text;
+  assert.ok(!/ScriptCat/.test(t), 'в промпте, который уходит агентам, нет «ScriptCat»');
+}
+const reminderText = PromptCompiler.compile(reminderRequest('Executor')).text;
 assert.ok(!/ScriptCat/.test(reminderText), 'в напоминании нет «ScriptCat»');
-assert.match(reminderText, /ТЕХНИЧЕСКОЕ НАПОМИНАНИЕ/, 'первая форма напоминания на месте');
-assert.match(reminderText, /НАПОМИНАНИЕ О ФОРМАТЕ/, 'вторая форма напоминания — формулировки не совпадают слово в слово');
+assert.match(reminderText, /Техническое напоминание/, 'форма напоминания на месте');
 
 // ── 6. Человеческий ритм вместо мгновенной отправки ────────────────────────
 assert.match(src, /await sleep\(450 \+ Math\.floor\(Math\.random\(\) \* 900\)\);/, 'пауза перед вставкой текста');

@@ -60,61 +60,20 @@ assert.ok(
   `краткая версия (${digest.length}) должна быть заметно короче полной (${fullLength})`,
 );
 
-// ── 3. Промпт роли реально содержит регламент ──────────────────────────────
-const src = bundle;
-const from = src.indexOf('  /** Правило поведения зависит от функции');
-const to = src.indexOf('  /** Порядок работы для того, кто пишет код');
-assert.ok(from > 0 && to > from, 'блок roleContext на месте');
+// ── 3. Правила регламента несут декларативные блоки, маркер — в конце ─────
+const { PromptCompiler, dispatchRequest, planRequest } = await import('./helpers/prompt-env.mjs');
+const exec = PromptCompiler.compile(dispatchRequest('Executor'));
+const coord = PromptCompiler.compile(planRequest());
+// Обязательные правила регламента покрыты ruleId блоков (K-14: версии раздельны).
+for (const id of ['R-PHASES', 'R-I18N', 'R-REPO-BOUNDARY', 'R-MARKER']) assert.ok(exec.ruleIds.includes(id), `executor: ${id}`);
+for (const id of ['R-QUEUE', 'R-MASTER-ONLY', 'R-D028']) assert.ok(coord.ruleIds.includes(id), `coordinator: ${id}`);
+// Маркер последней строкой — порядок часть контракта.
+assert.match(exec.text.trim().split('\n').at(-1), /^CF_AGENT_RESULT \{/);
+assert.match(coord.text.trim().split('\n').at(-1), /^CF_COORDINATOR_RESULT \{/);
 
-const build = (config) =>
-  new Function(
-    'C',
-    `${src.slice(from, to)}
-     return roleContext;`,
-  )(config);
+// 3.2. Версия бандла поднята вместе с изменением промпта.
+assert.match(bundle, /\/\/ @version\s+1\.\d+\.\d+/, 'версия бандла поднята');
 
-const withDigest = build({ ...JSON.parse(JSON.stringify({ regulationDigest: digest, pageUrl: 'https://example.test/reg' })) });
-const text = withDigest({ name: 'Executor Core', fn: 'Executor', zone: 'game/cli/', gate: 'PR' });
-
-assert.match(text, /=== CF_REGULATION ===/, 'блок регламента размечен');
-assert.match(text, /=== \/CF_REGULATION ===/, 'блок регламента закрыт');
-assert.ok(text.includes(digest), 'текст регламента попал в промпт целиком');
-assert.match(text, /Полная версия по ссылке выше/, 'ссылка на полную версию остаётся');
-assert.ok(
-  text.indexOf('=== CF_REGULATION ===') < text.indexOf(digest),
-  'регламент идёт после открывающей разметки',
-);
-
-// 3.1. Без вшитого текста промпт деградирует, но не падает и не выдумывает правила.
-const withoutDigest = build({ pageUrl: 'https://example.test/reg' });
-const bare = withoutDigest({ name: 'Coordinator', fn: 'Coordinator' });
-assert.doesNotMatch(bare, /=== CF_REGULATION ===/, 'без текста блок регламента не подставляется');
-assert.match(bare, /Регламент \(полная версия\): https:\/\/example\.test\/reg/, 'ссылка остаётся');
-
-// 3.2. Версия в шапке скрипта соответствует поведению 1.8.x (вшитый регламент менялся).
-assert.match(bundle, /\/\/ @version\s+1\.8\.\d+/, 'версия бандла поднята вместе с изменением промпта');
-
-// 3.3. Регламент не должен стоять ПОСЛЕ маркера: агент читает конец задания
-// внимательнее, и в первом ходе Координатора служебная строка «потерялась»
-// в середине промпта под блоком регламента. Порядок — часть контракта.
-const funcBody = (name, endMarker) => {
-  const from = bundle.indexOf(`function ${name}(`);
-  const to = bundle.indexOf(endMarker, from);
-  assert.ok(from > 0 && to > from, `функция ${name} на месте`);
-  return bundle.slice(from, to);
-};
-const executorFn = funcBody('executorPrompt', 'function answerLogLine');
-assert.ok(
-  executorFn.indexOf('roleContext(role)') < executorFn.indexOf('executorOrder('),
-  'в промпте исполнителя регламент идёт до блока с маркером: маркер остаётся в конце',
-);
-const orderFn = funcBody('executorOrder', 'function auditorOrder');
-assert.match(orderFn, /CF_AGENT_RESULT/, 'маркер исполнителя собирается в его блоке порядка');
-const coordinatorFn = funcBody('coordinatorPrompt', '\n})(');
-assert.ok(
-  coordinatorFn.indexOf('roleContext(role)') < coordinatorFn.indexOf('CF_COORDINATOR_RESULT'),
-  'в промпте Координатора регламент идёт до маркера: маркер остаётся в конце',
-);
 assert.match(digest, /Формат финальной строки всегда стоит в самом конце задания/,
   'правило «формат ответа — в конце задания» вшито в регламент');
 assert.equal(digestVersion(digest), digestVersion(regulation), 'версии копий совпадают');

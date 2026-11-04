@@ -19,6 +19,7 @@
 
 import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
+import { promptShim } from './helpers/prompt-shim.mjs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 const has = (needle, why) => assert.ok(src.includes(needle), `в скрипте нет: ${why}`);
@@ -34,7 +35,7 @@ function makeRequeue() {
   const logs = [];
   const fn = new Function(
     'GM_getValue', 'GM_setValue', 'K', 'C', 'log',
-    `${requeueBlock}\nreturn { retryRejectedHandoff, minimalPrompt };`,
+    `${promptShim}\n${requeueBlock}\nreturn { retryRejectedHandoff, minimalPrompt };`,
   );
   const api = fn(
     (key, def) => (store.has(key) ? store.get(key) : def),
@@ -105,14 +106,14 @@ const expect = {
   };
   assert.equal(retryRejectedHandoff(plan, { messageId: 'plan-error' }, 'Something went wrong'), true);
   const pending = store.get('k-pending');
-  assert.equal(pending.text, plan.fallbackText, 'Coordinator получает подготовленный короткий снимок плана');
-  assert.match(pending.text, /1 Ready, 1 Rework/, 'текущий контекст очереди сохранён');
+  // Recovery — скомпилированный coordinator.recovery, а не ручной fallback (#38).
   assert.match(pending.text, /CF_COORDINATOR_RESULT/, 'используется маркер Coordinator');
+  assert.ok(pending.text.includes('mission-123') && pending.text.includes('turn-456'), 'те же mission/turn ID');
   assert.doesNotMatch(pending.text, /CF_AGENT_RESULT|dispatch_id|run_id/, 'план не маскируется под задание исполнителю');
   assert.equal(store.get('k-expect').missionId, 'mission-123', 'mission identity сохранён для retry');
   assert.equal(store.get('k-expect').turnId, 'turn-456', 'turn identity сохранён для retry');
 
-  const safeFallback = makeRequeue().minimalPrompt({ kind: 'plan', ref: 'mission-789', missionId: 'mission-789', turnId: 'turn-999' });
+  const safeFallback = makeRequeue().minimalPrompt({ kind: 'plan', ref: 'mission-789', missionId: 'mission-789', turnId: 'turn-999' }).text;
   assert.match(safeFallback, /CF_COORDINATOR_RESULT/, 'даже без подготовленного снимка fallback остаётся Coordinator');
   assert.doesNotMatch(safeFallback, /CF_AGENT_RESULT|dispatch_id|run_id/, 'универсальная ветка не превращает план в dispatch');
 }
@@ -180,7 +181,10 @@ has('В поле ввода был текст (Arena возвращает туд
 has('function clearComposer(editor) {', 'очистка поля — отдельная функция');
 has('символов` +', 'длина отправленного видна в журнале');
 has('сообщение ${delivery.msgId}', 'id сообщения в журнале — «отправлено» можно проверить');
-has('const TECH_OPEN = "=== CF_TECH v1 ===";', 'блок помечен обычным текстом, а не HTML-комментарием');
-has('const TECH_CLOSE = "=== /CF_TECH ===";', 'закрывающая метка тоже текстовая');
+{
+  const { PromptCompiler, dispatchRequest } = await import('./helpers/prompt-env.mjs');
+  const t = PromptCompiler.compile(dispatchRequest('Executor')).text;
+  assert.match(t, /не HTML-комментарий/, 'маркер ordinary text, не HTML-комментарий');
+}
 
 console.log('arena-swallow: ok');

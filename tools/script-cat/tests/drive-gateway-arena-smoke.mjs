@@ -334,11 +334,44 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   const { call } = loadGateway(drive);
   const ping = call({ action: 'ping' });
   assert.equal(ping.ok, true);
-  assert.equal(ping.version, '1.6');
+  assert.equal(ping.version, '1.7');
   assert.equal(ping.arena.name, 'Arena');
   assert.equal(ping.logs.name, 'logs');
   assert.equal(ping.payloads.name, 'payloads');
+  assert.equal(ping.artifacts.name, 'artifacts');
   assert.equal(ping.logs.id, drive.root.folders[0].folders.find((f) => f.name === 'logs').id);
 }
 
-console.log('OK: локальный Apps Script harness Gateway 1.5 — проверены Arena/{logs,payloads}, valid IDs и idempotency; live Drive не затронут');
+// ── 9. saveArtifact: только Arena/artifacts, имя dispatch_run__slug.ext ─────
+{
+  const drive = makeDrive();
+  const { call } = loadGateway(drive);
+  const d = uuid(), r = '11111111-1111-4111-8111-111111111111';
+  const name = `${d}_${r}__report.md`;
+  const res = call({ action: 'saveArtifact', name, content: '# отчёт' });
+  assert.equal(res.ok, true, 'saveArtifact выполняется');
+  const arena = drive.root.folders[0];
+  const artifacts = arena.folders.find((f) => f.name === 'artifacts');
+  assert.ok(artifacts && artifacts.files.length === 1, 'артефакт лежит в Arena/artifacts');
+  assert.equal(artifacts.files[0].parent, artifacts, 'файл создан внутри artifacts');
+  assert.equal(artifacts.files[0].mime, 'text/markdown');
+  const again = call({ action: 'saveArtifact', name, content: 'другой' });
+  assert.equal(again.fileId, res.fileId, 'повтор того же имени идемпотентен');
+  assert.equal(again.duplicate, true);
+  assert.equal(artifacts.files[0].content, '# отчёт', 'duplicate не перезаписывает');
+  // имя вне контракта отклоняется
+  assert.equal(call({ action: 'saveArtifact', name: '../../evil.md', content: 'x' }).ok, false);
+  assert.equal(call({ action: 'saveArtifact', name: `${d}_${r}__x.exe`, content: 'x' }).ok, false);
+  assert.equal(call({ action: 'saveArtifact', name, content: 'x'.repeat(262145) }).ok, false, 'размер ограничен');
+  assert.equal(artifacts.files.length, 1, 'отказы не создают файлов');
+  // read разрешён из artifacts; append — нет
+  assert.equal(call({ action: 'read', fileId: res.fileId }).content, '# отчёт');
+  const marker = `<!-- CF_DISPATCH ${d}:${r} -->`;
+  assert.equal(call({ action: 'append', fileId: res.fileId, marker, entry: `x${marker}` }).ok, false, 'append в artifacts запрещён');
+  // verifyArtifactPlacement: файл в корне отклоняется
+  const outside = drive.root.createFile('вне.md', 'текст', 'text/plain');
+  assert.equal(call({ action: 'verifyArtifactPlacement', fileId: outside.id }).ok, false, 'файл в корне не артефакт');
+  assert.equal(call({ action: 'verifyArtifactPlacement', fileId: res.fileId }).ok, true);
+}
+
+console.log('OK: локальный Apps Script harness Gateway 1.7 — Arena/{logs,payloads,artifacts}, saveArtifact, placement, valid IDs и idempotency; live Drive не затронут');

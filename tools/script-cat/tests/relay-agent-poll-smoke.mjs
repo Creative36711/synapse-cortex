@@ -284,30 +284,17 @@ assert.match(
 );
 assert.match(tickBlock.slice(0, pollAt), /if \(!auto && !fromToggle\) return;/, 'порядок: ручной режим — только по «Шагу»');
 
-// ── 5. Промпт: зона не спорит с Scope, вопросов нет ────────────────────────
-const rulesFrom = src.indexOf('  function workRules(role) {');
-const rulesTo = src.indexOf('  /** Порядок работы для того, кто пишет код', rulesFrom);
-assert.ok(rulesFrom > 0 && rulesTo > rulesFrom, 'workRules на месте');
-const rules = src.slice(rulesFrom, rulesTo);
-assert.match(rules, /Scope карточки расширяет её на этот ход/, 'зона — рамка по умолчанию');
-// 1.4.63: вопрос больше не запрещён — он переехал в поле маркера с вариантом
-// по умолчанию, чтобы не теряться в отчёте и не останавливать ход.
-assert.match(rules, /Вопрос задаётся только полем question в маркере/, 'вопрос только полем маркера');
-assert.match(rules, /Вопрос уходит приёмке сразу, как только записан/, 'вопрос не ждёт Мастера');
-assert.match(rules, /Вариант по умолчанию обязателен/, 'без варианта по умолчанию вопрос не принимается');
-assert.match(rules, /Опрос в чате, «May I…», просьба разрешения — не вопрос, а остановка хода/, 'опрос в чате по-прежнему запрещён');
+// ── 5. Промпт: зона не спорит с Scope, вопрос полем маркера ────────────────
+const { PromptCompiler, dispatchRequest, planRequest } = await import('./helpers/prompt-env.mjs');
+const rules = PromptCompiler.compile(dispatchRequest('Executor')).text;
+assert.match(rules, /Scope расширяет на ход/, 'зона — рамка по умолчанию');
+assert.match(rules, /Вопрос — полем question в маркере/, 'вопрос только полем маркера');
+assert.match(rules, /default обязателен/, 'без варианта по умолчанию вопрос не принимается');
+assert.match(rules, /в чате — остановка, не делай/, 'опрос в чате по-прежнему запрещён');
 assert.doesNotMatch(rules, /Не задавай вопросов, не создавай опросов/, 'старый полный запрет убран');
-assert.match(src, /roleRule\(role\),\n      workRules\(role\),/, 'правило попадает в каждый промпт через roleContext');
-assert.match(
-  src,
-  /Scope карточки обязан покрывать артефакты её Оракула/,
-  'Координатору сказано: Scope покрывает пробу и npm-скрипт',
-);
-assert.match(
-  src,
-  /next = "blocked" и need = "<роль>"/,
-  'право остановить цикл — в промпте Координатора',
-);
+const coordRules = PromptCompiler.compile(planRequest()).text;
+assert.match(coordRules, /Scope покрывает артефакты оракула/, 'Scope покрывает пробу и npm-скрипт');
+assert.match(coordRules, /next:"blocked"/, 'право остановить цикл — в промпте Координатора');
 
 // ── 6. Маркер blocked ставит паузу, а не ищет роль с таким именем ──────────
 const coordFrom = src.indexOf('  async function coordinatorStep(');

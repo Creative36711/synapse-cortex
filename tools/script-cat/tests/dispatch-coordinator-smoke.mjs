@@ -19,7 +19,10 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 73, 'the 72 existing ScriptCat tests and portability probe remain in the suite');
+assert.equal(tests.length, 77, 'the 73 prior tests plus prompts/delivery/pilot/docs suites remain in the suite');
+for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
+  assert.ok(tests.includes(added), `${added} suite present`);
+}
 const currentContractCompanions = [
   'relay-auto-run-smoke.mjs',
   'relay-send-safety-smoke.mjs',
@@ -130,7 +133,7 @@ const clock = { now: () => now };
 const state = new Map();
 const logs = [];
 const set = (key, value) => state.set(key, value);
-const retry = retryFn(config, clock, () => 'Прочитай актуальную карточку.', set, keys, (message) => logs.push(message));
+const retry = retryFn(config, clock, () => ({ text: 'Прочитай актуальную карточку.' }), set, keys, (message) => logs.push(message));
 const sent = {
   kind: 'dispatch', dispatchId: CARD_ID, runId: RUN_ID,
   roleId: AGENT_ID, roleName: 'Builder', roleUrl: `https://arena.ai/agent/${AGENT_ID}`,
@@ -162,11 +165,11 @@ for (const stale of [
 // The Coordinator emits a mission/turn result marker; its current companion
 // test executes the full turn and the marker-missing/recovery tests stay active.
 const coordinatorStart = source.indexOf('  function coordinatorPrompt(');
-const coordinatorEnd = source.indexOf('\n  // ───────────────────────────── ход исполнителя', coordinatorStart);
-assert.ok(coordinatorStart > 0 && coordinatorEnd > coordinatorStart, 'coordinatorPrompt is present');
-const coordinator = source.slice(coordinatorStart, coordinatorEnd);
-assert.match(coordinator, /CF_COORDINATOR_RESULT.*mission_id.*mission\.id.*turn_id.*turnId/s, 'marker carries current mission and turn identities');
-assert.match(coordinator, /mission_id and turn_id — из этого промпта|mission_id и turn_id — из этого промпта/);
+assert.ok(coordinatorStart > 0, 'coordinatorPrompt is present');
+const { PromptCompiler, planRequest, UUID } = await import('./helpers/prompt-env.mjs');
+const coordinator = PromptCompiler.compile(planRequest()).text;
+assert.ok(coordinator.includes(UUID.mission) && coordinator.includes(UUID.turn), 'marker carries current mission and turn identities');
+assert.match(coordinator, /mission_id и turn_id копируй из этого промпта/);
 assert.doesNotMatch(coordinator, /campaign_id/, 'obsolete campaign-based identity is not used');
 
 console.log(`OK: relay ${version} — current dispatch/run guard, one bounded retry, URL identity, no legacy userscript`);

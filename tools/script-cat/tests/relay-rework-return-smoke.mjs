@@ -202,7 +202,7 @@ assert.doesNotMatch(src, /Похоже, карточку вернули в Ready
 // ── 10. Промпт: Координатор знает, что чистить не надо ────────────────────
 assert.match(
   src,
-  /Check=fail: НЕ ставь Rework и Ready одним ответом/,
+  /Check=fail НЕ ставь Rework\+Ready одним ответом/,
   'для Check=fail Coordinator обязан оставить Rework до отдельного следующего шага',
 );
 assert.doesNotMatch(src, /верни её в Ready и очисти «Submitted At», «PR», «Run ID»/, 'чистка коннектором не просится');

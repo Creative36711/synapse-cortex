@@ -14,45 +14,22 @@ import { strict as assert } from 'node:assert';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 
-// ── 1. Промпт: законченный ход, а не «ровно одно действие» ─────────────────
-const promptFrom = src.indexOf('  function coordinatorPrompt(');
-const promptTo = src.indexOf('  // ───────────────────────────── ход исполнителя', promptFrom);
-assert.ok(promptFrom > 0 && promptTo > promptFrom, 'coordinatorPrompt на месте');
-const generate = new Function(
-  'technicalInfo', 'rt', 'roleContext', 'returnBlock',
-  `${src.slice(promptFrom, promptTo)}; return coordinatorPrompt;`,
-);
-const prompt = generate(
-  () => 'ТЕХНИКА',
-  () => 'NAR-1',
-  () => 'Ты — Coordinator.',
-  // 1.4.44: блок «миссия возвращена» — часть промпта; здесь миссия активна.
-  () => '',
-)(
-  { id: 'mission-1', properties: { 'Миссия': { title: [{ plain_text: 'NAR-1' }] }, 'ТЗ URL': { url: 'https://x' } } },
-  { name: 'Coordinator', fn: 'Coordinator' },
-  '0 Submitted, 0 Running, 0 Ready, 0 Rework',
-  'turn-1',
-  'Разбери Submitted — и в этом же ответе выставь следующую карточку Ready, если очередь опустеет.',
-  'Черновики (предложения — выдаёшь их ты): NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).',
-);
+// ── 1. Промпт: законченный ход, а не «ровно одно действие» (компилятор) ────
+const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+const draftText = 'Черновики: NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).';
+const prompt = PromptCompiler.compile(planRequest({ queue: { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework', draft: draftText } })).text;
 
-assert.match(prompt, /ХОД — один ответ/, 'ход — законченный, а не «одно действие»');
-assert.doesNotMatch(prompt, /Ровно одно действие/, 'старая формулировка убрана');
-assert.match(prompt, /в этом же ответе/, 'приёмка и выдача — один ответ');
-assert.match(prompt, /В этом же ответе выдай работу/, 'приёмка и выдача — один ответ, сказано прямо');
-assert.match(prompt, /Пустая очередь после хода — незаконченный ход/, 'пустая очередь — незаконченный ход');
-assert.match(prompt, /next — имя роли той карточки, которую выдаёшь/, 'next должен называть исполнителя');
+assert.match(prompt, /незаконченный ход/, 'пустая очередь — незаконченный ход');
+assert.match(prompt, /next — имя роли выдаваемой карточки или done/, 'next должен называть исполнителя');
 assert.match(prompt, /CF_COORDINATOR_RESULT/, 'маркер на месте');
 assert.match(prompt, /NAR-1\.10 · Регрессия и отчёт/, 'черновики видны Координатору списком');
-assert.match(prompt, /Нарезка, порядок, Кому, Sequence, число Ready/, 'выдача — работа Координатора');
-assert.match(prompt, /это твой задел, а не приказ/, 'черновик — предложение, но не запрет');
-assert.match(prompt, /Rework и Ready ставишь ты/, 'Ready — право Координатора');
-assert.match(prompt, /или Draft → Ready/, 'черновик можно выдать, а не пересоздавать');
+assert.match(prompt, /Нарезка|нарезка/, 'выдача — работа Координатора');
+assert.match(prompt, /Accepted\/Rework\/Ready — ты/, 'Ready — право Координатора');
+assert.match(prompt, /Draft→Ready/, 'черновик можно выдать, а не пересоздавать');
 assert.ok(!/перевести Draft в Ready[^.]*не вправе/.test(prompt), 'запрета на выдачу черновика нет');
 
 // ── 1a. Журнал ответа: ссылку получает Координатор, а не исполнитель ────────
-const lineFrom = src.indexOf('  /**\n   * Ссылка на журнал последнего ответа');
+const lineFrom = src.indexOf('  /** Ссылка на журнал последнего ответа');
 const lineTo = src.indexOf('  function coordinatorPrompt(');
 assert.ok(lineFrom > 0 && lineTo > lineFrom, 'answerLogLine на месте');
 const answerLogLine = new Function(
@@ -85,20 +62,7 @@ assert.match(
 assert.equal(answerLogLine([]), '', 'нет Submitted — нет строки');
 assert.equal(answerLogLine([{ properties: {} }]), '', 'карточка без журнала не даёт строку');
 
-const promptWithLine = generate(
-  () => 'ТЕХНИКА',
-  () => 'NAR-1',
-  () => 'Ты — Coordinator.',
-  // 1.4.44: блок «миссия возвращена» — часть промпта; здесь миссия активна.
-  () => '',
-)(
-  { id: 'mission-1', properties: { 'Миссия': { title: [{ plain_text: 'NAR-1' }] }, 'ТЗ URL': { url: 'https://x' } } },
-  { name: 'Coordinator', fn: 'Coordinator' },
-  '1 Submitted, 0 Running, 0 Ready, 0 Rework',
-  'turn-2',
-  '',
-  answerLine,
-);
+const promptWithLine = PromptCompiler.compile(planRequest({ queue: { summary: '1 Submitted, 0 Running, 0 Ready, 0 Rework', answerLine } })).text;
 assert.ok(promptWithLine.includes(answerLine), 'строка с журналом попала в промпт Координатора');
 assert.doesNotMatch(prompt, /drive\.google\.com\/file/, 'без Submitted строки в промпте нет');
 

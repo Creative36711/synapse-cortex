@@ -51,41 +51,21 @@
 
   /** Промпт приёмке: ответить на вопрос агента по существу или позвать Мастера. */
   function answerPrompt(mission, role, item, turnId) {
-    const name = rt(mission.properties["Миссия"]) || "миссия";
-    const tz = mission.properties["ТЗ URL"]?.url || "не задано";
-    return [
-      technicalInfo(role),
-      "",
-      roleContext(role),
-      "",
-      `Миссия: ${name}`,
-      `ТЗ и оракул: ${tz}`,
-      `Вопрос задал: ${item.role || "агент"}${item.card ? ` · карточка «${item.card}»` : ""}`,
-      item.pageUrl ? `Страница вопроса в Notion: ${item.pageUrl}` : "",
-      "",
-      "ВОПРОС",
-      item.fullText,
-      item.url && !String(item.fullText || "").includes(item.url) ? `Материал: ${item.url}` : "",
-      "",
-      item.options.length ? `Варианты, которые предложил агент: ${item.options.join(" · ")}` : "",
-      `Вариант по умолчанию (по нему работа идёт прямо сейчас): ${item.fallback}`,
-      "",
-      "ЧТО ОТ ТЕБЯ ТРЕБУЕТСЯ",
-      "Ты — приёмка миссии и на вопросы агентов отвечаешь вместо Мастера. Решай по существу: что правильнее для миссии и её оракула, а не что проще согласовать.",
-      "Ответ увидят исполнитель и Координатор на следующем ходе — пиши решение, а не рассуждение: что делать, где граница, по какому признаку считать сделанным.",
-      "Твой ответ записывается в «Ответ» этой строки, статус становится «Решено», и на следующем ходе он уезжает агентам строкой «Ответы на вопросы». Поэтому ответ должен быть самодостаточным: агент увидит его без твоего чата.",
-      "Если вопрос про новое предложение в Notion (ADR:), читай полный материал страницы и решай по существу; одного срока или default недостаточно.",
-      "Если вопрос про предложение (`docs/decisions/*.md`, статус `proposed`) — отвечай решением по существу: принять, отклонить или явно оставить как есть (отклонить изменение), и что именно сделать. Статус файла меняет исполнитель карточкой, не ты.",
-      "Ничего не правь: ни карточки, ни код, ни документы. Твой выход — ответ или вызов Мастера.",
-      "Мастера зовёшь только тогда, когда без него физически нельзя: нужен новый агент в Arena, доступ или решение, для которого по ТЗ необходимы полномочия Мастера. По ADR решай в пределах делегированных полномочий; сам оракул или файлы не меняй. «Так спокойнее» и «пусть подтвердит» — не повод.",
-      "",
-      "ОТВЕТ — одной строкой в конце, ровно один маркер:",
-      `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"answer","answer":"<решение: что делать и по какому признаку считать сделанным>"}`,
-      "или, если без Мастера физически нельзя:",
-      `CF_ANSWER_RESULT {"question_id":"${item.id}","turn_id":"${turnId}","verdict":"master","reason":"<чего именно не хватает: роль, доступ, решение по ТЗ>"}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    return compileOrPause({
+      kind: "answer",
+      role: promptRole(role),
+      mission: { id: mission.id, name: rt(mission.properties["Миссия"]) || "миссия", tzUrl: mission.properties["ТЗ URL"]?.url || "" },
+      turnId, // тот же turn_id; после masterEscalated новый не создаётся
+      question: {
+        id: item.id, turnId,
+        text: item.text, fullText: item.fullText || item.text,
+        options: Array.isArray(item.options) ? item.options : [],
+        fallback: item.fallback, sourceUrl: item.pageUrl || item.url || "",
+        role: item.role || "", card: item.card || "",
+        masterEscalated: Boolean(item.masterEscalated),
+      },
+      delivery: { tier: "full", attempt: 1 },
+    }, `answer ${item.id}`);
   }
 
   /** Проверяем настоящий Git blob текста, а не один формальный маркер SHA. */

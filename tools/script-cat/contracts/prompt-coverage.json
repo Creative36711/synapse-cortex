@@ -1,0 +1,162 @@
+{
+  "protocolVersion": "1.0",
+  "roleProfile": {
+    "Executor": "executor.card",
+    "Auditor": "auditor.card",
+    "Coordinator": "coordinator.plan",
+    "Reviewer": "reviewer.mission"
+  },
+  "ruleToBlocks": {
+    "R-CARD-FIELDS": [
+      "card.fields"
+    ],
+    "R-D028": [
+      "authority.coordinator",
+      "authority.reviewer"
+    ],
+    "R-EVIDENCE": [
+      "evidence.rule",
+      "review.protocol",
+      "task.acceptance"
+    ],
+    "R-GIT": [
+      "git.auditor",
+      "git.executor"
+    ],
+    "R-I18N": [
+      "i18n.rule"
+    ],
+    "R-MARKER": [
+      "marker.agent",
+      "marker.answer",
+      "marker.coordinator",
+      "marker.review",
+      "reminder.marker"
+    ],
+    "R-MASTER-ONLY": [
+      "authority.coordinator",
+      "authority.reviewer"
+    ],
+    "R-NO-REVIEWER-DISPATCH": [
+      "authority.coordinator",
+      "queue.coordinator"
+    ],
+    "R-PHASES": [
+      "phases.bans"
+    ],
+    "R-QUESTIONS": [
+      "adr.protocol",
+      "answer.protocol",
+      "questions.protocol"
+    ],
+    "R-QUEUE": [
+      "authority.coordinator",
+      "queue.coordinator"
+    ],
+    "R-REPO-BOUNDARY": [
+      "drive.layout",
+      "repo.boundary"
+    ],
+    "R-ROLES": [
+      "authority.auditor",
+      "authority.coordinator",
+      "authority.executor",
+      "authority.reviewer"
+    ],
+    "R-SECRETS": [
+      "authority.core"
+    ],
+    "R-VERIFY-GITHUB": [
+      "authority.auditor",
+      "authority.reviewer",
+      "git.auditor",
+      "review.protocol"
+    ],
+    "R-ZONES": [
+      "authority.core"
+    ]
+  },
+  "profileRules": {
+    "auditor.card": [
+      "R-CARD-FIELDS",
+      "R-EVIDENCE",
+      "R-GIT",
+      "R-MARKER",
+      "R-QUESTIONS",
+      "R-REPO-BOUNDARY",
+      "R-ROLES",
+      "R-SECRETS",
+      "R-VERIFY-GITHUB",
+      "R-ZONES"
+    ],
+    "coordinator.plan": [
+      "R-D028",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-NO-REVIEWER-DISPATCH",
+      "R-PHASES",
+      "R-QUESTIONS",
+      "R-QUEUE",
+      "R-REPO-BOUNDARY",
+      "R-ROLES",
+      "R-SECRETS",
+      "R-ZONES"
+    ],
+    "coordinator.recovery": [
+      "R-D028",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-NO-REVIEWER-DISPATCH",
+      "R-QUEUE",
+      "R-ROLES"
+    ],
+    "delivery.compact": [
+      "R-MARKER"
+    ],
+    "executor.card": [
+      "R-CARD-FIELDS",
+      "R-EVIDENCE",
+      "R-GIT",
+      "R-I18N",
+      "R-MARKER",
+      "R-PHASES",
+      "R-QUESTIONS",
+      "R-REPO-BOUNDARY",
+      "R-ROLES",
+      "R-SECRETS",
+      "R-ZONES"
+    ],
+    "pilot.synapse": [],
+    "reminder.marker": [
+      "R-MARKER"
+    ],
+    "reviewer.answer": [
+      "R-D028",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-QUESTIONS",
+      "R-ROLES",
+      "R-VERIFY-GITHUB"
+    ],
+    "reviewer.card": [
+      "R-D028",
+      "R-EVIDENCE",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-ROLES",
+      "R-VERIFY-GITHUB"
+    ],
+    "reviewer.mission": [
+      "R-D028",
+      "R-EVIDENCE",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-QUESTIONS",
+      "R-REPO-BOUNDARY",
+      "R-ROLES",
+      "R-SECRETS",
+      "R-VERIFY-GITHUB",
+      "R-ZONES"
+    ]
+  }
+}

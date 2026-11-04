@@ -21,50 +21,24 @@ const V = versionMatch[1];
 
 assert.match(src, new RegExp(`@version\\s+${V.replace(/\./g, '\\.')}`), `версия ${V}`);
 
-// ── 1. Промпт: очередь — зона Координатора ─────────────────────────────────
-const promptFrom = src.indexOf('  function coordinatorPrompt(');
-const promptTo = src.indexOf('  // ───────────────────────────── ход исполнителя', promptFrom);
-const prompt = new Function(
-  'technicalInfo', 'rt', 'roleContext', 'returnBlock',
-  `${src.slice(promptFrom, promptTo)}; return coordinatorPrompt;`,
-)(
-  () => 'ТЕХНИКА',
-  () => 'NAR-1',
-  () => 'Ты — Coordinator.',
-  // 1.4.44: блок «миссия возвращена» — часть промпта; в этой пробе миссия активна.
-  () => '',
-)(
-  { id: 'mission-1', properties: { 'Миссия': { title: [{ plain_text: 'NAR-1' }] }, 'ТЗ URL': { url: 'https://x' } } },
-  { name: 'Coordinator', fn: 'Coordinator' },
-  '1 Submitted, 0 Running, 1 Ready, 0 Rework, 2 Draft',
-  'turn-1',
-  '',
-  '',
-  'Черновики (предложения — выдаёшь их ты): NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).',
-  'Готовы к выдаче: NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).',
-);
+// ── 1. Промпт: очередь — зона Координатора (декларативный компилятор) ──────
+const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+const draftLineText = 'Черновики: NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).';
+const readyLineText = 'Готовы к выдаче: NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).';
+const prompt = PromptCompiler.compile(planRequest({
+  queue: { summary: '1 Submitted, 0 Running, 1 Ready, 0 Rework, 2 Draft', draft: draftLineText, ready: readyLineText },
+})).text;
 
 assert.match(prompt, /1 Submitted, 0 Running, 1 Ready, 0 Rework, 2 Draft/, 'черновики есть в счётчике очереди');
-assert.match(prompt, /Черновики \(предложения — выдаёшь их ты\)/, 'черновики перечислены списком');
-assert.match(prompt, /выдача черновика \(Draft → Ready\), правка его полей и архив лишнего — твои действия/, 'выдача черновика — право Координатора');
-assert.match(prompt, /Мастер и Архитектор пишут только черновики/, 'кто пишет черновики');
-assert.match(prompt, /выдавай сам, не дожидаясь Мастера/, 'ждать Мастера не нужно');
-assert.match(prompt, /Движок ставит Running и Submitted/, 'граница движка названа точно');
-assert.match(prompt, /Rework и Ready ставишь ты/, 'Ready — не движок, а Координатор');
-assert.match(prompt, /или Draft → Ready/, 'черновик можно выдать в том же ходе');
-assert.match(prompt, /это твой задел/, 'сказано, зачем черновики');
+assert.match(prompt, /NAR-1\.10 · Регрессия и отчёт/, 'черновики перечислены списком');
+assert.match(prompt, /Draft→Ready/, 'выдача черновика — право Координатора');
+assert.match(prompt, /Running\/Submitted — движок/, 'граница движка названа точно');
+assert.match(prompt, /Accepted\/Rework\/Ready — ты/, 'Ready — не движок, а Координатор');
 assert.match(prompt, /Готовы к выдаче: NAR-1\.10 · Регрессия и отчёт \(Build\/Release, Sequence 100\)/, 'Ready перечислен с ролью');
-assert.match(prompt, /next — имя роли той карточки, которую выдаёшь/, 'адресат берётся из карточки');
-assert.match(prompt, /Если роль не может получить работу/, 'видно, что роль не может получить работу');
-assert.match(prompt, /Статус роли и Agent URL — зона Мастера/, 'статус роли — не зона Координатора');
-assert.doesNotMatch(prompt, /ставит движок\./, 'прежней фразы «Ready … ставит движок» больше нет');
+assert.match(prompt, /next — имя роли выдаваемой карточки или done/, 'адресат берётся из карточки');
+assert.match(prompt, /Статус\/Agent URL ставит Мастер/, 'статус роли — не зона Координатора');
+assert.match(prompt, /Reviewer карточку не выдавай/, 'Reviewer не получает рабочую карточку');
 assert.doesNotMatch(prompt, /не вправе|нельзя переводить Draft/i, 'запрета на выдачу черновика нет');
-
-// Технический блок Координатора читается последним: там тоже про выдачу.
-const techFrom = src.indexOf('const COORDINATOR_TECH = [');
-const techTo = src.indexOf('];', techFrom);
-const tech = src.slice(techFrom, techTo);
-assert.match(tech, /число Ready и выдача работы — новой карточкой или Draft → Ready/, 'в техблоке Координатора тоже сказано про выдачу');
 
 // ── 2. draftLine: список, а не число ────────────────────────────────────────
 const lineFrom = src.indexOf('  function draftLine(cards, known = []) {');

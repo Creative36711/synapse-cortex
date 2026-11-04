@@ -16,6 +16,7 @@ import { strict as assert } from 'node:assert';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
 import { assertUserscriptVersionContract } from '../version-oracle.mjs';
+import { promptShim } from './helpers/prompt-shim.mjs';
 const versionMatch = assertUserscriptVersionContract(src);
 const V = versionMatch[1];
 
@@ -223,22 +224,22 @@ assert.ok(remindFrom > 0 && remindTo > remindFrom, 'напоминание на�
 const roleContextStub = () => 'КОНТЕКСТ';
 const remind = new Function(
   'C', 'roleContext',
-  `${src.slice(remindFrom, remindTo)}\nreturn markerReminder;`,
+  `${promptShim}\n${src.slice(remindFrom, remindTo)}\nreturn markerReminder;`,
 )({ markerReminders: 2 }, roleContextStub);
 
 const roleKernel = { name: 'Kernel', fn: 'Executor' };
 const expect = { kind: 'dispatch', ref: 'd1', runId: 'r1', title: 'NAR-1.8' };
 
-const plain = remind(roleKernel, expect, 1, 'CF_AGENT_RESULT');
-assert.match(plain, /без обязательного маркера CF_AGENT_RESULT/, 'обычное напоминание про маркер');
-assert.match(plain, /Пришли ответ ещё раз целиком/, 'просим отчёт целиком');
-assert.match(plain, /одним маркером вместо отчёта отвечать нельзя/, 'прямой запрет на маркер вместо отчёта');
+const plain = remind(roleKernel, expect, 1, 'CF_AGENT_RESULT').text;
+assert.match(plain, /не хватило последней строки с CF_AGENT_RESULT/, 'обычное напоминание про маркер');
+assert.match(plain, /пришли ответ целиком/, 'просим отчёт целиком');
+assert.match(plain, /не вместо отчёта/, 'прямой запрет на маркер вместо отчёта');
 
-const thin = remind(roleKernel, expect, 2, 'CF_AGENT_RESULT', 'thin');
-assert.match(thin, /ОТЧЁТ НЕ ЗАПИСАН \(2 из 2;/, 'видно, что отчёта нет');
-assert.match(thin, /пришла только служебная строка CF_AGENT_RESULT, без отчёта/, 'причина названа');
+const thin = remind(roleKernel, expect, 2, 'CF_AGENT_RESULT', 'thin').text;
+assert.match(thin, /Техническое напоминание \(2 из 2;/, 'видно, что отчёта нет');
+assert.match(thin, /пришёл только маркер CF_AGENT_RESULT, без отчёта/, 'причина названа');
 assert.match(thin, /Маркер без фактов не считается ответом/, 'объяснено, почему не принято');
-assert.match(thin, /что изменил, что показали команды, какие числа получились/, 'просим факты');
+assert.match(thin, /пришли ответ целиком/, 'просим факты');
 
 // ── 4. Ручной шаг и пауза знают про «маркер без отчёта» ────────────────────
 assert.match(

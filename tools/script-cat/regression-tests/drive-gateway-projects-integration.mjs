@@ -38,12 +38,37 @@ console.log = quiet;
 assert.notEqual(a.key, b.key); assert.notEqual(a.key, legacyKey); assert.notEqual(b.key, legacyKey);
 const call = (key, body) => JSON.parse(api.doPost({ postData: { contents: JSON.stringify({ ...body, key }) } }).getContent());
 const legacy = call(legacyKey, { action: 'ping' });
-assert.equal(legacy.version, '1.6'); assert(!legacy.projectScoped);
+assert.equal(legacy.version, '1.7'); assert(!legacy.projectScoped); assert.equal(legacy.artifacts.name, 'artifacts');
 for (const [profile, id] of [[a, A], [b, B]]) {
   const ping = call(profile.key, { action: 'ping', projectId: id });
   assert.equal(ping.ok, true); assert.equal(ping.projectScoped, true); assert.equal(ping.projectId, id);
   assert.equal(ping.project.name, profile.folder); assert.equal(ping.logs.name, 'logs');
   assert.equal(find(ping.logs.id).parent.id, ping.project.id); assert.equal(find(ping.payloads.id).parent.id, ping.project.id);
+  assert.equal(ping.artifacts.name, 'artifacts'); assert.equal(find(ping.artifacts.id).parent.id, ping.project.id);
+}
+// Миграция 1.6 → 1.7: реестр без artifactsId усыновляет существующую папку, ключ не меняется.
+{
+  const registry = JSON.parse(props.get('CF_GATEWAY_PROJECTS_V1'));
+  const keyBefore = registry[A].key;
+  const projectFolder = find(registry[A].folderId);
+  // убираем artifacts, созданный setup, чтобы смоделировать реестр 1.6 + ручную папку
+  projectFolder.folders = projectFolder.folders.filter((f) => f.name !== 'artifacts');
+  delete registry[A].artifactsId;
+  props.set('CF_GATEWAY_PROJECTS_V1', JSON.stringify(registry));
+  const adopted = projectFolder.createFolder('artifacts');
+  adopted.createFile('старый.md', 'история', 'text/plain');
+  const ping = call(a.key, { action: 'ping', projectId: A });
+  assert.equal(ping.ok, true); assert.equal(ping.artifacts.id, adopted.id, 'существующая artifacts усыновлена');
+  const after = JSON.parse(props.get('CF_GATEWAY_PROJECTS_V1'));
+  assert.equal(after[A].artifactsId, adopted.id); assert.equal(after[A].key, keyBefore, 'ключ не сменился');
+  assert.equal(adopted.files.length, 1, 'история artifacts сохранена');
+  // несколько одноимённых папок — ошибка, а не молчаливый выбор
+  const extra = projectFolder.createFolder('artifacts');
+  delete after[A].artifactsId; props.set('CF_GATEWAY_PROJECTS_V1', JSON.stringify(after));
+  assert.equal(call(a.key, { action: 'ping', projectId: A }).ok, false, 'две artifacts требуют ручного разбора');
+  // возвращаем проект в рабочее состояние для последующих проверок
+  projectFolder.folders = projectFolder.folders.filter((f) => f !== extra);
+  after[A].artifactsId = adopted.id; props.set('CF_GATEWAY_PROJECTS_V1', JSON.stringify(after));
 }
 for (const [key, id] of [[a.key, B], [b.key, A], [legacyKey, A], [a.key, null], [legacyKey, 'not-a-project']]) {
   assert.equal(call(key, { action: 'ping', ...(id ? { projectId: id } : {}) }).ok, false, 'ключ не открывает чужое пространство');
@@ -75,4 +100,11 @@ projectFolder.setName('synapse');
 assert.throws(() => setup(A, 'synapse'), /уже зарегистрирован/);
 assert.throws(() => setup('55555555-5555-4555-8555-555555555555', 'atlas'), /уже занят/);
 assert.equal(call(a.key, { action: 'ping', projectId: A }).ok, true, 'отказ регистрации не меняет прежние доступы');
-console.log('OK: Gateway 1.6 — два проекта, разные ключи, границы чтения/записи, отказ при переносе и legacy');
+// saveArtifact: проектная граница и чтение только своего artifacts
+const artName = `${dispatch}_${run}__note.json`;
+const artA = call(a.key, { action: 'saveArtifact', projectId: A, name: artName, content: '{"a":1}' });
+assert.equal(artA.ok, true); assert.equal(find(artA.fileId).parent.name, 'artifacts');
+assert.equal(call(a.key, { action: 'read', projectId: A, fileId: artA.fileId }).content, '{"a":1}');
+assert.equal(call(b.key, { action: 'read', projectId: B, fileId: artA.fileId }).ok, false, 'чужой артефакт не читается');
+assert.equal(call(b.key, { action: 'saveArtifact', projectId: B, name: artName, content: '{}' }).fileId !== artA.fileId, true, 'имя не пересекает проекты');
+console.log('OK: Gateway 1.7 — два проекта, разные ключи, artifacts и миграция без смены ключа, границы чтения/записи, отказ при переносе и legacy');
