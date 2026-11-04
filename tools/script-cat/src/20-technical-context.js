@@ -72,8 +72,18 @@
     if (result.ok) return result;
     pause(
       `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
+        `${budgetBreakdownLine(result.error)}` +
         "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
       { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
     );
     return null;
+  }
+
+  /** D-034: какие блоки съели бюджет — топ-4 по overhead, чтобы пауза была диагностируемой. */
+  function budgetBreakdownLine(error) {
+    const blocks = error?.detail?.blocks;
+    if (!Array.isArray(blocks) || !blocks.length) return "";
+    const top = blocks.filter((b) => b.overhead > 0).sort((a, b) => b.overhead - a.overhead).slice(0, 4)
+      .map((b) => `${b.id} ${b.overhead}`).join(", ");
+    return top ? `Overhead по блокам: ${top}. ` : "";
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.10.0
+// @version      1.11.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -83,6 +83,7 @@
     minAnswerChars: 200, // маркер без отчёта — не ответ: короче — просим отчёт заново
     draftLineMax: 6, // сколько черновиков Координатор видит списком в промпте
     readyLineMax: 6, // сколько карточек Ready Координатор видит списком в промпте
+    payloadInlineMax: 1500, // D-034: задание длиннее — в Drive payloads и указатель, не инлайн
     insertRetries: 3, // с какой попытки вставки в редактор звать Мастера (раньше — сами)
     composerGraceMs: 8000, // сколько ждём возврата поля ввода, если оно исчезло при перерисовке
     sendRetries: 3, // сколько тиков ждём дорисовку страницы, прежде чем звать Мастера
@@ -560,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.10.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.11.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8368,10 +8369,10 @@
       Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
     ].filter(Boolean).join("\n") });
 
-    def("repo.target", { render: (c) => {
+    def("repo.target", { version: 2, render: (c) => {
       const base = c.target?.baseBranch || "main";
       return [
-        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок Arena может быть без общей истории: пустой merge-base в shallow не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок бывает shallow: пустой merge-base не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
       ].join("\n");
     } });
 
@@ -8393,14 +8394,14 @@
     def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
       "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
 
-    def("git.executor", { ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
+    def("git.executor", { version: 2, ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
-      return `GIT: fetch origin ${base}; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
+      return `GIT: fetch origin; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
     } });
 
-    def("git.auditor", { ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
+    def("git.auditor", { version: 2, ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
-      return `GIT read-only: истина — origin/${base}. fetch origin ${base}; log --oneline -5 origin/${base}; show origin/${base}:<путь>. Работа — PR в ${base}: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
+      return `GIT read-only: истина — origin/${base}. fetch origin; log --oneline -5 origin/${base}; show origin/${base}:<путь>. PR: gh pr view <N> --json state,mergeCommit; gh pr diff <N>. Свою ветку эталоном не считай.`;
     } });
 
     def("evidence.rule", { ruleIds: ["R-EVIDENCE"], render: () =>
@@ -8411,10 +8412,17 @@
     def("task.acceptance", { verbatim: true, ruleIds: ["R-EVIDENCE"], render: (c) => line("Оракул (как принимают)", c.task?.acceptance || "не задан") });
     def("task.scope", { verbatim: true, render: (c) => line("Scope", c.task?.scope || "не задан") });
     def("task.freedom", { verbatim: true, render: (c) => line("Свободно", c.task?.freedom || "как решишь, если проходят инварианты") });
-    def("task.assignment", { verbatim: (c) => Boolean(String(c.task?.payload || "").trim()), render: (c) => {
+    def("task.assignment", { version: 2, verbatim: (c) => Boolean(String(c.task?.payload || "").trim()) || Boolean(c.task?.payloadPointer && c.task?.payloadRef?.fileId), render: (c) => {
+      // D-034: большое задание живёт в Drive payloads; в промпте — короткий
+      // указатель (verbatim), а не сам текст. Оракул/Scope остаются inline.
+      const ref = c.task?.payloadRef;
+      if (c.task?.payloadPointer && ref && ref.fileId) {
+        const url = ref.url || `https://drive.google.com/file/d/${ref.fileId}/view`;
+        return `ЗАДАНИЕ — в файле Drive, прочитай его до работы: ${url}\nФайл: ${ref.fileId}. Оракул и Scope выше обязательны; файл их не заменяет и не ослабляет.`;
+      }
       const body = String(c.task?.payload || "").trim();
       if (body) return `ЗАДАНИЕ\n${body}`;
-      return "ЗАДАНИЕ: карточка и есть задание (поля выше). Не хватает — реши обратимо, запиши (неясно/решил/откат) в docs/decisions если Scope разрешает, иначе в отчёт.";
+      return "ЗАДАНИЕ: карточка и есть задание (поля выше).";
     } });
 
     def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
@@ -8535,8 +8543,8 @@
     def("delivery.recovery", { render: () =>
       "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
-    def("drive.layout", { ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
-      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads, обычно не нужен; журнал попытки — logs; свободные результаты — artifacts." });
+    def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
+      "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");
@@ -8850,16 +8858,19 @@
       const text = parts.map((p) => p.text).join("\n\n");
       const m = metrics(text, parts);
       const ruleIds = [...new Set(parts.flatMap((p) => p.ruleIds))];
+      // D-034: разбивка overhead по блокам — пауза должна говорить, какой блок
+      // съел бюджет, а не только «overhead N > лимита».
+      const breakdown = parts.map((p) => ({ id: p.id, chars: p.text.length, overhead: p.verbatim ? 0 : p.text.length, verbatim: p.verbatim }));
 
       if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
-        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead });
+        return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead, blocks: breakdown });
       }
       const hard = c.delivery?.hardLimit || 0;
-      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard });
+      if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard, blocks: breakdown });
 
       return {
         ok: true, text, profileId, tier, marker: markerName,
-        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim })),
+        blocks: parts.map((p) => ({ id: p.id, version: p.version, hash: p.hash, verbatim: p.verbatim, chars: p.text.length, overhead: p.verbatim ? 0 : p.text.length })),
         ruleIds, metrics: m, hash: hash(text),
       };
     }
@@ -8901,13 +8912,22 @@
       return null;
     }
 
-    // Стратегия доставки: full → compact → payload/пауза. Не режет оракул молча.
+    // Стратегия доставки: full → payload-указатель → compact → пауза. Не режет
+    // оракул молча. D-034: большое задание уходит указателем в Drive payloads
+    // (оракул/Scope остаются inline), а не инлайном, разрывающим total-лимит.
     function forDelivery(request, { softLimit = 6000, hardLimit = 9000, payloadChannel = false } = {}) {
       const full = compile({ ...request, delivery: { ...request.delivery, tier: "full", hardLimit } });
       if (full.ok && full.metrics.chars <= softLimit) return { strategy: "full", envelope: full };
+      if (payloadChannel && request.task?.payloadRef?.fileId) {
+        const pointer = compile({
+          ...request,
+          task: { ...request.task, payload: "", payloadPointer: true, payloadRef: request.task.payloadRef },
+          delivery: { ...request.delivery, tier: "full", hardLimit },
+        });
+        if (pointer.ok && pointer.metrics.chars <= hardLimit) return { strategy: "payload", envelope: pointer };
+      }
       const compact = compile({ ...request, delivery: { ...request.delivery, tier: "compact", hardLimit } });
       if (compact.ok && compact.metrics.chars <= hardLimit) return { strategy: "compact", envelope: compact };
-      if (payloadChannel && compact.ok) return { strategy: "payload", envelope: compact };
       const why = full.ok ? compact : full;
       return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
     }
@@ -8989,10 +9009,20 @@
     if (result.ok) return result;
     pause(
       `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
+        `${budgetBreakdownLine(result.error)}` +
         "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
       { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
     );
     return null;
+  }
+
+  /** D-034: какие блоки съели бюджет — топ-4 по overhead, чтобы пауза была диагностируемой. */
+  function budgetBreakdownLine(error) {
+    const blocks = error?.detail?.blocks;
+    if (!Array.isArray(blocks) || !blocks.length) return "";
+    const top = blocks.filter((b) => b.overhead > 0).sort((a, b) => b.overhead - a.overhead).slice(0, 4)
+      .map((b) => `${b.id} ${b.overhead}`).join(", ");
+    return top ? `Overhead по блокам: ${top}. ` : "";
   }
 
   // ───────────────────────────── промпты ─────────────────────────────
@@ -9041,7 +9071,7 @@
     ].join("\n");
   }
 
-  const taskFacts = (task, runId, payload) => ({
+  const taskFacts = (task, runId, payload, payloadRef = null, payloadPointer = false) => ({
     id: task.id, runId,
     title: taskTitle(task),
     intent: rt(task.properties["Намерение"]) || taskTitle(task),
@@ -9050,19 +9080,39 @@
     scope: rt(task.properties["Scope"]),
     freedom: rt(task.properties["Свободно"]),
     payload: String(payload || "").trim(),
+    payloadRef: payloadRef && payloadRef.fileId ? payloadRef : null,
+    payloadPointer: Boolean(payloadPointer && payloadRef && payloadRef.fileId),
   });
+
+  // D-034: total-лимиты выдачи по ролям (docs/agents/protocol.md). Раньше они
+  // жили только в оракулах; теперь их соблюдает и боевой путь доставки.
+  const DISPATCH_TOTAL = { Executor: 6500, Auditor: 5500, Reviewer: 7000 };
 
   /** Выдача рабочей карточки (Executor/Auditor/историческая Reviewer). */
   function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {
-    const envelope = compileOrPause({
+    const request = {
       kind: "dispatch",
       role: promptRole(role),
       target: promptTarget(ctx),
-      task: taskFacts(task, runId, payload),
+      task: taskFacts(task, runId, payload, ctx.payloadRef || null, Boolean(ctx.payloadPointer)),
       mission: missionId ? { id: missionId } : undefined,
       delivery: { tier: "full", attempt: 1 },
-    }, `dispatch ${task.id}`);
-    return envelope;
+    };
+    const delivery = PromptCompiler.forDelivery(request, {
+      softLimit: 6000,
+      hardLimit: DISPATCH_TOTAL[role?.fn] || 9000,
+      payloadChannel: Boolean(ctx.payloadRef?.fileId),
+    });
+    if (delivery.strategy === "pause") {
+      pause(
+        `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
+          `${budgetBreakdownLine(delivery.error)}` +
+          "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+        { kind: "prompt-compile", ref: task.id },
+      );
+      return null;
+    }
+    return delivery.envelope;
   }
 
   /** Ссылка на журнал последнего ответа — только для Координатора. */
@@ -12793,11 +12843,28 @@
       `Выдан ход ${roleName}: «${taskTitle(fresh)}»` +
         (payload.trim() ? "." : " (отдельного файла с заданием нет — текст собран из карточки)."),
     );
+    // D-034: канал payloads. Большое задание не инлайнится: на каждый прогон
+    // фиксируется снимок в Arena/<project>/payloads (как и журнал в logs), и в
+    // промпт уходит указатель на него. Снимок стабилен, даже если исходный
+    // payload отредактируют во время хода. Оракул/Scope остаются в промпте;
+    // файл их не заменяет. Отказ шлюза — явная ошибка, не тихий инлайн.
+    let payloadRefId = payloadId;
+    let payloadPointer = false;
+    if (payloadId && payload.trim().length > (C.payloadInlineMax || 1500)) {
+      const saved = await gateway("savePayload", "", { name: `${card.id}_${runId}__assignment.md`, content: payload });
+      payloadRefId = String(saved?.fileId || "").trim();
+      if (!payloadRefId) throw new Error("Шлюз не вернул ID снимка задания (payload).");
+      payloadPointer = true;
+    }
     // Карточка уже в Running, задание в очереди: отсюда выдача состоялась, даже
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
     const dispatchCtx = { repo: targetRepo, branch: targetBranch };
+    if (payloadRefId) {
+      dispatchCtx.payloadRef = { fileId: payloadRefId, url: `https://drive.google.com/file/d/${payloadRefId}/view` };
+      dispatchCtx.payloadPointer = payloadPointer;
+    }
     const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",

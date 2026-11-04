@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.10.0**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.11.0**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -57,6 +57,15 @@
   PNG/base64 (лимит 262144 по декодированным байтам) и подкаталог `artifacts/<МИССИЯ>`
   по явному `subdir` (один уровень). Legacy UUID/manual имена и текстовые MIME
   сохранены; ключ и папки проекта не меняются. Контракт protocolVersion **1.2**.
+- **1.11.0 (D-034)** — бюджет overhead без подъёма лимитов + рабочий payload-канал.
+  Инцидент K-17 (`budget_exceeded`, overhead 2290 > 2200 `auditor.card`): фиксированный
+  скелет промпта съедал почти весь бюджет. Дедупликация base-ветки в git-блоках,
+  короче `repo.target`/заглушка `task.assignment` — K-17-подобная карточка влезает в
+  `auditor.card` ≤2200 без подъёма бюджета. `budget_exceeded` несёт разбивку по блокам.
+  Большое задание (>1500 зн.) фиксируется снимком `savePayload` на прогон и доставляется
+  verbatim-указателем (оракул/Scope остаются inline); стратегия
+  `full → payload-указатель → compact → pause`. Total-лимиты выдачи по ролям соблюдает
+  боевой путь (`DISPATCH_TOTAL`). Контракт protocolVersion **1.3**. Gateway 1.8.0 не менялся.
 
 ## 3. Проверки транспорта (локальные, без сети)
 

@@ -44,7 +44,7 @@
     ].join("\n");
   }
 
-  const taskFacts = (task, runId, payload) => ({
+  const taskFacts = (task, runId, payload, payloadRef = null, payloadPointer = false) => ({
     id: task.id, runId,
     title: taskTitle(task),
     intent: rt(task.properties["Намерение"]) || taskTitle(task),
@@ -53,19 +53,39 @@
     scope: rt(task.properties["Scope"]),
     freedom: rt(task.properties["Свободно"]),
     payload: String(payload || "").trim(),
+    payloadRef: payloadRef && payloadRef.fileId ? payloadRef : null,
+    payloadPointer: Boolean(payloadPointer && payloadRef && payloadRef.fileId),
   });
+
+  // D-034: total-лимиты выдачи по ролям (docs/agents/protocol.md). Раньше они
+  // жили только в оракулах; теперь их соблюдает и боевой путь доставки.
+  const DISPATCH_TOTAL = { Executor: 6500, Auditor: 5500, Reviewer: 7000 };
 
   /** Выдача рабочей карточки (Executor/Auditor/историческая Reviewer). */
   function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {
-    const envelope = compileOrPause({
+    const request = {
       kind: "dispatch",
       role: promptRole(role),
       target: promptTarget(ctx),
-      task: taskFacts(task, runId, payload),
+      task: taskFacts(task, runId, payload, ctx.payloadRef || null, Boolean(ctx.payloadPointer)),
       mission: missionId ? { id: missionId } : undefined,
       delivery: { tier: "full", attempt: 1 },
-    }, `dispatch ${task.id}`);
-    return envelope;
+    };
+    const delivery = PromptCompiler.forDelivery(request, {
+      softLimit: 6000,
+      hardLimit: DISPATCH_TOTAL[role?.fn] || 9000,
+      payloadChannel: Boolean(ctx.payloadRef?.fileId),
+    });
+    if (delivery.strategy === "pause") {
+      pause(
+        `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
+          `${budgetBreakdownLine(delivery.error)}` +
+          "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+        { kind: "prompt-compile", ref: task.id },
+      );
+      return null;
+    }
+    return delivery.envelope;
   }
 
   /** Ссылка на журнал последнего ответа — только для Координатора. */

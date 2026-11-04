@@ -513,11 +513,28 @@
       `Выдан ход ${roleName}: «${taskTitle(fresh)}»` +
         (payload.trim() ? "." : " (отдельного файла с заданием нет — текст собран из карточки)."),
     );
+    // D-034: канал payloads. Большое задание не инлайнится: на каждый прогон
+    // фиксируется снимок в Arena/<project>/payloads (как и журнал в logs), и в
+    // промпт уходит указатель на него. Снимок стабилен, даже если исходный
+    // payload отредактируют во время хода. Оракул/Scope остаются в промпте;
+    // файл их не заменяет. Отказ шлюза — явная ошибка, не тихий инлайн.
+    let payloadRefId = payloadId;
+    let payloadPointer = false;
+    if (payloadId && payload.trim().length > (C.payloadInlineMax || 1500)) {
+      const saved = await gateway("savePayload", "", { name: `${card.id}_${runId}__assignment.md`, content: payload });
+      payloadRefId = String(saved?.fileId || "").trim();
+      if (!payloadRefId) throw new Error("Шлюз не вернул ID снимка задания (payload).");
+      payloadPointer = true;
+    }
     // Карточка уже в Running, задание в очереди: отсюда выдача состоялась, даже
     // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
     // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
     // неотправленной очереди, а не вызывающий.
     const dispatchCtx = { repo: targetRepo, branch: targetBranch };
+    if (payloadRefId) {
+      dispatchCtx.payloadRef = { fileId: payloadRefId, url: `https://drive.google.com/file/d/${payloadRefId}/view` };
+      dispatchCtx.payloadPointer = payloadPointer;
+    }
     const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
