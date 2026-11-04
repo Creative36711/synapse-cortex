@@ -22,10 +22,11 @@ const promptTarget = (ctx = {}) => ({ repo: ctx.repo || '', baseBranch: ctx.bran
 const budgetBreakdownLine = () => '';
 
 function makeExecutorPrompt(pauses) {
-  return new Function('rt', 'taskTitle', 'promptRole', 'promptTarget', 'PromptCompiler', 'pause', 'budgetBreakdownLine',
+  return new Function('rt', 'taskTitle', 'promptRole', 'promptTarget', 'PromptCompiler', 'pause', 'budgetBreakdownLine', 'C',
     `${src.slice(pFrom, pTo)}\nreturn executorPrompt;`)(
     rt, taskTitle, promptRole, promptTarget, PromptCompiler,
-    (text) => pauses.push(text), budgetBreakdownLine);
+    (text) => pauses.push(text), budgetBreakdownLine,
+    { driveFolder: 'synapse', projectName: 'Synapse' });
 }
 
 function makeHarness({ payloadId = '', fileText = '', saveFails = false } = {}) {

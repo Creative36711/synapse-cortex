@@ -34,7 +34,7 @@ export const target = (over = {}) => ({ repo: 'Creative36711/synapse', baseBranc
 
 export const dispatchRequest = (fn = 'Executor', over = {}) => ({
   kind: 'dispatch', role: role(fn), target: target(), task: task(),
-  mission: { id: UUID.mission }, delivery: { tier: 'full' }, ...over,
+  mission: { id: UUID.mission }, drive: { project: 'synapse' }, delivery: { tier: 'full' }, ...over,
 });
 export const planRequest = (over = {}) => ({
   kind: 'plan', role: role('Coordinator'),

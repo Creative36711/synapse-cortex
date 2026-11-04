@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.11.0**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.0**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -66,6 +66,14 @@
   verbatim-указателем (оракул/Scope остаются inline); стратегия
   `full → payload-указатель → compact → pause`. Total-лимиты выдачи по ролям соблюдает
   боевой путь (`DISPATCH_TOTAL`). Контракт protocolVersion **1.3**. Gateway 1.8.0 не менялся.
+- **1.12.0 (D-035)** — маркер Координатора с первого раза + артефакты не в корне Диска.
+  `coordinator.plan`/`coordinator.recovery` открывает прайм `coordinator.prime`
+  (маркер последней строкой, формат и IDs в конце) — Координатор больше не «теряет»
+  маркер после десятка tool-вызовов. `executor.card`/`auditor.card`/`reviewer.card`
+  несут `drive.artifacts` с адресом `Arena/<project>/artifacts` и запретом корня —
+  аудитор больше не кладёт отчёты в корень Drive. Бюджеты не подняты (K-17 проходит).
+  Отчёты K-17/K-19 из корня Drive перенесены в `artifacts` (ID/URL не менялись).
+  Контракт protocolVersion **1.4**. Gateway 1.8.0 и digest 1.5 не менялись.
 
 ## 3. Проверки транспорта (локальные, без сети)
 

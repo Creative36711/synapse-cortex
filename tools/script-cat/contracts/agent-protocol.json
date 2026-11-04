@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.3",
+  "protocolVersion": "1.4",
   "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
@@ -304,7 +304,7 @@
         "purpose": "свободные результаты агентов",
         "name": "<dispatch_id>_<run_id>__<slug>.<ext> | manual__<project>__<slug>.<ext> | <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>(__supplement-N)?.<ext>",
         "manualName": "manual__<project>__<slug>.<ext>",
-        "creator": "агент через Gateway или Drive-коннектор с проверкой ScriptCat"
+        "creator": "агент через Gateway или Drive-коннектор; адрес папки приходит в промпте (drive.artifacts), не в корне Диска"
       }
     },
     "forbidden": "файлы в корне Диска не являются ни журналом, ни payload, ни валидным артефактом хода",
@@ -327,7 +327,8 @@
       "png"
     ],
     "artifactBinaryEncoding": "PNG передаётся как base64 (encoding=base64); размер считается по декодированным байтам",
-    "artifactSubdirPolicy": "подкаталог первого уровня artifacts/<МИССИЯ> только по явному subdir, равному миссии из имени D-031; legacy/manual — плоско; вложенные пути запрещены"
+    "artifactSubdirPolicy": "подкаталог первого уровня artifacts/<МИССИЯ> только по явному subdir, равному миссии из имени D-031; legacy/manual — плоско; вложенные пути запрещены",
+    "artifactPlacementPrompt": "D-035: блоки executor.card/auditor.card/reviewer.card несут drive.artifacts с адресом Arena/<project>/artifacts и запретом корня; project берётся из профиля (driveFolder)"
   },
   "rules": {
     "R-ROLES": {
@@ -694,5 +695,15 @@
     "auditorCardBudget": 2200,
     "payloadChannel": "большое задание (>payloadInlineMax) фиксируется снимком savePayload на прогон и доставляется verbatim-указателем; оракул/Scope остаются inline",
     "regression": "K-17-подобная карточка (длинный заголовок/зона/ветка) компилируется в auditor.card ≤2200 без подъёма бюджета"
+  },
+  "d035": {
+    "decision": "D-035",
+    "summary": "Маркер Координатора с первого раза + артефакты не в корне Диска",
+    "coordinatorMarkerPrime": "coordinator.plan/recovery открывает блок coordinator.prime (напоминание о маркере последней строкой, формат и IDs в конце); авторитетный маркер остаётся последним блоком. Блок не содержит литерал маркера и не называется marker.*, чтобы не сломать инвариант «ровно один маркер».",
+    "artifactPlacement": "executor.card/auditor.card/reviewer.card несут блок drive.artifacts: «Артефакты в Arena/<project>/artifacts, не корень Диска; ссылки в поле artifacts». Раньше адрес папки получал только Координатор (drive.layout), исполнитель/аудитор клали отчёты в корень.",
+    "budgetsRaised": false,
+    "auditorCardBudget": 2200,
+    "regression": "K-17-подобная карточка компилируется в auditor.card ≤2200 с блоком drive.artifacts; скелет auditor.card ≤2050; coordinator.plan/recovery несут coordinator.prime и держат бюджет",
+    "driveCleanup": "отчёты Spec Auditor SYN-1 K-17/K-19, лежавшие в корне Диска, перенесены в artifacts (перенос не меняет ID/URL, ретро-переименование запрещено D-031)"
   }
 }
