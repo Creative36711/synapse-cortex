@@ -59,8 +59,10 @@ class MockFolder {
   getFilesByName(name) {
     return new List(this.files.filter((f) => f.name === name));
   }
-  createFile(name, content, mime) {
-    const file = new MockFile(name, content, mime, this);
+  createFile(nameOrBlob, content, mime) {
+    const file = typeof nameOrBlob === 'object' && nameOrBlob && typeof nameOrBlob.getBytes === 'function'
+      ? new MockFile(nameOrBlob.getName(), nameOrBlob.getDataAsString(), nameOrBlob.getContentType(), this, nameOrBlob.getBytes())
+      : new MockFile(nameOrBlob, content, mime, this);
     this.files.push(file);
     return file;
   }
@@ -79,12 +81,13 @@ class MockFolder {
 }
 
 class MockFile {
-  constructor(name, content, mime, parent) {
+  constructor(name, content, mime, parent, bytes) {
     this.id = `d${String(++seq).padStart(14, '0')}`;
     this.name = name;
     this.content = content;
     this.mime = mime;
     this.parent = parent;
+    this.bytes = bytes || new Uint8Array(Buffer.from(String(content ?? ''), 'utf8'));
   }
   getId() {
     return this.id;
@@ -96,7 +99,7 @@ class MockFile {
     return this.mime;
   }
   getBlob() {
-    return { getDataAsString: () => this.content };
+    return { getDataAsString: () => this.content, getBytes: () => this.bytes };
   }
   setContent(content) {
     this.content = content;
@@ -169,7 +172,17 @@ function loadGateway(drive) {
   const MimeType = { PLAIN_TEXT: 'text/plain' };
   const Utilities = {
     getUuid: () => `uuid-${++seq}-0000-0000-0000-000000000000`,
-    newBlob: (s) => ({ getBytes: () => new Uint8Array(Buffer.from(String(s), 'utf8')) }),
+    newBlob: (data, mime, name) => {
+      const bytes = typeof data === 'string' ? new Uint8Array(Buffer.from(data, 'utf8')) : new Uint8Array(data);
+      return {
+        getBytes: () => bytes,
+        getDataAsString: () => (typeof data === 'string' ? data : Buffer.from(bytes).toString('utf8')),
+        getName: () => name,
+        getContentType: () => mime,
+      };
+    },
+    base64Decode: (s) => Array.from(Buffer.from(String(s), 'base64')),
+    base64Encode: (bytes) => Buffer.from(bytes).toString('base64'),
   };
 
   const factory = new Function(
@@ -337,7 +350,7 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   const { call } = loadGateway(drive);
   const ping = call({ action: 'ping' });
   assert.equal(ping.ok, true);
-  assert.equal(ping.version, '1.7.1');
+  assert.equal(ping.version, '1.8.0');
   assert.equal(ping.arena.name, 'Arena');
   assert.equal(ping.logs.name, 'logs');
   assert.equal(ping.payloads.name, 'payloads');
@@ -388,4 +401,49 @@ const uuid = () => '00000000-0000-4000-8000-000000000000';
   assert.equal(call({ action: 'verifyArtifactPlacement', fileId: res.fileId }).ok, true);
 }
 
-console.log('OK: локальный Apps Script harness Gateway 1.7.1 — Arena/{logs,payloads,artifacts}, saveArtifact, placement, valid IDs и idempotency; live Drive не затронут');
+// ── 10. D-031: имена миссии, PNG/base64, подкаталог первого уровня ──────────
+{
+  const drive = makeDrive();
+  const { call } = loadGateway(drive);
+  const name = 'SYN-1__K-15__evidence__e19a8d3.txt';
+  const res = call({ action: 'saveArtifact', name, content: 'доказательство' });
+  assert.equal(res.ok, true, 'имя D-031 принимается');
+  const artifacts = drive.root.folders[0].folders.find((f) => f.name === 'artifacts');
+  assert.equal(drive.getFileById(res.fileId).parent, artifacts, 'D-031 файл лежит в artifacts');
+  assert.equal(call({ action: 'saveArtifact', name, content: 'доказательство' }).duplicate, true);
+  assert.equal(call({ action: 'saveArtifact', name, content: 'другое' }).ok, false, 'конфликт содержимого D-031');
+
+  const pngBytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const png = 'SYN-P1__P-A__shot__2026-11-04.png';
+  const pres = call({ action: 'saveArtifact', name: png, content: Buffer.from(pngBytes).toString('base64'), encoding: 'base64' });
+  assert.equal(pres.ok, true, 'PNG/base64 принимается');
+  const pngFile = drive.getFileById(pres.fileId);
+  assert.equal(pngFile.mime, 'image/png');
+  assert.deepEqual(Array.from(pngFile.bytes), pngBytes, 'байты PNG сохранены без UTF-8 порчи');
+  assert.equal(call({ action: 'saveArtifact', name: 'SYN-P1__P-A__shot__2026-11-05.png', content: 'not-base64!' }).ok, false, 'не-base64 PNG отклоняется');
+
+  const sub = 'SYN-P1__P-B__report__2026-11-04.md';
+  const sres = call({ action: 'saveArtifact', name: sub, content: '# отчёт', subdir: 'SYN-P1' });
+  assert.equal(sres.ok, true, 'подкаталог миссии принимается');
+  const subFile = drive.getFileById(sres.fileId);
+  assert.equal(subFile.parent.name, 'SYN-P1');
+  assert.equal(subFile.parent.parent, artifacts, 'подкаталог — прямой ребёнок artifacts');
+  assert.equal(call({ action: 'saveArtifact', name: sub, content: 'x', subdir: 'OTHER' }).ok, false, 'подкаталог должен совпадать с миссией');
+  assert.equal(call({ action: 'saveArtifact', name: sub, content: 'x', subdir: 'SYN-P1/inner' }).ok, false, 'вложенный путь запрещён');
+  const d = uuid(), r = '11111111-1111-4111-8111-111111111111';
+  assert.equal(call({ action: 'saveArtifact', name: `${d}_${r}__x.md`, content: 'x', subdir: 'SYN-1' }).ok, false, 'legacy-имя не получает подкаталог');
+
+  for (const bad of ['SYN-1__K-15__evidence.txt', 'SYN-1__K-15__unknown__2026-11-04.txt', 'SYN-1__K-15__evidence__notadate.txt', '../__K-15__evidence__2026-11-04.txt']) {
+    assert.equal(call({ action: 'saveArtifact', name: bad, content: 'x' }).ok, false, `невалидное имя D-031: ${bad}`);
+  }
+  assert.equal(call({ action: 'saveArtifact', name: 'SYN-1__K-15__report__2026-11-04__supplement-1.md', content: 'дополнение' }).ok, true, 'supplement разрешён');
+
+  assert.equal(call({ action: 'verifyArtifactPlacement', fileId: pres.fileId }).ok, true, 'PNG placement подтверждается');
+  assert.equal(call({ action: 'verifyArtifactPlacement', fileId: sres.fileId }).ok, true, 'подкаталог placement подтверждается');
+  assert.equal(call({ action: 'read', fileId: sres.fileId }).content, '# отчёт', 'текст из подкаталога читается');
+  assert.equal(call({ action: 'read', fileId: pres.fileId }).ok, false, 'PNG не читается как текст');
+  const big = Buffer.alloc(262145).toString('base64');
+  assert.equal(call({ action: 'saveArtifact', name: 'SYN-P1__P-C__shot__2026-11-04.png', content: big, encoding: 'base64' }).ok, false, 'байтовый лимит PNG действует');
+}
+
+console.log('OK: локальный Apps Script harness Gateway 1.8.0 — Arena/{logs,payloads,artifacts}, saveArtifact (D-031/PNG/подкаталог), placement, valid IDs и idempotency; live Drive не затронут');

@@ -253,7 +253,7 @@
       const ping = await gatewayWithCredentials("ping", "", { projectId: ACTIVE_PROFILE.id }, credentials);
       if (!ping || ping.projectScoped !== true || ping.projectId !== ACTIVE_PROFILE.id ||
           ping.project?.name !== ACTIVE_PROFILE.driveFolder || ping.artifacts?.name !== "artifacts") {
-        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.7.");
+        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.8.");
         error.relay = "gateway"; error.refused = true; error.reason = error.message; throw error;
       }
       return gatewayWithCredentials(action, fileId, { ...extra, projectId: ACTIVE_PROFILE.id }, credentials);

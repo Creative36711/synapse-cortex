@@ -45,6 +45,13 @@
       gate: rt(p.properties["Гейт"]),
       repo: rt(p.properties["Репозиторий"]),
       pageId: p.id,
+      // Аддитивные поля provisioning. Старые строки без них читаются как
+      // «не админ» и «не требуется»; старые поля не переименовываются.
+      agentAdmin: p.properties["Agent Admin"]?.checkbox === true,
+      agentState: sel(p.properties["Agent State"]) || "не требуется",
+      agentJobId: rt(p.properties["Agent Job ID"]),
+      agentCreatedAt: p.properties["Agent Created At"]?.date?.start || "",
+      previousAgentUrl: p.properties["Previous Agent URL"]?.url || "",
     };
   };
 

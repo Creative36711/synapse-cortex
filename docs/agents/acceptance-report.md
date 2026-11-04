@@ -1,204 +1,124 @@
-# Отчёт Warden — приёмка ScriptCat 1.9.1 (поверх 1.9.0)
+# Приёмочный отчёт · ScriptCat 1.10.0 «Provisioning Arena-агентов»
 
-Дата среза: 2026-11-04. База пакета 1.9.1: `origin/main` =
-`505da91969e8f94c69ec91cf005ba15e722906a7` (смерженный 1.9.0). Ветка сессии:
-`arena/0ad2819b-synapse-cortex`. SHA результата — squash-merge-коммит PR в `main`
-(указан в описании PR и итоговом сообщении Мастера).
+Дата: 2026-11-04. База: `origin/main = b3326b1b573364e16cee4fc1ec8076587052c35c` (PR #43).
+Статус: **локальная приёмка пройдена, оракул зелёный**. Живая приёмка D-027 и боевое
+создание/замена агентов **не проводились** — только после отдельного подтверждения Мастера.
 
-Версии: **ScriptCat 1.9.1** (`@version` и runtime fallback совпадают, оракул
-версий зелёный), **Drive Gateway 1.7.1**, digest регламента 1.5, protocolVersion
-контракта 1.0 (маркерный протокол не менялся; continuation и классы отказов
-добавлены аддитивно).
-
-## Пакет 1.9.1 — tool-call limit continuation + исправления
-
-### Что добавлено
-- Новое состояние Arena «The agent reached the tool-call limit for this turn…»
-  обрабатывается отдельным классом `tool_call_limit` (раньше `budget_exceeded`,
-  `rate_limit`, `arena_generic_error`). Ход уже начался — шлём короткое
-  сообщение-продолжение в тот же чат, а не повтор задания/compact/напоминание.
-- Декларативные профили `continuation.dispatch/plan/review/answer/pilot`,
-  минимальные блоки `delivery.tool_limit`, `identity.continue`,
-  `role.boundary.continue` + существующие `marker.*` (маркер — последний блок).
-- Состояние `toolLimitContinuations`, `lastToolLimitMessageId`, `lastToolLimitAt`,
-  `toolLimitNoProgress`, `continuationWatermark`; лимит `toolLimitContinueMax = 2`;
-  дедуп по `tool-limit:<messageId>`; паузы по отсутствию прогресса/провалу отправки/
-  несовпадению страницы/роли/уже завершённому маркером ходу.
-- Журнал: `tool_limit_continued`/`tool_limit_paused`/`tool_limit_no_progress`,
-  `errorClass: tool_call_limit`, `profileId: continuation.*`, attempt, messageId,
-  chars/utf8Bytes. Исходный watermark не сдвигается — финальный отчёт собирает
-  части до лимита и после; continuation ScriptCat не попадает в отчёт агента.
-
-### Исправления после 1.9.0
-- **Compact-retry ролевой.** `delivery.retry` больше не даёт Auditor инструкций
-  коммита/push/PR merge: Auditor — read-only граница, Reviewer рабочую выдачу не
-  получает (guard), Executor мержит сам. Coverage-карта проверяет git-границы
-  compact/recovery/continuation по роли (`profileGitWrite`, `profileAudience`).
-- **Gateway artifact size в UTF-8 байтах.** `Utilities.newBlob(content).getBytes()
-  .length` вместо `content.length`; лимит 262144 байт сохранён. Кириллический текст,
-  проходящий по `string.length`, но превышающий байтовый лимит, отклоняется.
-- **Duplicate artifact.** Совпало имя и содержимое — `duplicate`; имя совпало,
-  содержимое другое — явный конфликт, а не молчаливый старый отчёт.
-- **classifyArenaFailure.** `tool_call_limit` добавлен до проверки `budget|лимит|
-  превышен`.
-
-### Таблица continuation-профилей (замеры компилятора)
-| Профиль | kind | Аудитория | Маркер | Overhead (факт/лимит) |
-|---|---|---|---|---|
-| continuation.dispatch | dispatch | Executor/Auditor | CF_AGENT_RESULT | 687/700 (Executor), 686/700 (Auditor) |
-| continuation.plan | plan | Coordinator | CF_COORDINATOR_RESULT | 598/700 |
-| continuation.review | review | Reviewer | CF_REVIEW_RESULT | 547/700 |
-| continuation.answer | answer | Reviewer | CF_ANSWER_RESULT | 483/700 |
-| continuation.pilot | pilot | pilot | нет | 233/250 |
-
-### Пример фактического continuation (dispatch Executor, IDs обезличены)
-```
-Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.
-Не начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.
-
-Работай только в своём Scope и по правилам задания.
-
-IDs прежние: dispatch_id=<dispatch-uuid>, run_id=<run-uuid>.
-
-Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.
-Если продолжить нельзя — назови блокер, не выдумывай результат.
-CF_AGENT_RESULT {"dispatch_id":"<dispatch-uuid>","run_id":"<run-uuid>","status":"submitted"}
-```
-
-### Доказательство сохранения IDs и терминальных полей
-Интеграционный тест (`tool-limit-continuation-integration`) на макете DOM/GM с
-реальным компилятором проверяет: после продолжения `ref/runId/missionId/turnId/
-dispatchSentAt/logId/pr` и исходный `watermark` не изменились, новый Run ID не
-создан, карточка не откатана (`cardRolled` отсутствует); dispatch сохраняет
-dispatch/run, plan — mission/turn (и не становится dispatch), review — mission/turn,
-answer — question/turn и `masterEscalated`. Нотация: Notion/Drive в тесте не
-вызываются вовсе (боевых записей нет).
-
-### Результаты целевых тестов
-- **compact Auditor:** read-only граница присутствует, `gh pr merge`/`git commit`/
-  `git push` отсутствуют; compact Executor мержит сам — зелёный.
-- **artifact bytes:** кириллица 140000 символов (280000 байт) при `string.length ≤
-  262144` отклоняется с ошибкой UTF-8; duplicate с другим содержимым — конфликт —
-  зелёный.
-- **classify:** `classifyArenaFailure("tool-call limit…") = tool_call_limit`, а не
-  `budget_exceeded`; `rate limit` → `rate_limit` — зелёный.
-
-### Команды проверок (все зелёные)
-- `npm run verify` → test **78 pass / 0 fail**, regression **15 pass / 0 fail**,
-  tool-limit **2 pass / 0 fail**; `scriptcat:check` и coverage `--check` зелёные
-  (16 ruleId, git-границы профилей).
-- `npm run test:prompts` / `test:delivery` / `test:pilot` / `test:docs` /
-  `test:tool-limit` — все pass, 0 fail.
-
-### Что осталось за окном D-027 (боевой запуск НЕ выполнялся)
-- [ ] ≥10 доставок, ≥95% успешных.
-- [ ] Coordinator recovery после обрыва.
-- [ ] Вопрос после `verdict: master`.
-- [ ] Artifacts в бою (байтовый лимит и конфликт дубликата на реальном Drive).
-- [ ] Пилот SYN-P1 по URL Мастера.
-- [ ] Tool-call limit continuation в тестовом/боевом чате, если безопасно
-      воспроизвести. **Локальный DOM/harness проверен; живое доказательство
-      отсутствует** — состояние Arena воспроизведено только на макете.
-- [ ] Обновление боевого ScriptCat до 1.9.1 и Gateway до 1.7.1 — только в окно
-      D-027 после отдельного подтверждения Мастера.
-
-### Известные ограничения
-- Живого состояния tool-call limit в бою не наблюдалось: детектор и транспорт
-  проверены на макете DOM/GM и реальном компиляторе, не на живой Arena.
-- Tool-limit на рабочей карточке Reviewer не шаблонизирован (guard запрещает
-  рабочую выдачу) — честная пауза и вызов Мастера, без откатa карточки.
-- Gateway 1.7.1 проверяется локальным harness; live Drive не затронут.
-
----
-
-## Пакет 1.9.0 (база, смержена ранее) — справочно
-
-## 1. Что проверено локально (зелёный оракул)
-
-`npm run verify` = `scriptcat:check` + portability-guard + `test` + `test:regression`:
-
-- Основные тесты: **77 pass / 0 fail**.
-- Регрессии: **14 pass / 0 fail**.
-- Сборка: бандл соответствует 35 исходным файлам; `--check` защищает от устаревшего
-  `relay.user.js` и от устаревшей карты coverage.
-- Coverage-оракул: **16 ruleId** покрыты блоками; каждый основной ролевой профиль
-  (`executor.card`, `auditor.card`, `coordinator.plan`, `reviewer.mission`) несёт
-  все обязательные для роли правила (`rules[*].requiredFor`). Карта зафиксирована
-  в `tools/script-cat/contracts/prompt-coverage.json`.
-
-Новые наборы (все зелёные): `test:prompts`, `test:delivery`, `test:pilot`,
-`test:docs`.
-
-### Инварианты прошлых PR сохранены и проверены боевым разбором
-- **#37** — `Check=fail` без Rework не выдаётся; пропущенный `pr` ведёт в Rework
-  (`relay-no-pr`, `relay-rework-return`, `relay-stale-plan`).
-- **#38** — Coordinator recovery ≠ dispatch: recovery-профиль не содержит
-  `task.assignment`/`git.executor`, маркер `CF_COORDINATOR_RESULT`
-  (`relay-arena-swallow`, `relay-coordinator-authority`).
-- **#40** — `verdict: master` сохраняет `question_id`/`turn_id`/`masterEscalated`;
-  поздний маркер принимается только для того же вопроса; ручной ответ Notion
-  «Решено» не перезаписывается (`relay-answer`, `relay-feedback-integration`).
-
-### Gateway 1.7 (artifacts) — локальный harness, live Drive не затронут
-- `drive-gateway-arena-smoke`: `Arena/{logs,payloads,artifacts}`, `saveArtifact`
-  только в `artifacts`, имя `<dispatch>_<run>__<slug>.<md|txt|json|csv>`,
-  идемпотентность по имени, лимит 262144 байт, `verifyArtifactPlacement`
-  отклоняет файл в корне, `read` из artifacts разрешён, `append` в artifacts запрещён.
-- `drive-gateway-projects-integration`: два проекта, разные ключи, граница
-  чтения/записи, **миграция 1.6 → 1.7 усыновляет существующую `artifacts` без смены
-  ключа**, несколько одноимённых папок → ошибка ручного разбора.
-- `scriptcat-gateway-smoke`: порог проектного шлюза поднят до 1.7 (требуется
-  подтверждённая папка `artifacts`), ограниченный транспорт, явные отказы.
-
-### Пилоты SYN-P1 — изоляция проверена локально
-- `test:pilot`: регистрация только по URL Мастера (автосоздание агентов НЕ
-  реализовано), проверка изоляции/свежести, только публичный бриф + `Creative36711/synapse`
-  + SHA, без CF_*/Notion/cortex/REGULATION/WARDEN/DECISIONS, отдельный namespace
-  ожиданий, завершение по фактам, а не по маркеру.
-
-## 2. Бюджеты overhead (замеры компилятора, не превышены)
-
-| Профиль | Лимит | Факт |
+## Версии
+| Компонент | Версия | Изменение |
 |---|---|---|
-| executor.card | ≤2800 | ~2758 |
-| auditor.card | ≤2200 | ~2118 |
-| coordinator.plan | ≤3200 | ~2700 |
-| coordinator.recovery | ≤1500 | ~936 |
-| reviewer.mission | ≤2400 | ~1900 |
-| reviewer.answer | ≤1800 | ~1037 |
-| reminder.marker | ≤700 | <700 |
-| pilot.synapse | ≤250 | ~250 |
+| ScriptCat / Relay | **1.10.0** | `@version` и `SCRIPT_VERSION` синхронны |
+| Drive Gateway | **1.8.0** | D-033: имена D-031, PNG/base64, подкаталог миссии; ключ/папки не меняются |
+| regulation-digest / REGULATION | **1.5** | вход регламента не менялся; provisioning — транспортный контур |
+| agent-protocol | **1.2** | аддитивно: 1.1 — provisioning; 1.2 — drive-контракт Gateway 1.8.0 |
+| Публичный `Creative36711/synapse` | — | **не менялся**, внутреннее туда не публиковалось |
 
-Доставка: мягкий 6000 / жёсткий 9000; Acceptance/Scope/инварианты/IDs не режутся
-(`test:delivery`: full → compact → payload → pause, журнал-кольцо 200 записей без
-секретов, один compact-повтор того же хода на `arena_generic_error`).
+## Новые файлы
+- `src/31-provision-core.js` — конфиг/кандидаты/админ-право/маркер/состояние/журнал/лимиты.
+- `src/32-provision-dom.js` — repo picker, sidebar по UUID, More options, Rename, Archive.
+- `src/33-provision-flow.js` — request → approval → job → Notion → activation → archive, `consumeProvision()`.
+- `src/34-provision-ui.js` — кнопка «🤖 Агенты» и диалог кандидатов.
+- Тесты: `provision-core-smoke`, `provision-dom-smoke`, `provision-flow-smoke`, `provision-prompts-smoke`;
+  хелперы `helpers/provision-dom-env.mjs`, `helpers/provision-flow-env.mjs`.
 
-## 3. Живая приёмка — ВЫПОЛНИТЬ В ОКНО D-027 (ожидает подтверждения Мастера)
+## Изменённые модули
+`02-profiles-core` (11 ключей конфига, normalize/valid, namespaces, ui.agents),
+`12-notion` (`mapRoleRow` += agentAdmin/agentState/agentJobId/agentCreatedAt/previousAgentUrl),
+`prompt-marker-registry`/`prompt-blocks`/`prompt-profiles`/`prompt-compiler` (`admin.provision`, 5 блоков, overhead ≤1800),
+`28-cycle` (ранний `consumeProvision()` до auto/pending, без записи `K.pending/K.expect`),
+`06-pause-panel` (кнопка), `08-projects-ui` (настройки provisioning, экспорт/импорт),
+`build.mjs` (4 новых части), `portability-guard` (запрет проектных имён в provisioning),
+`00-header`/`04-notifications` (1.10.0), контракты и docs.
 
-Локальные оракулы зелёные, но боевой цикл автоматически НЕ запускался (запрет вне
-окна D-027/D-028; обращения к Notion/Drive в этом пакете — только чтение).
-Чек-лист живой приёмки, который Warden прогоняет после подтверждения Мастера:
+## Notion (аддитивно)
+Новые поля «Роли»: `Agent Admin` checkbox default false; `Agent State` select
+(не требуется/запрошен/создаётся/создан/ошибка; пусто = не требуется); `Agent Job ID` rich_text;
+`Agent Created At` date; `Previous Agent URL` url. Старые поля не переименованы.
 
-- [ ] ≥10 доставок, успешных ≥95% (журнал `cfn-prompt-journal-v1`).
-- [ ] Coordinator recovery после обрыва — без повторного dispatch.
-- [ ] Вопрос после `verdict: master` — поздний маркер только того же вопроса,
-      ручной ответ «Решено» не перезаписан.
-- [ ] `saveArtifact` в бою: файл строго в `Arena/<project>/artifacts`, имя по
-      контракту, `artifacts` в `CF_AGENT_RESULT` читается.
-- [ ] Пилот SYN-P1 по URL Мастера: изоляция, сырой транскрипт, завершение по фактам.
-- [ ] Обновление ScriptCat до 1.9.0 и Gateway до 1.7 — только в окно D-027.
+ScriptCat пишет: `Agent URL`, `Previous Agent URL`, `Agent State`, `Agent Job ID`,
+`Agent Created At`, `Статус=Активна` после проверок. Не пишет: `Роль`, `Функция`,
+`Зона записи`, `Гейт`, `Репозиторий`, `Agent Admin`. Страницы через `POST pages` не создаются.
+Перед патчем строка перечитывается fresh; conflict не перезаписывается.
 
-## 4. Расхождения и границы
+## Проверки (exit 0)
+```bash
+npm run verify          # scriptcat:check + guard + test + regression + tool-limit
+npm run test:prompts
+npm run test:delivery
+npm run test:pilot
+npm run test:docs
+npm run test:provision
+```
+Результат: `test` — 82 файла / 106 TAP-проверок, 0 fail; `test:regression` — 15/0;
+`test:tool-limit` — 2/0; именованные suites — 0 fail. Coverage-оракул: 16 ruleId.
+Тесты не ослаблялись: `docs-smoke` переведён на protocolVersion 1.1 вместе с контрактом;
+`relay-roles-cache-smoke` расширен аддитивными полями; счётчик suites обновлён 78→82.
 
-- Создание/клонирование Arena-агентов НЕ реализовано (отдельное ТЗ); пилотный URL
-  предоставляет Мастер.
-- Внутренние инструкции не публикуются в публичный `synapse`; границы D-022 сохранены.
-- Фазовые запреты, инварианты, оракулы, D-022…D-030 не менялись по смыслу; K-11/LICENSE
-  после D-030 не переоткрывались.
-- «Стало короче» ≠ «стало правильно»: полномочия, границы репозиториев, оракул,
-  scope, IDs и протокол ответа сохранены — это проверено coverage-оракулом и
-  legacy-наборами, а не только длиной строк.
+## DOM-фикстуры
+Мини-DOM без реального браузера доказывает независимость от `radix-*` id и `nth-child`:
+триггер с repo / «Select a repository», открытый picker `cmdk` + «Add repositories…»,
+точный option `owner/repo`, sidebar item по UUID (query/hash игнорируются), More options
+в том же item, меню Rename/Archive, rename dialog `input[maxlength="100"]` с
+disabled→enabled submit. Already-selected repo не кликается; Add repositories не нажимается;
+Archive нового агента не нажимается; rename failure не создаёт новую сессию.
 
-**Статус передачи:** код + тесты + сборка + `docs/agents` готовы, локальный оракул
-зелёный. Живая приёмка и приёмка Warden в бою завершаются в окно D-027 после
-подтверждения Мастера.
+## Поведенческие проверки
+create/replace-кандидат в запросе; заполненный URL без `Agent State=запрошен` не трогается;
+админ не создаётся/заменяется; не-админ не одобряет; чужой `request_id`, job вне кандидатов,
+repo вне allowlist отклоняются; URL захватывается до rename/Notion; conflict не перезаписывает;
+автоактивация и её блокировка (нет активного Reviewer); «Кому» добавляется аддитивно;
+восстановление job из GM; суточный лимит; старт запрещён при активном ходе; `K.pending/K.expect`
+не записываются; автоцикл восстанавливается после успеха.
+
+## Локально vs остаток D-027
+Локально доказаны: компиляция профиля, маркер-валидация, DOM-контракт, state machine,
+Notion-патчи на моках, журнал/лимиты, сборка и переносимость. **Не доказано живьём:**
+реальный repo picker Arena, реальная задержка URL/bootstrap, реальный rename/archive,
+реальные права Notion-интеграции на patch/select-options, поведение при капче/tool-limit.
+Это остаток живой приёмки D-027: create, replace, негативные проверки — только после
+отдельного подтверждения Мастера и остановки автоцикла.
+
+## Gateway 1.8.0 / D-033 (долг D-031 закрыт в этом же PR)
+По команде Мастера долг «D-031 ≠ Gateway 1.7.1» закрыт в PR #44:
+- `saveArtifact` принимает имена D-031 `<МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>`
+  (опционально `__supplement-N`) наряду с legacy UUID и `manual__`.
+- PNG (`image/png`) в base64; лимит 262144 по декодированным байтам, текст — UTF-8.
+- Подкаталог `artifacts/<МИССИЯ>` только по явному `subdir`, равному миссии,
+  один уровень; legacy/manual — плоско. Решение о подкаталоге остаётся за Warden/Мастером.
+- Дубликат побайтово, конфликт явный; `verifyArtifactPlacement` и проектное чтение
+  допускают подкаталог; `read` текстовый. Ключ/папки/история не меняются,
+  ретро-переименование запрещено.
+- Тесты: `drive-gateway-arena-smoke` (D-031/PNG/подкаталог/негативные),
+  `drive-gateway-projects-integration` (границы проектов, PNG не пересекает проекты).
+Живой Drive не затронут; развёртывание Gateway 1.8.0 — отдельное действие Мастера.
+
+## Границы работ
+Живые Arena-агенты не создавались/не заменялись; боевые Notion/Drive/карточки не
+менялись; живой Drive не затронут. Публичный `synapse` не тронут. Gateway изменён
+в репозитории (1.8.0), но боевое развёртывание Apps Script не выполнялось.
+Живая приёмка D-027 — только после отдельного подтверждения Мастера.
+
+## Осознанные решения / расхождения ТЗ
+1. **Bootstrap default пуст.** ТЗ одновременно требует точный текст с `Creative36711/test`
+   и запрет hardcoded проектных имён. В коде дефолт пуст (provisioning выключен);
+   рекомендованный шаблон «Что изображено на картинке test.jpg в репозитории
+   https://github.com/OWNER/test?» задаёт Мастер в профиле. Пробник фильтруется на
+   CF_/Notion/cortex/REGULATION/WARDEN/DECISIONS, токены и внутренние ссылки.
+2. **Auditory/Auditor.** Функция `Auditory` из ТЗ принимается наряду с `Auditor`.
+3. **D-031 ≠ Gateway 1.7.1** — закрыт решением D-033 (Gateway 1.8.0) в этом же PR
+   по явной команде Мастера; исходное ограничение 1.10.0 «Gateway не менять»
+   снято только для этого долга.
+
+## Инструкция Мастеру
+1. Обновить ScriptCat до 1.10.0; развернуть Gateway 1.8.0 тем же ключом (папки и
+   история сохраняются). Автоцикл остановить.
+2. В профиле включить provisioning, задать allowlist точных `owner/repo`, bootstrap-пробник,
+   лимиты, режим manual. В Notion добавить аддитивные поля и отметить `Agent Admin=true`
+   у действующего Coordinator/Reviewer.
+3. Создать тестовую роль: `Agent State=запрошен`, пустой Agent URL, repo из allowlist.
+   Нажать «🤖 Агенты» → запрос → одобрение маркером. Проверить URL/rename/Активна/Кому.
+4. Заменить временную роль: заполнить URL, `Agent State=запрошен`; проверить Previous Agent URL
+   и архив старого. Негативные: чужой request_id, repo вне allowlist, админ-кандидат, conflict.
+5. Откат: выключить provisioning, снять `Agent State`, вернуть прежний URL/Статус вручную;
+   старый URL при replace хранится в `Previous Agent URL`. Новая сессия при захваченном URL
+   повторно не создаётся.

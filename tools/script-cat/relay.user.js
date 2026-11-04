@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.9.1
+// @version      1.10.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -125,6 +125,45 @@
   const REPO_ENTRY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const BRANCH_ENTRY = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
 
+  // Provisioning Arena-агентов: выключен по умолчанию и не содержит проектных
+  // имён. Bootstrap-пробник задаётся владельцем профиля; пустой пробник не
+  // отправляется. Значения ниже — аддитивные настройки старых профилей.
+  const PROVISION_DEFAULTS = Object.freeze({
+    agentProvisionEnabled: false,
+    agentProvisionMode: "manual",
+    agentProvisionRepoAllowlist: [],
+    agentBootstrapPrompt: "",
+    agentProvisionMaxJobs: 3,
+    agentProvisionDailyMax: 5,
+    agentBootstrapWaitMs: 600000,
+    agentUrlWaitMs: 30000,
+    agentRenameAttempts: 3,
+    agentProvisionAutoActivate: true,
+    agentProvisionArchiveOld: true,
+  });
+  const provisionInt = (value, fallback, min, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.floor(n))) : fallback;
+  };
+  function normalizeProvisionConfig(profile = {}) {
+    const allow = Array.isArray(profile.agentProvisionRepoAllowlist)
+      ? [...new Set(profile.agentProvisionRepoAllowlist.map((x) => String(x || "").trim()).filter(Boolean))]
+      : [];
+    return {
+      agentProvisionEnabled: profile.agentProvisionEnabled === true,
+      agentProvisionMode: profile.agentProvisionMode === "auto" ? "auto" : "manual",
+      agentProvisionRepoAllowlist: allow,
+      agentBootstrapPrompt: String(profile.agentBootstrapPrompt || ""),
+      agentProvisionMaxJobs: provisionInt(profile.agentProvisionMaxJobs, PROVISION_DEFAULTS.agentProvisionMaxJobs, 1, 20),
+      agentProvisionDailyMax: provisionInt(profile.agentProvisionDailyMax, PROVISION_DEFAULTS.agentProvisionDailyMax, 1, 100),
+      agentBootstrapWaitMs: provisionInt(profile.agentBootstrapWaitMs, PROVISION_DEFAULTS.agentBootstrapWaitMs, 1000, 3600000),
+      agentUrlWaitMs: provisionInt(profile.agentUrlWaitMs, PROVISION_DEFAULTS.agentUrlWaitMs, 1000, 300000),
+      agentRenameAttempts: provisionInt(profile.agentRenameAttempts, PROVISION_DEFAULTS.agentRenameAttempts, 1, 10),
+      agentProvisionAutoActivate: profile.agentProvisionAutoActivate !== false,
+      agentProvisionArchiveOld: profile.agentProvisionArchiveOld !== false,
+    };
+  }
+
   /**
    * Привести профиль к единой форме без смены UUID и без сброса состояния.
    * У старых профилей (без `repos`) единственный репозиторий из `repo`/`branch`
@@ -145,6 +184,7 @@
     }
     if (repos.length) p.repos = repos;
     if (!Array.isArray(p.roleRepos)) p.roleRepos = [];
+    Object.assign(p, normalizeProvisionConfig(p));
     return p;
   }
 
@@ -211,8 +251,10 @@
           !reposLower.has(String(m.repo || "").toLowerCase())) return false;
     }
     const folder = String(p.driveFolder || "");
-    return /^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) && !folder.includes("..") &&
-      !["logs", "payloads", "artifacts"].includes(folder);
+    if (!/^[a-z0-9][a-z0-9._-]{0,50}$/.test(folder) || folder.includes("..") ||
+      ["logs", "payloads", "artifacts"].includes(folder)) return false;
+    const prov = normalizeProvisionConfig(p);
+    return prov.agentProvisionRepoAllowlist.every((r) => REPO_ENTRY.test(r) && !r.includes(".."));
   }
   function selectedProfileId() {
     try { return sessionStorage.getItem(PROFILE_SESSION_KEY) || LEGACY_PROFILE_ID; }
@@ -245,6 +287,7 @@
     projectName: ACTIVE_PROFILE.name, driveFolder: ACTIVE_PROFILE.driveFolder,
     repos: Array.isArray(ACTIVE_PROFILE.repos) ? ACTIVE_PROFILE.repos : [],
     roleRepos: Array.isArray(ACTIVE_PROFILE.roleRepos) ? ACTIVE_PROFILE.roleRepos : [],
+    ...normalizeProvisionConfig(ACTIVE_PROFILE),
   });
   Object.freeze(C);
   const projectApproved = () => !ACTIVE_PROFILE.invalid && !ACTIVE_PROFILE.legacy &&
@@ -282,6 +325,10 @@
     pilots: "cfn-pilots-v1",
     pilotWait: "cfn-pilot-wait:",
     pilotTranscript: "cfn-pilot-transcript:",
+    // Provisioning Arena-агентов: отдельный namespace, не K.pending/K.expect.
+    provision: "cfn-agent-provision-v1",
+    provisionRequest: "cfn-agent-provision-request-v1",
+    provisionLock: "cfn-agent-provision-lock",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.
@@ -302,6 +349,7 @@
     collapse: "cfn-collapse",
     count: "cfn-log-count",
     debug: "cfn-debug-toggle",
+    agents: "cfn-agents",
   };
 
   // ───────────────────────────── утилиты ─────────────────────────────
@@ -512,7 +560,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.9.1";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.10.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1391,6 +1439,7 @@
         <button id="${ui.step}" title="Один шаг цикла" style="${btnStyle()}">Шаг</button>
         <button id="${ui.toggle}" style="${btnStyle()}">▶ Включить</button>
         <button id="${ui.questions}" aria-label="Открыть обратную связь в Notion" title="Обратная связь — вопросы и предложения в Notion" style="${btnStyle()}">💬 Обратная связь<span id="${ui.qBadge}" style="display:none;margin-left:3px;padding:0 4px;border-radius:7px;background:#b23b3b;color:#fff;font-size:10px;line-height:14px;vertical-align:middle">0</span></button>
+        <button id="${ui.agents}" title="Provisioning Arena-агентов: создание и замена ролей" style="${btnStyle()}">🤖 Агенты</button>
         <button id="${ui.debug}" title="Отладка в консоли браузера (F12)" style="${btnStyle()}">🐞</button>
         <button id="${ui.reset}" title="Снять ход: очередь, ожидание и карточки в Running без хода (журнал и настройки останутся)" style="${btnStyle()}">↺</button>
         <button id="${ui.clear}" title="Очистить журнал; очередь снимается кнопкой ↺" style="${btnStyle()}">🧹</button>
@@ -1425,6 +1474,10 @@
       paintDebugButton();
     };
     document.getElementById(ui.questions).onclick = () => window.open(C.questionsUrl, "_blank", "noopener");
+    const agentsButton = document.getElementById(ui.agents);
+    if (agentsButton) agentsButton.onclick = () => {
+      if (typeof provisionOpenDialog === "function") provisionOpenDialog();
+    };
     document.getElementById(ui.stop).onclick = () => {
       GM_setValue(K.paused, "");
       GM_setValue(K.pause, null);
@@ -2203,6 +2256,23 @@
             <button id="cfn-project-route-add" type="button" style="${action};margin-top:7px">Добавить маршрут роли</button>
             <button id="cfn-project-roles-autofill" type="button" style="${action};margin-top:7px;margin-left:7px">Автозаполнить маршруты ролей</button>
           </div>
+          <div id="cfn-project-provision" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:10px">
+            <h4 style="margin:0 0 6px">Provisioning Arena-агентов</h4>
+            <div style="color:#aab4c3;font-size:12px">Выключено по умолчанию. Создание/замена агентов выполняется только после одобрения активной админ-роли (Agent Admin=true). Пустой allowlist или пустой bootstrap-пробник блокируют создание. Проектные имена не зашиваются.</div>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="cfn-project-prov-enabled" type="checkbox"> Включить provisioning</label>
+            <label>Режим<select id="cfn-project-prov-mode" style="${field}"><option value="manual">manual — кнопка «🤖 Агенты»</option><option value="auto">auto — холостой цикл</option></select></label>
+            <label>Allowlist репозиториев (по одному owner/repo на строку)<textarea id="cfn-project-prov-allowlist" style="${field};min-height:54px" placeholder="owner/repository"></textarea></label>
+            <label>Bootstrap-пробник (без внутренних токенов и ссылок)<textarea id="cfn-project-prov-bootstrap" style="${field};min-height:54px" placeholder="Что изображено на картинке test.jpg в репозитории https://github.com/OWNER/test?"></textarea></label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <label>Max jobs за запрос<input id="cfn-project-prov-maxjobs" type="number" min="1" max="20" style="${field}"></label>
+              <label>Суточный максимум<input id="cfn-project-prov-dailymax" type="number" min="1" max="100" style="${field}"></label>
+              <label>Ожидание bootstrap, мс<input id="cfn-project-prov-bootstrapwait" type="number" min="1000" style="${field}"></label>
+              <label>Ожидание URL, мс<input id="cfn-project-prov-urlwait" type="number" min="1000" style="${field}"></label>
+              <label>Попытки rename<input id="cfn-project-prov-renameattempts" type="number" min="1" max="10" style="${field}"></label>
+            </div>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="cfn-project-prov-autoactivate" type="checkbox"> Автоактивация после проверки</label>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input id="cfn-project-prov-archiveold" type="checkbox"> Архивировать старого агента при replace</label>
+          </div>
           <button id="cfn-project-save" style="${action};margin-top:12px;background:#285638">Создать профиль</button>
         </div>
         <div id="cfn-project-note" role="status" style="white-space:pre-wrap;color:#bfe6c4;margin-top:12px"></div>
@@ -2290,6 +2360,18 @@
       ensureMain();
       routes = (Array.isArray(p.roleRepos) ? p.roleRepos : []).map((rt) => ({ roleId: String(rt.roleId || "").trim(), repo: String(rt.repo || "").trim() })).filter((rt) => rt.roleId || rt.repo);
       renderRepos(); renderRoutes();
+      const prov = normalizeProvisionConfig(p);
+      find("prov-enabled").checked = prov.agentProvisionEnabled;
+      find("prov-mode").value = prov.agentProvisionMode;
+      find("prov-allowlist").value = prov.agentProvisionRepoAllowlist.join("\n");
+      find("prov-bootstrap").value = prov.agentBootstrapPrompt;
+      find("prov-maxjobs").value = prov.agentProvisionMaxJobs;
+      find("prov-dailymax").value = prov.agentProvisionDailyMax;
+      find("prov-bootstrapwait").value = prov.agentBootstrapWaitMs;
+      find("prov-urlwait").value = prov.agentUrlWaitMs;
+      find("prov-renameattempts").value = prov.agentRenameAttempts;
+      find("prov-autoactivate").checked = prov.agentProvisionAutoActivate;
+      find("prov-archiveold").checked = prov.agentProvisionArchiveOld;
     };
 
     const saveProfileUi = () => {
@@ -2302,6 +2384,22 @@
       const mains = p.repos.filter((r) => r.main).length;
       if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
       p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
+      Object.assign(p, normalizeProvisionConfig({
+        agentProvisionEnabled: find("prov-enabled").checked,
+        agentProvisionMode: find("prov-mode").value,
+        agentProvisionRepoAllowlist: find("prov-allowlist").value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+        agentBootstrapPrompt: find("prov-bootstrap").value,
+        agentProvisionMaxJobs: find("prov-maxjobs").value,
+        agentProvisionDailyMax: find("prov-dailymax").value,
+        agentBootstrapWaitMs: find("prov-bootstrapwait").value,
+        agentUrlWaitMs: find("prov-urlwait").value,
+        agentRenameAttempts: find("prov-renameattempts").value,
+        agentProvisionAutoActivate: find("prov-autoactivate").checked,
+        agentProvisionArchiveOld: find("prov-archiveold").checked,
+      }));
+      if (p.agentProvisionEnabled && !provisionBootstrapClean(p.agentBootstrapPrompt)) {
+        say("Provisioning включён, но bootstrap-пробник пуст или содержит запрещённые внутренние токены/ссылки.", true); return;
+      }
       if (!validProfile(p)) {
         const routeProblem = p.roleRepos.some((route) =>
           !PROJECT_UUID.test(String(route.roleId || "")) ||
@@ -2374,6 +2472,7 @@
       roleRepos: (Array.isArray(profile.roleRepos) ? profile.roleRepos : []).map((route) => ({
         roleId: String(route.roleId || ""), repo: String(route.repo || ""),
       })),
+      ...normalizeProvisionConfig(profile),
     });
     find("export-config").onclick = () => {
       const profile = chosen();
@@ -3136,7 +3235,7 @@
       const ping = await gatewayWithCredentials("ping", "", { projectId: ACTIVE_PROFILE.id }, credentials);
       if (!ping || ping.projectScoped !== true || ping.projectId !== ACTIVE_PROFILE.id ||
           ping.project?.name !== ACTIVE_PROFILE.driveFolder || ping.artifacts?.name !== "artifacts") {
-        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.7.");
+        const error = new Error("Шлюз не подтвердил этот проект, папку и artifacts: нужен проектный шлюз 1.8.");
         error.relay = "gateway"; error.refused = true; error.reason = error.message; throw error;
       }
       return gatewayWithCredentials(action, fileId, { ...extra, projectId: ACTIVE_PROFILE.id }, credentials);
@@ -3247,6 +3346,13 @@
       gate: rt(p.properties["Гейт"]),
       repo: rt(p.properties["Репозиторий"]),
       pageId: p.id,
+      // Аддитивные поля provisioning. Старые строки без них читаются как
+      // «не админ» и «не требуется»; старые поля не переименовываются.
+      agentAdmin: p.properties["Agent Admin"]?.checkbox === true,
+      agentState: sel(p.properties["Agent State"]) || "не требуется",
+      agentJobId: rt(p.properties["Agent Job ID"]),
+      agentCreatedAt: p.properties["Agent Created At"]?.date?.start || "",
+      previousAgentUrl: p.properties["Previous Agent URL"]?.url || "",
     };
   };
 
@@ -8223,12 +8329,14 @@
       CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
       CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
       CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
+      CF_AGENT_PROVISION_RESULT: { kind: "provision", ids: ["request_id"], role: "Coordinator|Reviewer" },
     };
     const forKind = (kind, roleFn) => {
       if (kind === "plan") return "CF_COORDINATOR_RESULT";
       if (kind === "review") return "CF_REVIEW_RESULT";
       if (kind === "answer") return "CF_ANSWER_RESULT";
       if (kind === "dispatch") return "CF_AGENT_RESULT";
+      if (kind === "provision") return "CF_AGENT_PROVISION_RESULT";
       if (kind === "reminder") return null; // reminder наследует маркер исходного хода
       return null;
     };
@@ -8462,6 +8570,22 @@
     def("pilot.continue", { audience: ["pilot"], render: () =>
       "Продолжи пилотный ход с того места, где он остановился. Не начинай сначала.\nНе используй внутренние знания, командные маркеры и закрытые документы.\nЗаверши публичный отчёт по брифу: что сделано, как запущено, артефакты и затруднения." });
 
+    // ── provisioning Arena-агентов: одобряет только активная админ-роль ──
+    def("identity.provision", { audience: ["Coordinator", "Reviewer"], render: (c) =>
+      `Provisioning-запрос Arena-агентов. Это не миссия и не рабочая карточка. request_id: ${c.provision?.requestId}.` });
+    def("authority.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MASTER-ONLY"], render: () =>
+      "Одобряй только создание/замену неадмин-ролей из списка. Нельзя одобрять админ-роли, удаление строк, ручную активацию и изменение прав. Сомнительного кандидата не включай. Архивация старого агента — внутреннее следствие replace, отдельной команды нет." });
+    def("provision.candidates", { audience: ["Coordinator", "Reviewer"], verbatim: true, render: (c) =>
+      `Кандидаты:\n${JSON.stringify((c.provision?.candidates || []).map((x) => ({
+        role_page_id: x.rolePageId, role_name: x.roleName, fn: x.fn, repo: x.repo, action: x.action,
+      })))}` });
+    def("provision.policy", { audience: ["Coordinator", "Reviewer"], render: (c) =>
+      `Верни только одобренные jobs (не больше ${c.provision?.maxJobs ?? 3}). Пустой jobs допустим. role_page_id бери из списка, role_name и repo — точно из свежей строки. action только create или replace. Ответ заверши одним маркером CF_AGENT_PROVISION_RESULT.` });
+    def("marker.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MARKER"], render: (c) => [
+      "Маркер — последней строкой. Команды archive/delete/activate/admin как отдельные команды запрещены.",
+      `CF_AGENT_PROVISION_RESULT {"request_id":"${c.provision?.requestId}","jobs":[],"reason":"краткое обоснование"}`,
+    ].join("\n") });
+
     return B;
   })();
 
@@ -8587,8 +8711,23 @@
       budget: { overhead: 250 },
     });
 
+    // Provisioning: отдельный административный запрос, не миссия и не карточка.
+    def("admin.provision", {
+      audience: ["Coordinator", "Reviewer"], marker: "CF_AGENT_PROVISION_RESULT",
+      blocks: ["identity.provision", "authority.provision", "provision.candidates", "provision.policy", "marker.provision"],
+      requiredFacts: ["provision.requestId", "provision.candidates"],
+      forbidden: ["identity.task", "identity.mission", "mission.returned", "queue.snapshot", "queue.coordinator",
+        "answers.delta", "git.executor", "git.auditor", "task.intent", "task.invariants", "task.acceptance",
+        "task.scope", "task.freedom", "task.assignment", "review.evidence", "review.protocol", "answer.question",
+        "answer.protocol", "answer.resume", "drive.layout", "delivery.retry", "delivery.recovery", "delivery.tool_limit",
+        "reminder.marker", "pilot.brief", "pilot.stop", "pilot.repo", "pilot.continue",
+        "marker.agent", "marker.coordinator", "marker.review", "marker.answer"],
+      budget: { overhead: 1800 },
+    });
+
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
+      if (kind === "provision") return "admin.provision";
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";
@@ -8756,6 +8895,8 @@
         const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_AGENT_PROVISION_RESULT") {
+        if (c.provision?.requestId && !eq(obj.request_id, c.provision.requestId)) return "request_id маркера не совпадает с ctx";
       }
       return null;
     }
@@ -13048,6 +13189,1013 @@
     return true;
   }
 
+  // ───────────────────────── provisioning: ядро состояния и правил ─────────────────────────
+  // Отдельный административный контур. Не использует K.pending/K.expect и не
+  // создаёт рабочие карточки. Право одобрения проверяется по свежей строке
+  // Notion (Agent Admin), а не по имени роли. Проектные имена не зашиты.
+
+  const PROVISION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const PROVISION_FUNCTIONS = ["Coordinator", "Executor", "Auditor", "Auditory", "Reviewer"];
+  const PROVISION_STATES = ["validated", "creating", "repo_selected", "bootstrap_sent", "url_captured",
+    "renaming", "renamed", "notion_updated", "activating", "activated", "archiving_old", "done", "paused", "error"];
+  const PROVISION_EVENTS = ["provision_request_sent", "provision_approved", "provision_rejected",
+    "provision_job_started", "provision_repo_selected", "provision_bootstrap_sent", "provision_url_captured",
+    "provision_renamed", "provision_notion_updated", "provision_activated", "provision_activation_blocked",
+    "provision_old_archived", "provision_old_archive_unverified", "provision_job_done", "provision_paused",
+    "provision_conflict", "provision_noop"];
+  const PROVISION_BOOTSTRAP_FORBIDDEN = [
+    /CF_[A-Z_]+/i, /notion/i, /cortex/i, /REGULATION/, /WARDEN/i, /DECISIONS/,
+    /ntn_[A-Za-z0-9]/, /secret_[A-Za-z0-9]/, /ghp_[A-Za-z0-9]/, /github_pat_[A-Za-z0-9]/,
+    /Bearer\s+[A-Za-z0-9]/i, /sk-[A-Za-z0-9]{12}/, /app\.notion|notion\.so|notion\.site/i,
+  ];
+
+  const provisionConfig = () => normalizeProvisionConfig(C);
+  const provisionBootstrapClean = (text) => {
+    const s = String(text || "").trim();
+    return s.length > 0 && !PROVISION_BOOTSTRAP_FORBIDDEN.some((re) => re.test(s));
+  };
+
+  /** Точный owner/repo: строка или https://github.com/owner/repo(.git). */
+  function normalizeProvisionRepo(value) {
+    let s = String(value || "").trim();
+    if (!s) return "";
+    s = s.replace(/^https?:\/\/(?:www\.)?github\.com\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(s) || s.includes("..")) return "";
+    return s.toLowerCase();
+  }
+
+  function provisionState() {
+    const raw = GM_getValue(K.provision, null);
+    if (raw && typeof raw === "object") {
+      return {
+        jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
+        journal: Array.isArray(raw.journal) ? raw.journal : [],
+        daily: raw.daily && typeof raw.daily === "object" ? raw.daily : { date: "", count: 0 },
+        history: Array.isArray(raw.history) ? raw.history : [],
+      };
+    }
+    return { jobs: [], journal: [], daily: { date: "", count: 0 }, history: [] };
+  }
+  const saveProvisionState = (state) => GM_setValue(K.provision, { ...state, updatedAt: nowIso() });
+  const provisionRequestState = () => GM_getValue(K.provisionRequest, null);
+  const saveProvisionRequest = (request) => GM_setValue(K.provisionRequest, request);
+  const provisionLockState = () => GM_getValue(K.provisionLock, null);
+
+  function provisionTabId() {
+    try {
+      let id = sessionStorage.getItem("cfn-provision-tab-v1");
+      if (!id) { id = uid(); sessionStorage.setItem("cfn-provision-tab-v1", id); }
+      return id;
+    } catch { return "tab"; }
+  }
+  function provisionAcquireLock(requestId, resumeAuto) {
+    GM_setValue(K.provisionLock, { requestId, tabId: provisionTabId(), at: Date.now(), resumeAuto: Boolean(resumeAuto) });
+  }
+  const provisionReleaseLock = () => GM_setValue(K.provisionLock, null);
+  function provisionLockHeldByOther() {
+    const lock = provisionLockState();
+    return Boolean(lock && lock.tabId && lock.tabId !== provisionTabId());
+  }
+
+  /** Событие журнала: без секретов и полных prompt. */
+  function provisionEvent(event, fields = {}) {
+    const state = provisionState();
+    const entry = {
+      at: nowIso(), event,
+      requestId: String(fields.requestId || ""), jobId: String(fields.jobId || ""),
+      rolePageId: String(fields.rolePageId || ""), repo: String(fields.repo || ""),
+      step: String(fields.step || ""), reason: String(fields.reason || "").slice(0, 300),
+    };
+    state.journal = [...state.journal, entry].slice(-200);
+    saveProvisionState(state);
+    dbg("provision", entry);
+    return entry;
+  }
+
+  const provisionDay = () => new Date().toISOString().slice(0, 10);
+  function provisionDailyAllow(cfg = provisionConfig()) {
+    const { daily } = provisionState();
+    const day = provisionDay();
+    const count = daily.date === day ? Number(daily.count) || 0 : 0;
+    return count < cfg.agentProvisionDailyMax;
+  }
+  function provisionDailyConsume() {
+    const state = provisionState();
+    const day = provisionDay();
+    const count = state.daily.date === day ? Number(state.daily.count) || 0 : 0;
+    state.daily = { date: day, count: count + 1 };
+    saveProvisionState(state);
+  }
+
+  /** Кандидат из свежей строки. Возвращает причину отказа, а не молча пропускает. */
+  function provisionCandidateFromRow(row, cfg, busy = {}) {
+    if (!row || !row.pageId) return { ok: false, reason: "нет строки роли" };
+    if (row.agentAdmin === true) return { ok: false, reason: "админ-роль не provisioning-кандидат" };
+    if ((row.agentState || "не требуется") !== "запрошен") return { ok: false, reason: "Agent State не запрошен" };
+    const name = String(row.name || "").trim();
+    if (!name || name.length > 100) return { ok: false, reason: "имя роли пустое или длиннее 100" };
+    if (!PROVISION_FUNCTIONS.includes(row.fn)) return { ok: false, reason: "недопустимая функция" };
+    const repo = normalizeProvisionRepo(row.repo);
+    if (!repo) return { ok: false, reason: "репозиторий не нормализуется в owner/repo" };
+    const allow = (cfg.agentProvisionRepoAllowlist || []).map(normalizeProvisionRepo);
+    if (!allow.includes(repo)) return { ok: false, reason: "репозиторий вне allowlist" };
+    const busyNames = busy.names || new Set();
+    const busyIds = busy.ids || new Set();
+    if (busyNames.has(norm(name)) || busyIds.has(norm(row.id)) || busyIds.has(norm(row.pageId))) {
+      return { ok: false, reason: "по роли есть активная работа" };
+    }
+    const url = String(row.url || "").trim();
+    const action = url ? "replace" : "create";
+    return {
+      ok: true,
+      candidate: {
+        rolePageId: row.pageId, roleName: name, fn: row.fn, repo, action,
+        oldAgentUrl: action === "replace" ? url : "",
+        roleAgentId: row.id || "",
+      },
+    };
+  }
+
+  function provisionCandidates(rows, cfg, busy = {}) {
+    const candidates = [];
+    const rejected = [];
+    for (const row of rows || []) {
+      const result = provisionCandidateFromRow(row, cfg, busy);
+      if (result.ok) candidates.push(result.candidate);
+      else if ((row?.agentState || "не требуется") === "запрошен" || row?.agentAdmin === true) {
+        rejected.push({ rolePageId: row?.pageId || "", reason: result.reason });
+      }
+    }
+    return { candidates: candidates.slice(0, cfg.agentProvisionMaxJobs), rejected };
+  }
+
+  /** Активная админ-роль: предпочтительно Coordinator, иначе Reviewer. */
+  function provisionAdminRole(rows) {
+    const admins = (rows || []).filter((r) => r.agentAdmin === true && r.status === "Активна" &&
+      r.url && r.pageId && PROVISION_UUID.test(String(r.pageId)) &&
+      (r.fn === "Coordinator" || r.fn === "Reviewer"));
+    admins.sort((a, b) => (a.fn === b.fn ? String(a.name).localeCompare(String(b.name)) : a.fn === "Coordinator" ? -1 : 1));
+    return admins[0] || null;
+  }
+
+  /** Проверка маркера одобрения по свежему Notion и выданным кандидатам. */
+  function validateProvisionMarker(obj, request, freshRows, cfg = provisionConfig()) {
+    if (!obj || typeof obj !== "object") return { ok: false, reason: "маркер не разобран" };
+    for (const banned of ["archive", "delete", "activate", "admin", "command"]) {
+      if (banned in obj) return { ok: false, reason: `запрещённая команда маркера: ${banned}` };
+    }
+    const requestId = String(obj.request_id || "");
+    if (!PROVISION_UUID.test(requestId)) return { ok: false, reason: "request_id не UUID" };
+    if (norm(requestId) !== norm(request?.requestId || "")) return { ok: false, reason: "чужой request_id" };
+    if (!Array.isArray(obj.jobs)) return { ok: false, reason: "jobs не массив" };
+    if (obj.jobs.length > cfg.agentProvisionMaxJobs) return { ok: false, reason: "jobs больше agentProvisionMaxJobs" };
+    const sent = new Map((request?.candidates || []).map((c) => [norm(c.rolePageId), c]));
+    const fresh = new Map((freshRows || []).map((r) => [norm(r.pageId), r]));
+    const jobs = [];
+    for (const job of obj.jobs) {
+      if (!job || typeof job !== "object") return { ok: false, reason: "job не объект" };
+      for (const banned of ["archive", "delete", "activate", "admin", "command"]) {
+        if (banned in job) return { ok: false, reason: `запрещённая команда в job: ${banned}` };
+      }
+      const pageId = String(job.role_page_id || "");
+      if (!PROVISION_UUID.test(pageId)) return { ok: false, reason: "role_page_id не UUID" };
+      const candidate = sent.get(norm(pageId));
+      if (!candidate) return { ok: false, reason: "job вне кандидатов, отправленных в prompt" };
+      if (!["create", "replace"].includes(job.action)) return { ok: false, reason: "action только create или replace" };
+      const row = fresh.get(norm(pageId));
+      if (!row) return { ok: false, reason: "строка роли исчезла" };
+      if (row.agentAdmin === true) return { ok: false, reason: "попытка одобрить админ-роль" };
+      if (String(row.name || "").trim() !== String(job.role_name || "").trim()) return { ok: false, reason: "role_name не совпадает со свежей строкой" };
+      const repo = normalizeProvisionRepo(row.repo);
+      if (!repo || repo !== normalizeProvisionRepo(job.repo)) return { ok: false, reason: "repo не совпадает со свежей строкой" };
+      const allow = (cfg.agentProvisionRepoAllowlist || []).map(normalizeProvisionRepo);
+      if (!allow.includes(repo)) return { ok: false, reason: "repo вне allowlist" };
+      const freshAction = String(row.url || "").trim() ? "replace" : "create";
+      if (job.action !== freshAction || job.action !== candidate.action) return { ok: false, reason: "action не совпадает с текущим Agent URL" };
+      jobs.push({
+        rolePageId: row.pageId, roleName: String(row.name).trim(), fn: row.fn, repo,
+        action: job.action, oldAgentUrl: freshAction === "replace" ? String(row.url).trim() : "",
+        roleAgentId: row.id || "",
+      });
+    }
+    return { ok: true, jobs, reason: String(obj.reason || "").slice(0, 300) };
+  }
+
+  function provisionNewJob(candidate, requestId) {
+    const at = nowIso();
+    return {
+      id: uid(), requestId, rolePageId: candidate.rolePageId, roleName: candidate.roleName,
+      fn: candidate.fn, repo: candidate.repo, action: candidate.action,
+      oldAgentUrl: candidate.oldAgentUrl || "", state: "validated", agentUrl: "",
+      bootstrapMsgId: "", attempts: 0, createdAt: at, updatedAt: at, error: "",
+    };
+  }
+  const provisionJobIndex = (state, job) => state.jobs.findIndex((j) => norm(j.id) === norm(job.id));
+  function provisionSaveJob(job) {
+    const state = provisionState();
+    const next = { ...job, updatedAt: nowIso() };
+    const at = provisionJobIndex(state, next);
+    if (at === -1) state.jobs.push(next);
+    else state.jobs[at] = next;
+    state.jobs = state.jobs.slice(-100);
+    saveProvisionState(state);
+    return next;
+  }
+  function provisionActiveJob() {
+    const request = provisionRequestState();
+    if (!request || !Array.isArray(request.jobIds)) return null;
+    const state = provisionState();
+    for (const id of request.jobIds) {
+      const job = state.jobs.find((j) => norm(j.id) === norm(id));
+      if (job && !["done", "error"].includes(job.state)) return job;
+    }
+    return null;
+  }
+
+  // ───────────────────────── provisioning: DOM Arena ─────────────────────────
+  // Селекторы не используют radix-* id и nth-child. Неоднозначность — ошибка,
+  // а не выбор «первого подходящего». Add repositories и Archive нового агента
+  // не нажимаются. Rename/Archive работают только через видимые пункты меню.
+
+  const PROVISION_SEL = Object.freeze({
+    repoTrigger: 'main button[aria-haspopup="dialog"][aria-controls]',
+    picker: '[data-radix-popper-content-wrapper] [role="dialog"][data-state="open"] [cmdk-root]',
+    pickerInput: '[cmdk-input][role="combobox"]',
+    pickerList: '[cmdk-list][role="listbox"]',
+    pickerItem: '[cmdk-item][role="option"]',
+    sidebarRoot: '[data-sidebar="sidebar"], [data-slot="sidebar"]',
+    sidebarItem: 'a[data-sidebar="menu-button"][href]',
+    menuAction: 'button[data-sidebar="menu-action"][aria-haspopup="menu"]',
+    openMenu: '[role="menu"][data-state="open"]',
+    menuItem: '[role="menuitem"]',
+    dialog: '[role="dialog"][data-state="open"]',
+    renameInput: 'input[maxlength="100"]',
+  });
+  const PROVISION_EXCLUDE = '#cfn-panel, [id^="cfn-"], [data-sidebar="sidebar"], [data-slot="sidebar"], aside, nav';
+
+  class ProvisionDomError extends Error {
+    constructor(code, message) { super(message || code); this.code = code; }
+  }
+  const provisionDomFail = (code, message) => { throw new ProvisionDomError(code, message); };
+  const provisionAll = (root, selector) => [...(root || document).querySelectorAll(selector)];
+  const provisionVisible = (root, selector) => provisionAll(root, selector).filter((el) => visible(el));
+  function provisionOne(root, selector, code) {
+    const found = provisionVisible(root, selector);
+    if (found.length !== 1) provisionDomFail(code, `${selector}: найдено ${found.length}, ожидался 1`);
+    return found[0];
+  }
+  const provisionText = (el) => String(el?.textContent || "").replace(/\s+/g, " ").trim();
+
+  function provisionAgentUuid(value) {
+    try {
+      const url = new URL(String(value || ""), location.origin);
+      if (url.origin !== location.origin) return "";
+      const m = url.pathname.match(/^\/agent\/([0-9a-f-]{36})\/?$/i);
+      return m && PROVISION_UUID.test(m[1]) ? m[1].toLowerCase() : "";
+    } catch { return ""; }
+  }
+  const provisionCurrentAgentUuid = () => provisionAgentUuid(location.pathname + location.search + location.hash);
+
+  async function provisionWait(check, timeoutMs, stepMs = 300) {
+    const until = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    for (;;) {
+      const value = check();
+      if (value) return value;
+      if (Date.now() >= until) return null;
+      await sleep(stepMs);
+    }
+  }
+  function provisionSetInput(el, value) {
+    const proto = typeof HTMLTextAreaElement !== "undefined" && el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc?.set) desc.set.call(el, value);
+    else el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function provisionRepoTriggers() {
+    const main = document.querySelector("main") || document;
+    return provisionVisible(main, PROVISION_SEL.repoTrigger).filter((el) => {
+      if (el.closest(PROVISION_EXCLUDE)) return false;
+      const spans = provisionAll(el, "span").map((s) => normalizeProvisionRepo(provisionText(s))).filter(Boolean);
+      return spans.length > 0 || /select a repository/i.test(provisionText(el));
+    });
+  }
+  function provisionTriggerRepo(trigger) {
+    for (const span of provisionAll(trigger, "span")) {
+      const repo = normalizeProvisionRepo(provisionText(span));
+      if (repo) return repo;
+    }
+    return "";
+  }
+  function provisionPicker() {
+    const found = provisionVisible(document, PROVISION_SEL.picker);
+    if (found.length > 1) provisionDomFail("provision_picker_ambiguous", "открыто несколько repo picker");
+    return found[0] || null;
+  }
+  function provisionRepoOption(picker, repo) {
+    const list = provisionOne(picker, PROVISION_SEL.pickerList, "provision_picker_list_missing");
+    const items = provisionVisible(list, PROVISION_SEL.pickerItem).filter((item) => {
+      const dv = normalizeProvisionRepo(item.getAttribute("data-value"));
+      if (dv && dv !== repo) return false;
+      return provisionAll(item, "span").some((s) => normalizeProvisionRepo(provisionText(s)) === repo);
+    });
+    if (items.length !== 1) provisionDomFail("provision_repo_option_missing", `repo ${repo}: options ${items.length}`);
+    return items[0];
+  }
+  function provisionComposerReady() {
+    const editor = typeof composer === "function" ? composer() : null;
+    if (!editor) return false;
+    return typeof sendButton === "function" ? Boolean(sendButton(editor)) : true;
+  }
+
+  /** Выбирает repo в composer. Уже выбранный repo не кликается повторно. */
+  async function provisionSelectRepository(repo, cfg = provisionConfig()) {
+    const target = normalizeProvisionRepo(repo);
+    if (!target) provisionDomFail("provision_repo_invalid", "repo не нормализуется");
+    const triggers = provisionRepoTriggers();
+    if (triggers.length !== 1) provisionDomFail("provision_repo_trigger_ambiguous", `repo triggers: ${triggers.length}`);
+    const trigger = triggers[0];
+    if (provisionTriggerRepo(trigger) === target) return { alreadySelected: true, attempts: 0 };
+    let attempts = 0;
+    while (attempts < 2) {
+      attempts += 1;
+      trigger.click();
+      const picker = await provisionWait(() => provisionPicker(), 5000);
+      if (!picker) continue;
+      const input = provisionOne(picker, PROVISION_SEL.pickerInput, "provision_picker_input_missing");
+      provisionSetInput(input, target);
+      const option = await provisionWait(() => {
+        try { return provisionRepoOption(picker, target); } catch { return null; }
+      }, 5000);
+      if (!option) continue;
+      option.click();
+      const closed = await provisionWait(() => !provisionPicker(), 5000);
+      const updated = await provisionWait(() => provisionTriggerRepo(trigger) === target, 5000);
+      const ready = await provisionWait(provisionComposerReady, 8000);
+      if (closed && updated && ready) return { alreadySelected: false, attempts };
+    }
+    provisionDomFail("provision_repo_select_failed", `repo ${target} не выбран за ${attempts} попытки`);
+  }
+
+  function provisionSidebarRoot() {
+    const roots = provisionVisible(document, PROVISION_SEL.sidebarRoot);
+    if (roots.length !== 1) provisionDomFail("provision_sidebar_ambiguous", `sidebar roots: ${roots.length}`);
+    return roots[0];
+  }
+  function provisionSidebarItems(root = provisionSidebarRoot()) {
+    return provisionAll(root, PROVISION_SEL.sidebarItem).map((item) => ({
+      item, uuid: provisionAgentUuid(item.getAttribute("href")),
+    })).filter((x) => x.uuid);
+  }
+  function provisionFindSidebarItem(agentUuid) {
+    const id = String(agentUuid || "").toLowerCase();
+    return provisionSidebarItems().find((x) => x.uuid === id)?.item || null;
+  }
+  async function provisionWaitSidebarItem(agentUuid, timeoutMs = 8000) {
+    return provisionWait(() => provisionFindSidebarItem(agentUuid), timeoutMs);
+  }
+  function provisionMenuItemContainer(item) {
+    return item.closest('[data-sidebar="menu-item"]') || item.parentElement || item;
+  }
+  async function provisionOpenItemMenu(item) {
+    const holder = provisionMenuItemContainer(item);
+    const action = provisionOne(holder, PROVISION_SEL.menuAction, "provision_menu_action_missing");
+    action.click();
+    const menu = await provisionWait(() => {
+      const found = provisionVisible(document, PROVISION_SEL.openMenu);
+      return found.length === 1 ? found[0] : null;
+    }, 5000);
+    if (!menu) provisionDomFail("provision_menu_missing", "More options меню не открылось");
+    return menu;
+  }
+  function provisionMenuButton(menu, label) {
+    const wanted = String(label).toLowerCase();
+    const found = provisionVisible(menu, PROVISION_SEL.menuItem).filter((el) => provisionText(el).toLowerCase() === wanted);
+    if (found.length !== 1) provisionDomFail("provision_menu_item_missing", `${label}: найдено ${found.length}`);
+    return found[0];
+  }
+  function provisionRenameDialog() {
+    const dialogs = provisionVisible(document, PROVISION_SEL.dialog).filter((d) =>
+      /rename chat/i.test(provisionText(d)) && provisionAll(d, PROVISION_SEL.renameInput).length === 1);
+    if (dialogs.length !== 1) provisionDomFail("provision_rename_dialog_missing", `Rename chat dialogs: ${dialogs.length}`);
+    return dialogs[0];
+  }
+  function provisionRenameSubmit(dialog) {
+    const found = provisionVisible(dialog, 'button[type="submit"]').filter((b) => /^rename$/i.test(provisionText(b)));
+    if (found.length !== 1) provisionDomFail("provision_rename_submit_missing", `Rename submit: ${found.length}`);
+    return found[0];
+  }
+  const provisionEnabled = (el) => Boolean(el) && !el.disabled && el.getAttribute("aria-disabled") !== "true" && el.getAttribute("data-disabled") !== "true";
+
+  /** Rename сессии в имя роли. Тост не является условием успеха. */
+  async function provisionRenameAgent(agentUuid, roleName, cfg = provisionConfig()) {
+    const name = String(roleName || "").trim();
+    if (!name || name.length > 100) provisionDomFail("provision_rename_name_invalid", "имя роли пустое или >100");
+    let attempts = 0;
+    while (attempts < cfg.agentRenameAttempts) {
+      attempts += 1;
+      const item = provisionFindSidebarItem(agentUuid);
+      if (!item) provisionDomFail("provision_sidebar_item_missing", "sidebar item для rename не найден");
+      const menu = await provisionOpenItemMenu(item);
+      provisionMenuButton(menu, "Rename").click();
+      const dialog = await provisionWait(() => {
+        try { return provisionRenameDialog(); } catch { return null; }
+      }, 5000);
+      if (!dialog) continue;
+      const input = provisionOne(dialog, PROVISION_SEL.renameInput, "provision_rename_input_missing");
+      provisionSetInput(input, name);
+      const submit = await provisionWait(() => {
+        const button = provisionRenameSubmit(dialog);
+        return provisionEnabled(button) ? button : null;
+      }, 5000);
+      if (!submit) continue;
+      submit.click();
+      const closed = await provisionWait(() => {
+        try { provisionRenameDialog(); return false; } catch { return true; }
+      }, 5000);
+      const renamed = await provisionWait(() => {
+        const live = provisionFindSidebarItem(agentUuid);
+        return live && provisionText(live) === name ? live : null;
+      }, 8000);
+      if (closed && renamed) return { attempts };
+    }
+    provisionDomFail("provision_rename_failed", `rename не подтверждён за ${attempts} попытки`);
+  }
+
+  /**
+   * Архив старого агента. Возвращает unverified, если пункт не найден или
+   * исчезновение не подтвердилось; это не откатывает успешную замену.
+   */
+  async function provisionArchiveAgent(agentUuid, timeoutMs = 8000) {
+    const item = provisionFindSidebarItem(agentUuid);
+    if (!item) return { archived: false, unverified: true, reason: "sidebar item не найден" };
+    let menu;
+    try { menu = await provisionOpenItemMenu(item); }
+    catch (error) { return { archived: false, unverified: true, reason: error.message }; }
+    let archive;
+    try { archive = provisionMenuButton(menu, "Archive"); }
+    catch (error) { return { archived: false, unverified: true, reason: error.message }; }
+    archive.click();
+    const gone = await provisionWait(() => !provisionFindSidebarItem(agentUuid), timeoutMs);
+    if (gone) return { archived: true, unverified: false };
+    return { archived: false, unverified: true, reason: "признак архивации не подтверждён" };
+  }
+
+  // ───────────────────────── provisioning: запрос → одобрение → job ─────────────────────────
+  // Контур не пишет K.pending/K.expect и не создаёт страницы Notion. Запрос
+  // уходит админ-роли напрямую; создание начинается только после маркера
+  // CF_AGENT_PROVISION_RESULT с выданным request_id.
+
+  let provisionRunning = false;
+
+  function provisionLog(text, error = false, options = {}) {
+    log(text, error, { ntfy: "quiet", title: "Relay: provisioning", ...options });
+  }
+  function provisionPause(reason, request, job, extra = {}) {
+    const fields = {
+      requestId: request?.requestId || "", jobId: job?.id || "",
+      rolePageId: job?.rolePageId || "", repo: job?.repo || "",
+      step: job?.state || request?.state || "", reason,
+    };
+    provisionEvent(extra.event || "provision_paused", fields);
+    if (job) {
+      job.state = extra.jobState || "paused";
+      job.error = reason;
+      provisionSaveJob(job);
+    }
+    if (request) {
+      request.state = "paused";
+      request.error = reason;
+      saveProvisionRequest(request);
+    }
+    autoSet(false);
+    pause(reason, { kind: "provision", ref: job?.rolePageId || request?.requestId || "", ...extra.pause });
+    return true;
+  }
+
+  async function provisionFreshRole(pageId) {
+    try {
+      const page = await notion("GET", `pages/${pageId}`);
+      return page && !page.archived ? mapRoleRow(page) : null;
+    } catch (error) {
+      if (/404|object_not_found|не найден/i.test(String(error?.message || error))) return null;
+      throw error;
+    }
+  }
+
+  async function provisionBusyContext() {
+    const names = new Set();
+    const ids = new Set();
+    const cards = await query(C.requests, {
+      or: [
+        { property: "Dispatch State", select: { equals: "Running" } },
+        { property: "Dispatch State", select: { equals: "Submitted" } },
+      ],
+    });
+    for (const card of cards) {
+      const name = taskRole(card);
+      if (name) names.add(norm(name));
+      const recipient = rt(card.properties?.["Recipient Agent ID"]);
+      if (recipient) ids.add(norm(recipient));
+    }
+    const pending = GM_getValue(K.pending, null);
+    const expect = GM_getValue(K.expect, null);
+    for (const turn of [pending, expect]) {
+      if (!turn) continue;
+      if (turn.roleName) names.add(norm(turn.roleName));
+      if (turn.roleId) ids.add(norm(turn.roleId));
+      if (turn.ref) ids.add(norm(turn.ref));
+    }
+    return { names, ids, cards };
+  }
+
+  function provisionIdleReason(cfg = provisionConfig()) {
+    if (!cfg.agentProvisionEnabled) return "provisioning выключен";
+    if (!C.notion) return "нет Notion-токена профиля";
+    if (GM_getValue(K.paused, "")) return "цикл на паузе";
+    if (GM_getValue(K.pending, null) || GM_getValue(K.expect, null)) return "активный командный ход";
+    if (GM_getValue(K.pilotWait, null)) return "идёт пилот";
+    if (provisionRequestState()) return "provisioning-запрос уже выдан";
+    if (provisionLockHeldByOther()) return "provisioning занят другой вкладкой";
+    if (!provisionBootstrapClean(cfg.agentBootstrapPrompt)) return "bootstrap-пробник пуст или запрещён";
+    if (!provisionDailyAllow(cfg)) return "суточный лимит provisioning";
+    return "";
+  }
+
+  async function provisionGather(cfg = provisionConfig()) {
+    const rows = await rolesFresh();
+    const busy = await provisionBusyContext();
+    const { candidates, rejected } = provisionCandidates(rows, cfg, busy);
+    const admin = provisionAdminRole(rows);
+    return { rows, busy, candidates, rejected, admin };
+  }
+
+  /** Выдать запрос админ-роли. Вызывается кнопкой или холостым автоциклом. */
+  async function provisionStartRequest({ auto = false } = {}) {
+    const cfg = provisionConfig();
+    const why = provisionIdleReason(cfg);
+    if (why) { provisionLog(`Запрос не выдан: ${why}.`); return false; }
+    const { candidates, rejected, admin } = await provisionGather(cfg);
+    for (const item of rejected) provisionEvent("provision_noop", { rolePageId: item.rolePageId, reason: item.reason });
+    if (!admin) {
+      pause("Provisioning: нет активной админ-роли (Agent Admin=true, Coordinator/Reviewer). Создайте или включите админ-роль вручную.", { kind: "provision-no-admin" });
+      provisionEvent("provision_paused", { reason: "provision-no-admin" });
+      return false;
+    }
+    if (!candidates.length) { provisionEvent("provision_noop", { reason: "нет кандидатов" }); return false; }
+    const requestId = uid();
+    const request = {
+      requestId, state: "prepared", auto, resumeAuto: autoOn(),
+      adminPageId: admin.pageId, adminAgentId: admin.id, adminRoleName: admin.name,
+      adminFn: admin.fn, adminUrl: admin.url, candidates,
+      jobIds: [], createdAt: nowIso(), updatedAt: nowIso(), watermark: "", seen: [],
+    };
+    saveProvisionRequest(request);
+    provisionAcquireLock(requestId, request.resumeAuto);
+    autoSet(false);
+    provisionLog(`Provisioning: запрос ${requestId} подготовлен для админ-роли «${admin.name}», кандидатов ${candidates.length}.`);
+    if (provisionCurrentAgentUuid() !== String(admin.id).toLowerCase()) {
+      location.assign(admin.url);
+      return true;
+    }
+    return provisionSendRequest(request);
+  }
+
+  async function provisionSendRequest(request) {
+    const cfg = provisionConfig();
+    const admin = await provisionFreshRole(request.adminPageId);
+    if (!admin || admin.agentAdmin !== true || admin.status !== "Активна") {
+      return provisionPause("Provisioning: адресат запроса больше не активная админ-роль.", request, null);
+    }
+    if (provisionCurrentAgentUuid() !== String(admin.id).toLowerCase()) { location.assign(admin.url); return true; }
+    const compiled = PromptCompiler.compile({
+      kind: "provision", role: { fn: request.adminFn, name: request.adminRoleName },
+      provision: { requestId: request.requestId, candidates: request.candidates, maxJobs: cfg.agentProvisionMaxJobs },
+      delivery: { tier: "full" },
+    });
+    if (!compiled.ok) return provisionPause(`Provisioning prompt не собран: ${compiled.error?.message || compiled.error?.code}`, request, null);
+    const ready = await ensureComposer(C.pageWaitMs);
+    if (!ready?.editor) return provisionPause("Provisioning: поле ввода админ-роли не появилось.", request, null);
+    if (!writePrompt(ready.editor, compiled.text)) return provisionPause("Provisioning: не удалось вставить запрос админ-роли.", request, null);
+    request.watermark = lastMessageId();
+    request.seen = messages().map(nodeId);
+    request.state = "sending";
+    saveProvisionRequest(request);
+    const sent = await deliver(ready.editor, compiled.text);
+    if (!sent?.ok) return provisionPause("Provisioning: запрос админ-роли не доставлен.", request, null);
+    request.state = "awaiting";
+    request.sentAt = nowIso();
+    saveProvisionRequest(request);
+    provisionEvent("provision_request_sent", { requestId: request.requestId, rolePageId: request.adminPageId, step: "awaiting" });
+    provisionLog(`Provisioning: запрос ${request.requestId} отправлен админ-роли «${request.adminRoleName}». Жду маркер одобрения.`);
+    return true;
+  }
+
+  async function provisionConsumeApproval(request) {
+    const cfg = provisionConfig();
+    if (provisionCurrentAgentUuid() !== String(request.adminAgentId).toLowerCase()) { location.assign(request.adminUrl); return true; }
+    if (captchaDialog()) return provisionPause("Provisioning: капча на странице админ-роли.", request, null);
+    if (detectToolCallLimit()) return provisionPause("Provisioning: tool-call limit у админ-роли; продолжение запроса не поддерживается.", request, null);
+    const visibleError = detectVisibleErrorCard();
+    if (visibleError) return provisionPause(`Provisioning: ошибка Arena у админ-роли: ${visibleError.text || visibleError}`, request, null);
+    const admin = await provisionFreshRole(request.adminPageId);
+    if (!admin || admin.agentAdmin !== true || admin.status !== "Активна") {
+      return provisionPause("Provisioning: право одобрения потеряно (Agent Admin/Статус изменились).", request, null);
+    }
+    const replies = messagesAfter(request.watermark, request.seen);
+    const hit = replies.map((m) => ({ m, obj: parseMarker(m.raw, "CF_AGENT_PROVISION_RESULT") })).filter((x) => x.obj).at(-1);
+    if (!hit) return true; // ждём ответ админ-роли, автоцикл выключен
+    const fresh = await rolesFresh();
+    const verdict = validateProvisionMarker(hit.obj, request, fresh, cfg);
+    if (!verdict.ok) {
+      provisionEvent("provision_rejected", { requestId: request.requestId, reason: verdict.reason });
+      return provisionPause(`Provisioning: маркер одобрения отклонён — ${verdict.reason}.`, request, null);
+    }
+    request.state = "approved";
+    request.approvedAt = nowIso();
+    request.approvalReason = verdict.reason;
+    request.approvedJobs = verdict.jobs;
+    saveProvisionRequest(request);
+    provisionEvent("provision_approved", { requestId: request.requestId, rolePageId: request.adminPageId, reason: verdict.reason || `jobs ${verdict.jobs.length}` });
+    provisionLog(`Provisioning: одобрено jobs ${verdict.jobs.length}.`);
+    if (!verdict.jobs.length) return provisionFinishRequest(request, "одобрено 0 jobs");
+    return true;
+  }
+
+  async function provisionEnsureRecipientOption(roleName) {
+    const ds = await notion("GET", `data_sources/${C.requests}`);
+    const prop = ds?.properties?.["Кому"];
+    if (!prop || prop.type !== "select") throw new Error("в «Запросах» нет select-поля «Кому»");
+    const options = Array.isArray(prop.select?.options) ? prop.select.options : [];
+    if (options.some((o) => norm(o.name) === norm(roleName))) return true;
+    const next = [...options.map((o) => ({ id: o.id, name: o.name, color: o.color })), { name: roleName }];
+    await notion("PATCH", `data_sources/${C.requests}`, { properties: { "Кому": { select: { options: next } } } });
+    return true;
+  }
+
+  async function provisionActivationBlockReason(job, cfg) {
+    const rows = await rolesFresh();
+    const row = rows.find((r) => norm(r.pageId) === norm(job.rolePageId));
+    if (!row) return "строка роли исчезла";
+    if (row.agentAdmin === true) return "админ-роль не активируется provisioning";
+    if (norm(row.url) !== norm(job.agentUrl)) return "Agent URL в Notion не равен новому";
+    if (normalizeProvisionRepo(row.repo) !== job.repo) return "repo роли изменился";
+    const item = provisionFindSidebarItem(provisionAgentUuid(job.agentUrl));
+    if (!item || provisionText(item) !== job.roleName) return "имя sidebar не равно роли";
+    const busy = await provisionBusyContext();
+    if (busy.names.has(norm(job.roleName)) || busy.ids.has(norm(job.roleAgentId)) || busy.ids.has(norm(job.rolePageId))) {
+      return "по роли есть активная работа";
+    }
+    const active = rows.filter((r) => r.status === "Активна" && r.url);
+    if (job.fn === "Coordinator" && active.some((r) => r.fn === "Coordinator" && norm(r.pageId) !== norm(job.rolePageId))) {
+      return "уже есть активный Coordinator";
+    }
+    const reviewers = active.filter((r) => r.fn === "Reviewer" && norm(r.pageId) !== norm(job.rolePageId));
+    if (!reviewers.length && job.fn !== "Reviewer") return "не остаётся активного Reviewer";
+    if (["Executor", "Auditor", "Auditory"].includes(job.fn)) {
+      try { await provisionEnsureRecipientOption(job.roleName); }
+      catch (error) { return `не удалось добавить «Кому»: ${error.message}`; }
+    }
+    return "";
+  }
+
+  async function provisionPatchNotion(job, request) {
+    const row = await provisionFreshRole(job.rolePageId);
+    if (!row) return provisionPause("Provisioning: строка роли исчезла до записи Notion.", request, job, { event: "provision_conflict" });
+    if (row.agentAdmin === true) return provisionPause("Provisioning: попытка записать админ-роль.", request, job, { event: "provision_conflict" });
+    const currentUrl = String(row.url || "").trim();
+    const newUrl = job.agentUrl;
+    if (currentUrl && norm(currentUrl) !== norm(newUrl) && norm(currentUrl) !== norm(job.oldAgentUrl)) {
+      return provisionPause("Provisioning: Agent URL уже изменён другим процессом (conflict).", request, job, { event: "provision_conflict" });
+    }
+    if (row.status === "Активна" && currentUrl && norm(currentUrl) !== norm(newUrl)) {
+      return provisionPause("Provisioning: роль уже активна с другим Agent URL.", request, job, { event: "provision_conflict" });
+    }
+    if (row.agentState === "не требуется") {
+      return provisionPause("Provisioning: Agent State больше не запрошен.", request, job, { event: "provision_conflict" });
+    }
+    const alreadyUrl = norm(currentUrl) === norm(newUrl);
+    const props = {
+      "Agent State": { select: { name: "создан" } },
+      "Agent Job ID": { rich_text: richText(job.id) },
+      "Agent Created At": { date: { start: nowIso() } },
+    };
+    if (!alreadyUrl) props["Agent URL"] = { url: newUrl };
+    if (job.action === "replace" && job.oldAgentUrl) props["Previous Agent URL"] = { url: job.oldAgentUrl };
+    if (!(row.status === "Активна" && alreadyUrl)) await patch(job.rolePageId, props);
+    provisionEvent("provision_notion_updated", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "notion_updated" });
+    job.state = "notion_updated";
+    provisionSaveJob(job);
+    return false;
+  }
+
+  async function provisionArchiveOld(job, request) {
+    const cfg = provisionConfig();
+    if (job.action !== "replace" || !cfg.agentProvisionArchiveOld || !job.oldAgentUrl) {
+      job.state = "done"; provisionSaveJob(job);
+      provisionEvent("provision_job_done", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "done" });
+      return false;
+    }
+    const oldUuid = provisionAgentUuid(job.oldAgentUrl);
+    const newUuid = provisionAgentUuid(job.agentUrl);
+    if (!oldUuid || oldUuid === newUuid) {
+      return provisionPause("Provisioning: старый Agent URL не отличим от нового; архив не выполняется.", request, job, { event: "provision_conflict" });
+    }
+    if (provisionCurrentAgentUuid() !== oldUuid) {
+      job.state = "archiving_old"; provisionSaveJob(job);
+      location.assign(job.oldAgentUrl);
+      return true;
+    }
+    job.state = "archiving_old"; provisionSaveJob(job);
+    const result = await provisionArchiveAgent(oldUuid);
+    if (result.archived) {
+      provisionEvent("provision_old_archived", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "archiving_old" });
+    } else {
+      provisionEvent("provision_old_archive_unverified", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "archiving_old", reason: result.reason });
+      provisionLog(`Provisioning: архив старого агента не подтверждён (${result.reason}). Замена не откатывается; проверьте старый чат вручную.`, true, { ntfy: "normal" });
+    }
+    job.state = "done"; provisionSaveJob(job);
+    provisionEvent("provision_job_done", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "done" });
+    return false;
+  }
+
+  async function provisionAdvanceJob(job, request) {
+    const cfg = provisionConfig();
+    const uuid = provisionAgentUuid(job.agentUrl);
+    if (captchaDialog()) return provisionPause("Provisioning: капча Arena.", request, job);
+    if (detectToolCallLimit()) return provisionPause("Provisioning: tool-call limit на bootstrap; продолжение не поддерживается.", request, job);
+    const visibleError = detectVisibleErrorCard();
+    if (visibleError) return provisionPause(`Provisioning: ошибка Arena: ${visibleError.text || visibleError}`, request, job);
+
+    if (["validated", "creating"].includes(job.state)) {
+      if (GM_getValue(K.pending, null) || GM_getValue(K.expect, null)) {
+        return provisionPause("Provisioning: появился активный командный ход; создание не начинаю.", request, job);
+      }
+      if (!provisionDailyAllow(cfg)) return provisionPause("Provisioning: суточный лимит создания агентов.", request, job);
+      if (!provisionBootstrapClean(cfg.agentBootstrapPrompt)) return provisionPause("Provisioning: bootstrap-пробник пуст или запрещён.", request, job);
+      const row = await provisionFreshRole(job.rolePageId);
+      if (!row || row.agentAdmin === true || !["запрошен", "создаётся"].includes(row.agentState)) {
+        return provisionPause("Provisioning: строка роли изменилась до создания.", request, job, { event: "provision_conflict" });
+      }
+      if (provisionCurrentAgentUuid()) {
+        // Новая сессия создаётся только с /agent. Если вкладка уже в чужом
+        // чате, не переиспользуем его и не архивируем.
+        job.state = "creating"; provisionSaveJob(job);
+        location.assign(location.origin + "/agent");
+        return true;
+      }
+      job.state = "creating"; provisionSaveJob(job);
+      const selected = await provisionSelectRepository(job.repo, cfg);
+      provisionEvent("provision_repo_selected", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "repo_selected", reason: selected.alreadySelected ? "already" : `attempts ${selected.attempts}` });
+      job.state = "repo_selected"; provisionSaveJob(job);
+    }
+
+    if (job.state === "repo_selected") {
+      const ready = await ensureComposer(C.pageWaitMs);
+      if (!ready?.editor) return provisionPause("Provisioning: composer новой сессии не появился.", request, job);
+      if (!writePrompt(ready.editor, cfg.agentBootstrapPrompt)) return provisionPause("Provisioning: bootstrap-пробник не вставлен.", request, job);
+      job.bootstrapMsgId = lastMessageId();
+      job.bootstrapSeen = messages().map(nodeId);
+      job.bootstrapStartedAt = Date.now();
+      job.urlWaitStartedAt = Date.now();
+      job.state = "bootstrap_sent";
+      provisionSaveJob(job); // до deliver: перезагрузка не должна создать вторую сессию
+      const sent = await deliver(ready.editor, cfg.agentBootstrapPrompt);
+      if (!sent?.ok) return provisionPause("Provisioning: bootstrap-пробник не доставлен.", request, job);
+      provisionEvent("provision_bootstrap_sent", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "bootstrap_sent" });
+    }
+
+    if (job.state === "bootstrap_sent") {
+      if (!job.agentUrl) {
+        const current = provisionCurrentAgentUuid();
+        if (current) {
+          job.agentUrl = `${location.origin}/agent/${current}`;
+          job.state = "url_captured";
+          job.urlCapturedAt = Date.now();
+          provisionSaveJob(job); // URL сохраняется до rename/Notion
+          provisionEvent("provision_url_captured", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "url_captured" });
+        } else {
+          if (Date.now() - Number(job.urlWaitStartedAt || Date.now()) > cfg.agentUrlWaitMs) {
+            return provisionPause("Provisioning: URL новой сессии не появился за agentUrlWaitMs.", request, job);
+          }
+          return true;
+        }
+      } else {
+        // Восстановление после перезагрузки: URL уже захвачен, вторую сессию
+        // не создаём и bootstrap повторно не отправляем.
+        job.state = "url_captured";
+        provisionSaveJob(job);
+      }
+    }
+
+    if (job.state === "url_captured") {
+      if (provisionCurrentAgentUuid() !== provisionAgentUuid(job.agentUrl)) { location.assign(job.agentUrl); return true; }
+      const waited = Date.now() - Number(job.bootstrapStartedAt || Date.now());
+      if (waited > cfg.agentBootstrapWaitMs) return provisionPause("Provisioning: bootstrap не завершился за agentBootstrapWaitMs.", request, job);
+      if (stillWorking()) return true;
+      const replies = messagesAfter(job.bootstrapMsgId, job.bootstrapSeen || []);
+      if (!replies.length) return true; // смысл ответа не проверяем, нужен факт нового assistant
+      job.state = "renaming"; provisionSaveJob(job);
+    }
+
+    if (job.state === "renaming") {
+      try {
+        await provisionRenameAgent(provisionAgentUuid(job.agentUrl), job.roleName, cfg);
+      } catch (error) {
+        return provisionPause(`Provisioning: rename не удался (${error.message}). URL сохранён, новая сессия не создаётся.`, request, job, { jobState: "paused" });
+      }
+      provisionEvent("provision_renamed", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "renamed" });
+      job.state = "renamed"; provisionSaveJob(job);
+    }
+
+    if (job.state === "renamed") {
+      const paused = await provisionPatchNotion(job, request);
+      if (paused) return true;
+    }
+
+    if (job.state === "notion_updated") {
+      if (!cfg.agentProvisionAutoActivate) {
+        provisionEvent("provision_activation_blocked", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "activating", reason: "autoActivate выключен" });
+        job.state = "done"; provisionSaveJob(job);
+        provisionEvent("provision_job_done", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "done" });
+        return false;
+      }
+      job.state = "activating"; provisionSaveJob(job);
+      const block = await provisionActivationBlockReason(job, cfg);
+      if (block) {
+        provisionEvent("provision_activation_blocked", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "activating", reason: block });
+        return provisionPause(`Provisioning: автоактивация заблокирована — ${block}. URL записан, Статус остаётся прежним.`, request, job, { jobState: "paused" });
+      }
+      const freshRow = await provisionFreshRole(job.rolePageId);
+      if (!freshRow || freshRow.status !== "Активна") {
+        await patch(job.rolePageId, { "Статус": { select: { name: "Активна" } } });
+      }
+      provisionEvent("provision_activated", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "activated" });
+      job.state = "activated"; provisionSaveJob(job);
+    }
+
+    if (job.state === "activated") {
+      return provisionArchiveOld(job, request);
+    }
+    if (job.state === "archiving_old") {
+      return provisionArchiveOld(job, request);
+    }
+    if (job.state === "done") return false;
+    return true;
+  }
+
+  async function provisionRunNextJob(request) {
+    const state = provisionState();
+    const active = provisionActiveJob();
+    if (active) return provisionAdvanceJob(active, request);
+    const nextCandidate = (request.approvedJobs || []).find((c) =>
+      !state.jobs.some((j) => norm(j.requestId) === norm(request.requestId) && norm(j.rolePageId) === norm(c.rolePageId) && j.state === "done"));
+    if (!nextCandidate) return provisionFinishRequest(request, "все jobs завершены");
+    const existing = state.jobs.find((j) => norm(j.requestId) === norm(request.requestId) && norm(j.rolePageId) === norm(nextCandidate.rolePageId));
+    let job = existing;
+    if (!job) {
+      if (!provisionDailyAllow()) return provisionPause("Provisioning: суточный лимит создания агентов.", request, null);
+      job = provisionNewJob(nextCandidate, request.requestId);
+      provisionSaveJob(job);
+      request.jobIds = [...(request.jobIds || []), job.id];
+      saveProvisionRequest(request);
+      provisionDailyConsume();
+      provisionEvent("provision_job_started", { requestId: request.requestId, jobId: job.id, rolePageId: job.rolePageId, repo: job.repo, step: "validated" });
+      provisionLog(`Provisioning: job ${job.id} — ${job.action} «${job.roleName}» (${job.repo}).`);
+    }
+    return provisionAdvanceJob(job, request);
+  }
+
+  async function provisionFinishRequest(request, reason) {
+    provisionEvent("provision_job_done", { requestId: request.requestId, step: "request", reason });
+    const state = provisionState();
+    state.history = [...state.history, { requestId: request.requestId, at: nowIso(), reason, jobs: request.jobIds || [] }].slice(-50);
+    saveProvisionState(state);
+    const resume = request.resumeAuto === true && !GM_getValue(K.paused, "");
+    saveProvisionRequest(null);
+    provisionReleaseLock();
+    if (resume) autoSet(true);
+    provisionLog(`Provisioning: запрос ${request.requestId} завершён (${reason}). Автоцикл ${resume ? "восстановлен" : "остаётся выключенным"}.`);
+    return false;
+  }
+
+  /** Ранний вход tick. Не трогает K.pending/K.expect. */
+  async function consumeProvision() {
+    if (provisionRunning) return true;
+    const cfg = provisionConfig();
+    if (!cfg.agentProvisionEnabled) return false;
+    if (provisionLockHeldByOther()) return Boolean(provisionRequestState());
+    const request = provisionRequestState();
+    provisionRunning = true;
+    try {
+      if (!request) {
+        if (cfg.agentProvisionMode !== "auto" || !autoOn()) return false;
+        const why = provisionIdleReason(cfg);
+        if (why) return false;
+        return await provisionStartRequest({ auto: true });
+      }
+      if (request.state === "prepared") return await provisionSendRequest(request);
+      if (request.state === "sending") {
+        return provisionPause("Provisioning: отправка запроса прервана; повторять запрос без проверки Мастера нельзя.", request, null);
+      }
+      if (request.state === "awaiting") return await provisionConsumeApproval(request);
+      if (request.state === "approved") return await provisionRunNextJob(request);
+      if (request.state === "paused") return true;
+      if (request.state === "done") return await provisionFinishRequest(request, "done");
+      return false;
+    } catch (error) {
+      return provisionPause(`Provisioning: ${error.message || error}`, request, provisionActiveJob());
+    } finally {
+      provisionRunning = false;
+    }
+  }
+
+  /** Отмена ещё не одобренного запроса (кнопка UI). Активные jobs не отменяет. */
+  function provisionCancelRequest() {
+    const request = provisionRequestState();
+    if (!request || !["prepared", "sending", "awaiting"].includes(request.state)) return false;
+    provisionEvent("provision_rejected", { requestId: request.requestId, reason: "отменено Мастером" });
+    const resume = request.resumeAuto === true && !GM_getValue(K.paused, "");
+    saveProvisionRequest(null);
+    provisionReleaseLock();
+    if (resume) autoSet(true);
+    return true;
+  }
+
+  // ───────────────────────── provisioning: диалог Мастера ─────────────────────────
+
+  async function provisionOpenDialog() {
+    if (typeof projectApproved === "function" && !projectApproved()) {
+      log("Provisioning: проект ещё не разрешён к работе.", true); return;
+    }
+    document.getElementById("cfn-provision-dialog")?.remove();
+    const cfg = provisionConfig();
+    const box = document.createElement("div");
+    box.id = "cfn-provision-dialog";
+    box.style.cssText = "position:fixed;inset:0;z-index:2147483001;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center";
+    const card = document.createElement("div");
+    card.style.cssText = "width:min(720px,94vw);max-height:88vh;overflow:auto;background:#15171c;color:#e7eaee;border:1px solid #2b2f38;border-radius:10px;padding:16px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace";
+    card.innerHTML = `<h3 style="margin:0 0 8px">🤖 Provisioning Arena-агентов</h3><div id="cfn-provision-body">Читаю свежие роли…</div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button id="cfn-provision-request" style="padding:6px 10px">Запросить создание/замену</button>
+        <button id="cfn-provision-cancel" style="padding:6px 10px">Отменить запрос</button>
+        <button id="cfn-provision-close" style="padding:6px 10px">Закрыть</button>
+      </div>`;
+    box.appendChild(card);
+    document.body.appendChild(box);
+    const body = card.querySelector("#cfn-provision-body");
+    const requestBtn = card.querySelector("#cfn-provision-request");
+    const cancelBtn = card.querySelector("#cfn-provision-cancel");
+    card.querySelector("#cfn-provision-close").onclick = () => box.remove();
+    box.onclick = (e) => { if (e.target === box) box.remove(); };
+    requestBtn.disabled = true;
+    cancelBtn.disabled = true;
+    try {
+      const request = provisionRequestState();
+      const state = provisionState();
+      const active = provisionActiveJob();
+      let html = `<div style="color:#aab4c3">enabled=${cfg.agentProvisionEnabled} mode=${cfg.agentProvisionMode} allowlist=${cfg.agentProvisionRepoAllowlist.length} maxJobs=${cfg.agentProvisionMaxJobs} dailyMax=${cfg.agentProvisionDailyMax} bootstrap=${provisionBootstrapClean(cfg.agentBootstrapPrompt) ? "ok" : "пуст/запрещён"}</div>`;
+      if (request) {
+        html += `<div style="margin-top:8px">Запрос ${escapeHtml(request.requestId)}: ${escapeHtml(request.state)}; админ «${escapeHtml(request.adminRoleName || "")}»; jobs ${(request.jobIds || []).length}.</div>`;
+        cancelBtn.disabled = !["prepared", "sending", "awaiting"].includes(request.state);
+      }
+      if (active) html += `<div style="margin-top:6px">Активный job ${escapeHtml(active.id)}: ${escapeHtml(active.state)} «${escapeHtml(active.roleName)}» ${escapeHtml(active.repo)}${active.agentUrl ? ` URL ${escapeHtml(active.agentUrl)}` : ""}.</div>`;
+      if (!cfg.agentProvisionEnabled) {
+        html += `<p>Provisioning выключен в профиле. Включите его в управлении проектами и задайте allowlist/bootstrap.</p>`;
+        body.innerHTML = html;
+        return;
+      }
+      const { candidates, rejected, admin } = await provisionGather(cfg);
+      html += `<div style="margin-top:8px">Админ-роль: ${admin ? `«${escapeHtml(admin.name)}» (${escapeHtml(admin.fn)})` : "<b>нет активной админ-роли</b>"}.</div>`;
+      if (candidates.length) {
+        html += `<table style="width:100%;border-collapse:collapse;margin-top:8px"><tr><th align="left">Роль</th><th align="left">Функция</th><th align="left">Repo</th><th align="left">Action</th></tr>`;
+        for (const c of candidates) html += `<tr><td>${escapeHtml(c.roleName)}</td><td>${escapeHtml(c.fn)}</td><td>${escapeHtml(c.repo)}</td><td>${escapeHtml(c.action)}</td></tr>`;
+        html += `</table>`;
+      } else html += `<p>Кандидатов нет. Нужны строки с Agent State=запрошен, не админ, repo в allowlist, без активной работы.</p>`;
+      if (rejected.length) html += `<div style="margin-top:8px;color:#ffd479">Отклонено: ${rejected.map((r) => `${escapeHtml(r.rolePageId)} — ${escapeHtml(r.reason)}`).join("; ")}</div>`;
+      const idle = provisionIdleReason(cfg);
+      if (idle) html += `<div style="margin-top:8px;color:#ffd479">Запрос сейчас не будет выдан: ${escapeHtml(idle)}.</div>`;
+      const journal = state.journal.slice(-8).map((e) => `${escapeHtml(e.at)} ${escapeHtml(e.event)} ${escapeHtml(e.reason || e.step || "")}`).join("<br>");
+      if (journal) html += `<div style="margin-top:10px;color:#aab4c3;font-size:12px">${journal}</div>`;
+      body.innerHTML = html;
+      requestBtn.disabled = Boolean(idle) || !candidates.length || !admin || Boolean(request);
+      requestBtn.onclick = async () => {
+        if (!confirm(`Выдать запрос админ-роли «${admin.name}» на ${candidates.length} кандидат(ов)? Создание начнётся только после маркера одобрения.`)) return;
+        requestBtn.disabled = true;
+        box.remove();
+        await provisionStartRequest({ auto: false });
+      };
+      cancelBtn.onclick = () => {
+        if (provisionCancelRequest()) { log("Provisioning: запрос отменён Мастером."); box.remove(); }
+      };
+    } catch (error) {
+      body.textContent = `Не удалось прочитать кандидатов: ${error.message || error}`;
+    }
+  }
+
   // ───────────────────────────── цикл ─────────────────────────────
   let busy = false;
   /** Сколько раз подряд шаг снимали с блокировки по тишине. */
@@ -13267,6 +14415,10 @@
     }
     // Окно могли открыть во время асинхронной самопроверки выше.
     if (typeof document !== "undefined" && document.getElementById?.("cfn-connections")) return;
+    // Provisioning Arena-агентов — отдельный административный контур. Он читает
+    // свой request/job/lock до auto/pending-логики и не трогает K.pending/K.expect.
+    // Пока запрос или job активен, обычный командный цикл не начинается.
+    if (typeof consumeProvision === "function" && await consumeProvision()) return;
     // Незавершённая отправка живёт в очереди и не зависит от автоцикла:
     // иначе после перехода на страницу адресата задание никто не досылал.
     const auto = autoOn();

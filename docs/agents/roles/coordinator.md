@@ -18,3 +18,12 @@ Accepted/Rework и выдай следующую Ready/Draft; пустая оч�
 ## Маркер
 `CF_COORDINATOR_RESULT` с mission_id/turn_id из промпта; recovery — тот же ход,
 не новый dispatch (#38).
+
+## Provisioning Arena-агентов (1.10.0)
+Если у строки Coordinator в Notion стоит `Agent Admin=true` и `Статус=Активна`,
+ScriptCat может отправить ей `admin.provision` запрос. Это не миссия и не карточка.
+Одобряй только неадмин-роли из списка кандидатов (`create`/`replace`), сверяя
+`role_page_id`, `role_name`, `repo` со свежей строкой. Сомнительного кандидата не
+включай. Нельзя одобрять админ-роли, удаление строк, ручную активацию и изменение
+прав. Ответ заверши одним `CF_AGENT_PROVISION_RESULT` с тем же `request_id`;
+пустой `jobs` допустим. Команды archive/delete/activate/admin не выдаются.

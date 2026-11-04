@@ -89,8 +89,30 @@ const row = (name, url, fn = 'Executor', status = 'Активна') => ({
       gate: 'гейт Tools',
       repo: '',
       pageId: 'page-Tools',
+      agentAdmin: false,
+      agentState: 'не требуется',
+      agentJobId: '',
+      agentCreatedAt: '',
+      previousAgentUrl: '',
     },
-  ], 'карта строки полная');
+  ], 'карта строки полная, включая аддитивные provisioning-поля');
+}
+
+// ── 1b. Аддитивные provisioning-поля читаются из свежей строки ─────────────
+{
+  const page = row('Admin', 'https://arena.ai/agent/adm-1', 'Coordinator', 'Активна');
+  page.properties['Agent Admin'] = { checkbox: true };
+  page.properties['Agent State'] = { select: { name: 'запрошен' } };
+  page.properties['Agent Job ID'] = { rich_text: [{ plain_text: 'job-1' }] };
+  page.properties['Agent Created At'] = { date: { start: '2026-11-04T00:00:00.000Z' } };
+  page.properties['Previous Agent URL'] = { url: 'https://arena.ai/agent/old-1' };
+  const h = makeRoles({ reply: () => [page] });
+  const [r] = await h.roleRows();
+  assert.equal(r.agentAdmin, true);
+  assert.equal(r.agentState, 'запрошен');
+  assert.equal(r.agentJobId, 'job-1');
+  assert.equal(r.agentCreatedAt, '2026-11-04T00:00:00.000Z');
+  assert.equal(r.previousAgentUrl, 'https://arena.ai/agent/old-1');
 }
 
 // ── 2. Второй шаг в пределах срока в сеть не ходит ─────────────────────────

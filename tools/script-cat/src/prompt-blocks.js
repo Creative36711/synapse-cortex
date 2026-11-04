@@ -223,5 +223,21 @@
     def("pilot.continue", { audience: ["pilot"], render: () =>
       "Продолжи пилотный ход с того места, где он остановился. Не начинай сначала.\nНе используй внутренние знания, командные маркеры и закрытые документы.\nЗаверши публичный отчёт по брифу: что сделано, как запущено, артефакты и затруднения." });
 
+    // ── provisioning Arena-агентов: одобряет только активная админ-роль ──
+    def("identity.provision", { audience: ["Coordinator", "Reviewer"], render: (c) =>
+      `Provisioning-запрос Arena-агентов. Это не миссия и не рабочая карточка. request_id: ${c.provision?.requestId}.` });
+    def("authority.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MASTER-ONLY"], render: () =>
+      "Одобряй только создание/замену неадмин-ролей из списка. Нельзя одобрять админ-роли, удаление строк, ручную активацию и изменение прав. Сомнительного кандидата не включай. Архивация старого агента — внутреннее следствие replace, отдельной команды нет." });
+    def("provision.candidates", { audience: ["Coordinator", "Reviewer"], verbatim: true, render: (c) =>
+      `Кандидаты:\n${JSON.stringify((c.provision?.candidates || []).map((x) => ({
+        role_page_id: x.rolePageId, role_name: x.roleName, fn: x.fn, repo: x.repo, action: x.action,
+      })))}` });
+    def("provision.policy", { audience: ["Coordinator", "Reviewer"], render: (c) =>
+      `Верни только одобренные jobs (не больше ${c.provision?.maxJobs ?? 3}). Пустой jobs допустим. role_page_id бери из списка, role_name и repo — точно из свежей строки. action только create или replace. Ответ заверши одним маркером CF_AGENT_PROVISION_RESULT.` });
+    def("marker.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MARKER"], render: (c) => [
+      "Маркер — последней строкой. Команды archive/delete/activate/admin как отдельные команды запрещены.",
+      `CF_AGENT_PROVISION_RESULT {"request_id":"${c.provision?.requestId}","jobs":[],"reason":"краткое обоснование"}`,
+    ].join("\n") });
+
     return B;
   })();

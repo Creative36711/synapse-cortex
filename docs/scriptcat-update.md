@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.8.2**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.10.0**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -39,6 +39,25 @@
   регламента и не листать ТЗ блоками по 4, а маркер не искать по памяти и в чужих базах. Проба
   проверяет сам порядок блоков.
 
+- **1.9.0** — конструктор промптов (profiles/blocks/compiler), контракты
+  `agent-protocol.json`/`prompt-coverage.json`, пилотный транспорт и coverage-оракул.
+- **1.9.1** — tool-call limit continuation (`30-tool-limit.js`, `continuation.*`),
+  Gateway **1.7.1** (UTF-8 байты и конфликт дубликата).
+- **1.10.0 (D-032)** — provisioning Arena-агентов: `31-provision-core.js`,
+  `32-provision-dom.js`, `33-provision-flow.js`, `34-provision-ui.js`, кнопка
+  «🤖 Агенты», маркер `CF_AGENT_PROVISION_RESULT`, профиль `admin.provision`
+  (overhead ≤1800), аддитивные поля Notion «Роли». Контур выключен по умолчанию;
+  право одобрения — только `Agent Admin=true` свежей строки. DOM без `radix-*` id
+  и `nth-child`. Публичный `synapse` не меняется; Gateway поднят до **1.8.0**
+  отдельным решением D-033 в том же PR (см. ниже).
+  Bootstrap-пробник по умолчанию пуст (проектные имена не зашиваются); точный текст
+  задаёт Мастер в профиле. Живая приёмка — только в окне D-027 после подтверждения.
+- **Gateway 1.8.0 (D-033, в том же PR)** — закрыт долг D-031 ≠ Gateway 1.7.1:
+  `saveArtifact` принимает имена D-031 (`<МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>`),
+  PNG/base64 (лимит 262144 по декодированным байтам) и подкаталог `artifacts/<МИССИЯ>`
+  по явному `subdir` (один уровень). Legacy UUID/manual имена и текстовые MIME
+  сохранены; ключ и папки проекта не меняются. Контракт protocolVersion **1.2**.
+
 ## 3. Проверки транспорта (локальные, без сети)
 
 Из корня репозитория:
@@ -46,8 +65,8 @@
 ```bash
 npm run scriptcat:check     # relay.user.js соответствует src/ (node build.mjs --check)
 npm run scriptcat:guard     # переносимый комплект не содержит прежнего имени проекта
-npm run test                # 73 smoke-пробы транспорта
-npm run test:regression     # 14 интеграционных проб (включая схему Notion в фикстуре)
+npm run test                # 82 smoke-пробы транспорта (включая provisioning)
+npm run test:regression     # 15 интеграционных проб (включая схему Notion в фикстуре)
 npm run verify              # всё вышеперечисленное подряд
 ```
 

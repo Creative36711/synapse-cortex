@@ -17,6 +17,7 @@
     "test:pilot": "node --test tools/script-cat/tests/pilot-smoke.mjs",
     "test:docs": "node --test tools/script-cat/tests/docs-smoke.mjs",
     "test:tool-limit": "node --test tools/script-cat/tests/tool-limit-continuation-smoke.mjs tools/script-cat/regression-tests/tool-limit-continuation-integration.mjs",
+    "test:provision": "node --test tools/script-cat/tests/provision-core-smoke.mjs tools/script-cat/tests/provision-dom-smoke.mjs tools/script-cat/tests/provision-flow-smoke.mjs tools/script-cat/tests/provision-prompts-smoke.mjs",
     "test:regression": "node --test tools/script-cat/regression-tests/*.mjs",
     "verify": "npm run scriptcat:check && npm run scriptcat:guard && npm run test && npm run test:regression && npm run test:tool-limit"
   }

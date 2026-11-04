@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.0",
+  "protocolVersion": "1.2",
   "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
@@ -145,6 +145,35 @@
           "answer": "чужой ход"
         }
       ]
+    },
+    "CF_AGENT_PROVISION_RESULT": {
+      "role": "Coordinator|Reviewer",
+      "turn": "provision",
+      "required": [
+        "request_id",
+        "jobs"
+      ],
+      "optional": [
+        "reason"
+      ],
+      "idSource": "request_id копируется из provisioning-запроса админ-роли; jobs содержат только role_page_id из отправленных кандидатов",
+      "example": {
+        "request_id": "8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d",
+        "jobs": [],
+        "reason": "кандидатов нет"
+      },
+      "invalid": [
+        {
+          "request_id": "<request>",
+          "jobs": [],
+          "reason": "шаблон"
+        },
+        {
+          "request_id": "00000000-0000-0000-0000-000000000000",
+          "jobs": [],
+          "reason": "чужой запрос"
+        }
+      ]
     }
   },
   "markerMatrix": [
@@ -200,6 +229,14 @@
       "ids": [
         "dispatch_id",
         "run_id"
+      ]
+    },
+    {
+      "turn": "provisioning агентов",
+      "role": "Coordinator|Reviewer (Agent Admin=true)",
+      "marker": "CF_AGENT_PROVISION_RESULT",
+      "ids": [
+        "request_id"
       ]
     }
   ],
@@ -265,7 +302,7 @@
       },
       "artifacts": {
         "purpose": "свободные результаты агентов",
-        "name": "<dispatch_id>_<run_id>__<slug>.<ext>",
+        "name": "<dispatch_id>_<run_id>__<slug>.<ext> | manual__<project>__<slug>.<ext> | <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>(__supplement-N)?.<ext>",
         "manualName": "manual__<project>__<slug>.<ext>",
         "creator": "агент через Gateway или Drive-коннектор с проверкой ScriptCat"
       }
@@ -275,12 +312,22 @@
       "text/plain",
       "text/markdown",
       "application/json",
-      "text/csv"
+      "text/csv",
+      "image/png"
     ],
     "artifactMaxBytes": 262144,
-    "gatewayVersion": "1.7.1",
-    "artifactSizeSemantics": "лимит 262144 считается в UTF-8 байтах (Utilities.newBlob(content).getBytes().length), не в длине JS-строки",
-    "duplicatePolicy": "совпало имя и содержимое — duplicate; совпало имя, но содержимое другое — явный конфликт (не молчаливый старый отчёт)"
+    "gatewayVersion": "1.8.0",
+    "artifactSizeSemantics": "лимит 262144: для текста — UTF-8 байты (Utilities.newBlob(content).getBytes().length), для PNG — декодированные base64 байты",
+    "duplicatePolicy": "совпало имя и содержимое — duplicate; совпало имя, но содержимое другое — явный конфликт (не молчаливый старый отчёт)",
+    "artifactExtensions": [
+      "md",
+      "txt",
+      "json",
+      "csv",
+      "png"
+    ],
+    "artifactBinaryEncoding": "PNG передаётся как base64 (encoding=base64); размер считается по декодированным байтам",
+    "artifactSubdirPolicy": "подкаталог первого уровня artifacts/<МИССИЯ> только по явному subdir, равному миссии из имени D-031; legacy/manual — плоско; вложенные пути запрещены"
   },
   "rules": {
     "R-ROLES": {
@@ -524,5 +571,104 @@
       }
     },
     "watermark": "исходный watermark не сдвигается: финальный журнал собирает части до лимита и отчёт после; continuation-сообщение ScriptCat не становится частью отчёта агента"
+  },
+  "provisioning": {
+    "since": "1.10.0",
+    "enabledByDefault": false,
+    "adminRight": "только свежая строка Роли с Agent Admin=true и Статус=Активна; предпочтение Coordinator, иначе Reviewer",
+    "notionFields": {
+      "Agent Admin": {
+        "type": "checkbox",
+        "default": false,
+        "writtenByScript": false
+      },
+      "Agent State": {
+        "type": "select",
+        "options": [
+          "не требуется",
+          "запрошен",
+          "создаётся",
+          "создан",
+          "ошибка"
+        ],
+        "emptyMeans": "не требуется"
+      },
+      "Agent Job ID": {
+        "type": "rich_text"
+      },
+      "Agent Created At": {
+        "type": "date"
+      },
+      "Previous Agent URL": {
+        "type": "url"
+      }
+    },
+    "scriptWrites": [
+      "Agent URL",
+      "Previous Agent URL",
+      "Agent State",
+      "Agent Job ID",
+      "Agent Created At",
+      "Статус=Активна после проверки"
+    ],
+    "scriptNeverWrites": [
+      "Роль",
+      "Функция",
+      "Зона записи",
+      "Гейт",
+      "Репозиторий",
+      "Agent Admin"
+    ],
+    "markerCommandsForbidden": [
+      "archive",
+      "delete",
+      "activate",
+      "admin"
+    ],
+    "states": [
+      "validated",
+      "creating",
+      "repo_selected",
+      "bootstrap_sent",
+      "url_captured",
+      "renaming",
+      "renamed",
+      "notion_updated",
+      "activating",
+      "activated",
+      "archiving_old",
+      "done",
+      "paused",
+      "error"
+    ],
+    "events": [
+      "provision_request_sent",
+      "provision_approved",
+      "provision_rejected",
+      "provision_job_started",
+      "provision_repo_selected",
+      "provision_bootstrap_sent",
+      "provision_url_captured",
+      "provision_renamed",
+      "provision_notion_updated",
+      "provision_activated",
+      "provision_activation_blocked",
+      "provision_old_archived",
+      "provision_old_archive_unverified",
+      "provision_job_done",
+      "provision_paused",
+      "provision_conflict",
+      "provision_noop"
+    ],
+    "profile": "admin.provision",
+    "overheadMax": 1800
+  },
+  "d031": {
+    "since": "Gateway 1.8.0",
+    "decision": "D-033 закрывает долг D-031 ≠ Gateway 1.7.1 в том же PR #44 по команде Мастера",
+    "nameScheme": "<МИССИЯ>__<КАРТОЧКА>__<вид>__<дата или SHA>.<ext>, вид: report|evidence|audit|logs|shot, опционально __supplement-N",
+    "png": "image/png, base64, байтовый лимит 262144",
+    "subdirs": "один уровень artifacts/<МИССИЯ> по явному запросу; создание подкаталога — решение Warden/Мастера, не импровизация агента",
+    "compat": "старые UUID/manual имена и текстовые MIME сохранены; ключ и папки проекта не меняются; ретро-переименование запрещено"
   }
 }

@@ -246,6 +246,23 @@
             <button id="cfn-project-route-add" type="button" style="${action};margin-top:7px">Добавить маршрут роли</button>
             <button id="cfn-project-roles-autofill" type="button" style="${action};margin-top:7px;margin-left:7px">Автозаполнить маршруты ролей</button>
           </div>
+          <div id="cfn-project-provision" style="border:1px solid #343b48;border-radius:8px;padding:10px;margin-top:10px">
+            <h4 style="margin:0 0 6px">Provisioning Arena-агентов</h4>
+            <div style="color:#aab4c3;font-size:12px">Выключено по умолчанию. Создание/замена агентов выполняется только после одобрения активной админ-роли (Agent Admin=true). Пустой allowlist или пустой bootstrap-пробник блокируют создание. Проектные имена не зашиваются.</div>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="cfn-project-prov-enabled" type="checkbox"> Включить provisioning</label>
+            <label>Режим<select id="cfn-project-prov-mode" style="${field}"><option value="manual">manual — кнопка «🤖 Агенты»</option><option value="auto">auto — холостой цикл</option></select></label>
+            <label>Allowlist репозиториев (по одному owner/repo на строку)<textarea id="cfn-project-prov-allowlist" style="${field};min-height:54px" placeholder="owner/repository"></textarea></label>
+            <label>Bootstrap-пробник (без внутренних токенов и ссылок)<textarea id="cfn-project-prov-bootstrap" style="${field};min-height:54px" placeholder="Что изображено на картинке test.jpg в репозитории https://github.com/OWNER/test?"></textarea></label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <label>Max jobs за запрос<input id="cfn-project-prov-maxjobs" type="number" min="1" max="20" style="${field}"></label>
+              <label>Суточный максимум<input id="cfn-project-prov-dailymax" type="number" min="1" max="100" style="${field}"></label>
+              <label>Ожидание bootstrap, мс<input id="cfn-project-prov-bootstrapwait" type="number" min="1000" style="${field}"></label>
+              <label>Ожидание URL, мс<input id="cfn-project-prov-urlwait" type="number" min="1000" style="${field}"></label>
+              <label>Попытки rename<input id="cfn-project-prov-renameattempts" type="number" min="1" max="10" style="${field}"></label>
+            </div>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input id="cfn-project-prov-autoactivate" type="checkbox"> Автоактивация после проверки</label>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:4px"><input id="cfn-project-prov-archiveold" type="checkbox"> Архивировать старого агента при replace</label>
+          </div>
           <button id="cfn-project-save" style="${action};margin-top:12px;background:#285638">Создать профиль</button>
         </div>
         <div id="cfn-project-note" role="status" style="white-space:pre-wrap;color:#bfe6c4;margin-top:12px"></div>
@@ -333,6 +350,18 @@
       ensureMain();
       routes = (Array.isArray(p.roleRepos) ? p.roleRepos : []).map((rt) => ({ roleId: String(rt.roleId || "").trim(), repo: String(rt.repo || "").trim() })).filter((rt) => rt.roleId || rt.repo);
       renderRepos(); renderRoutes();
+      const prov = normalizeProvisionConfig(p);
+      find("prov-enabled").checked = prov.agentProvisionEnabled;
+      find("prov-mode").value = prov.agentProvisionMode;
+      find("prov-allowlist").value = prov.agentProvisionRepoAllowlist.join("\n");
+      find("prov-bootstrap").value = prov.agentBootstrapPrompt;
+      find("prov-maxjobs").value = prov.agentProvisionMaxJobs;
+      find("prov-dailymax").value = prov.agentProvisionDailyMax;
+      find("prov-bootstrapwait").value = prov.agentBootstrapWaitMs;
+      find("prov-urlwait").value = prov.agentUrlWaitMs;
+      find("prov-renameattempts").value = prov.agentRenameAttempts;
+      find("prov-autoactivate").checked = prov.agentProvisionAutoActivate;
+      find("prov-archiveold").checked = prov.agentProvisionArchiveOld;
     };
 
     const saveProfileUi = () => {
@@ -345,6 +374,22 @@
       const mains = p.repos.filter((r) => r.main).length;
       if (mains !== 1) { say("Укажите ровно один главный репозиторий.", true); return; }
       p.roleRepos = routes.filter((rt) => rt.roleId && rt.repo);
+      Object.assign(p, normalizeProvisionConfig({
+        agentProvisionEnabled: find("prov-enabled").checked,
+        agentProvisionMode: find("prov-mode").value,
+        agentProvisionRepoAllowlist: find("prov-allowlist").value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+        agentBootstrapPrompt: find("prov-bootstrap").value,
+        agentProvisionMaxJobs: find("prov-maxjobs").value,
+        agentProvisionDailyMax: find("prov-dailymax").value,
+        agentBootstrapWaitMs: find("prov-bootstrapwait").value,
+        agentUrlWaitMs: find("prov-urlwait").value,
+        agentRenameAttempts: find("prov-renameattempts").value,
+        agentProvisionAutoActivate: find("prov-autoactivate").checked,
+        agentProvisionArchiveOld: find("prov-archiveold").checked,
+      }));
+      if (p.agentProvisionEnabled && !provisionBootstrapClean(p.agentBootstrapPrompt)) {
+        say("Provisioning включён, но bootstrap-пробник пуст или содержит запрещённые внутренние токены/ссылки.", true); return;
+      }
       if (!validProfile(p)) {
         const routeProblem = p.roleRepos.some((route) =>
           !PROJECT_UUID.test(String(route.roleId || "")) ||
@@ -417,6 +462,7 @@
       roleRepos: (Array.isArray(profile.roleRepos) ? profile.roleRepos : []).map((route) => ({
         roleId: String(route.roleId || ""), repo: String(route.repo || ""),
       })),
+      ...normalizeProvisionConfig(profile),
     });
     find("export-config").onclick = () => {
       const profile = chosen();

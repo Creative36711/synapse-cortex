@@ -12,13 +12,18 @@ class Folder {
   getFoldersByName(name) { return new Iter(this.folders.filter((f) => f.name === name)); }
   getFilesByName(name) { return new Iter(this.files.filter((f) => f.name === name)); }
   createFolder(name) { const f = new Folder(name, this); this.folders.push(f); return f; }
-  createFile(name, text, mime) { const f = new File(name, text, mime, this); this.files.push(f); return f; }
+  createFile(nameOrBlob, text, mime) {
+    const f = typeof nameOrBlob === 'object' && nameOrBlob && typeof nameOrBlob.getBytes === 'function'
+      ? new File(nameOrBlob.getName(), nameOrBlob.getDataAsString(), nameOrBlob.getContentType(), this, nameOrBlob.getBytes())
+      : new File(nameOrBlob, text, mime, this);
+    this.files.push(f); return f;
+  }
   moveTo(dest) { this.parent.folders = this.parent.folders.filter((f) => f !== this); this.parent = dest; dest.folders.push(this); }
 }
 class File {
-  constructor(name, text, mime, parent) { this.id = `file_${String(++serial).padStart(10, '0')}`; this.name = name; this.text = text; this.mime = mime; this.parent = parent; }
+  constructor(name, text, mime, parent, bytes) { this.id = `file_${String(++serial).padStart(10, '0')}`; this.name = name; this.text = text; this.mime = mime; this.parent = parent; this.bytes = bytes || new Uint8Array(Buffer.from(String(text ?? ''), 'utf8')); }
   getId() { return this.id; } getName() { return this.name; } getMimeType() { return this.mime; }
-  getParents() { return new Iter([this.parent]); } getBlob() { return { getDataAsString: () => this.text }; } setContent(s) { this.text = s; }
+  getParents() { return new Iter([this.parent]); } getBlob() { return { getDataAsString: () => this.text, getBytes: () => this.bytes }; } setContent(s) { this.text = s; this.bytes = new Uint8Array(Buffer.from(String(s), 'utf8')); }
 }
 const root = new Folder('root');
 function find(id, node = root) { if (node.id === id) return node; for (const child of [...node.folders, ...node.files]) { if (child.id === id) return child; if (child instanceof Folder) { const result = find(id, child); if (result) return result; } } return null; }
@@ -28,7 +33,15 @@ const PropertiesService = { getScriptProperties: () => ({ getProperty: (k) => pr
 const ContentService = { MimeType: { JSON: 'json' }, createTextOutput: (v) => ({ setMimeType() { return this; }, getContent: () => v }) };
 const LockService = { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) };
 const factory = new Function('DriveApp', 'PropertiesService', 'ContentService', 'MimeType', 'LockService', 'Utilities', `${source}\nreturn { doPost, setupGatewayKey, setupProjectGateway };`);
-const api = factory(drive, PropertiesService, ContentService, { PLAIN_TEXT: 'text/plain' }, LockService, { getUuid: randomUUID, newBlob: (s) => ({ getBytes: () => new Uint8Array(Buffer.from(String(s), 'utf8')) }) });
+const api = factory(drive, PropertiesService, ContentService, { PLAIN_TEXT: 'text/plain' }, LockService, {
+  getUuid: randomUUID,
+  newBlob: (data, mime, name) => {
+    const bytes = typeof data === 'string' ? new Uint8Array(Buffer.from(data, 'utf8')) : new Uint8Array(data);
+    return { getBytes: () => bytes, getDataAsString: () => (typeof data === 'string' ? data : Buffer.from(bytes).toString('utf8')), getName: () => name, getContentType: () => mime };
+  },
+  base64Decode: (s) => Array.from(Buffer.from(String(s), 'base64')),
+  base64Encode: (bytes) => Buffer.from(bytes).toString('base64'),
+});
 const quiet = console.log; console.log = () => {};
 const legacyKey = api.setupGatewayKey();
 const A = '11111111-1111-4111-8111-111111111111', B = '22222222-2222-4222-8222-222222222222';
@@ -38,7 +51,7 @@ console.log = quiet;
 assert.notEqual(a.key, b.key); assert.notEqual(a.key, legacyKey); assert.notEqual(b.key, legacyKey);
 const call = (key, body) => JSON.parse(api.doPost({ postData: { contents: JSON.stringify({ ...body, key }) } }).getContent());
 const legacy = call(legacyKey, { action: 'ping' });
-assert.equal(legacy.version, '1.7.1'); assert(!legacy.projectScoped); assert.equal(legacy.artifacts.name, 'artifacts');
+assert.equal(legacy.version, '1.8.0'); assert(!legacy.projectScoped); assert.equal(legacy.artifacts.name, 'artifacts');
 for (const [profile, id] of [[a, A], [b, B]]) {
   const ping = call(profile.key, { action: 'ping', projectId: id });
   assert.equal(ping.ok, true); assert.equal(ping.projectScoped, true); assert.equal(ping.projectId, id);
@@ -107,4 +120,11 @@ assert.equal(artA.ok, true); assert.equal(find(artA.fileId).parent.name, 'artifa
 assert.equal(call(a.key, { action: 'read', projectId: A, fileId: artA.fileId }).content, '{"a":1}');
 assert.equal(call(b.key, { action: 'read', projectId: B, fileId: artA.fileId }).ok, false, 'чужой артефакт не читается');
 assert.equal(call(b.key, { action: 'saveArtifact', projectId: B, name: artName, content: '{}' }).fileId !== artA.fileId, true, 'имя не пересекает проекты');
-console.log('OK: Gateway 1.7.1 — два проекта, разные ключи, artifacts и миграция без смены ключа, границы чтения/записи, отказ при переносе и legacy');
+// D-031: подкаталог миссии не пересекает проекты и читается только своим ключом.
+const d031 = 'SYN-P1__P-A__shot__2026-11-04.png';
+const pngB64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+const shotA = call(a.key, { action: 'saveArtifact', projectId: A, name: d031, content: pngB64, encoding: 'base64', subdir: 'SYN-P1' });
+assert.equal(shotA.ok, true); assert.equal(find(shotA.fileId).parent.name, 'SYN-P1');
+assert.equal(call(b.key, { action: 'verifyArtifactPlacement', projectId: B, fileId: shotA.fileId }).ok, false, 'чужой PNG не подтверждается');
+assert.equal(call(a.key, { action: 'verifyArtifactPlacement', projectId: A, fileId: shotA.fileId }).ok, true);
+console.log('OK: Gateway 1.8.0 — два проекта, разные ключи, artifacts (D-031/PNG/подкаталог) и миграция без смены ключа, границы чтения/записи, отказ при переносе и legacy');

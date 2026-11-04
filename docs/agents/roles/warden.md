@@ -20,3 +20,11 @@ R-MARKER, R-D028, R-VERIFY-GITHUB, R-SECRETS.
 ## Историческая карточка
 Если карточка выдана прежней версией — `CF_AGENT_RESULT` (+`CF_REVIEW_RESULT`,
 если требует оракул) с dispatch_id/run_id той выдачи.
+
+## Provisioning Arena-агентов (1.10.0)
+Reviewer может быть админ-ролью provisioning только при `Agent Admin=true` и
+`Статус=Активна` в свежей строке Notion. Если активный Coordinator с флагом есть,
+запрос предпочтительно уходит ему. Правила те же: одобрять только неадмин
+create/replace из списка, не менять права и не удалять строки, ответ — один
+`CF_AGENT_PROVISION_RESULT` с выданным `request_id`. Приёмка миссий и вопросы от
+provisioning не зависят; рабочий цикл на время provisioning остановлен.

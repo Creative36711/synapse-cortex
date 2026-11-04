@@ -501,6 +501,7 @@
         <button id="${ui.step}" title="Один шаг цикла" style="${btnStyle()}">Шаг</button>
         <button id="${ui.toggle}" style="${btnStyle()}">▶ Включить</button>
         <button id="${ui.questions}" aria-label="Открыть обратную связь в Notion" title="Обратная связь — вопросы и предложения в Notion" style="${btnStyle()}">💬 Обратная связь<span id="${ui.qBadge}" style="display:none;margin-left:3px;padding:0 4px;border-radius:7px;background:#b23b3b;color:#fff;font-size:10px;line-height:14px;vertical-align:middle">0</span></button>
+        <button id="${ui.agents}" title="Provisioning Arena-агентов: создание и замена ролей" style="${btnStyle()}">🤖 Агенты</button>
         <button id="${ui.debug}" title="Отладка в консоли браузера (F12)" style="${btnStyle()}">🐞</button>
         <button id="${ui.reset}" title="Снять ход: очередь, ожидание и карточки в Running без хода (журнал и настройки останутся)" style="${btnStyle()}">↺</button>
         <button id="${ui.clear}" title="Очистить журнал; очередь снимается кнопкой ↺" style="${btnStyle()}">🧹</button>
@@ -535,6 +536,10 @@
       paintDebugButton();
     };
     document.getElementById(ui.questions).onclick = () => window.open(C.questionsUrl, "_blank", "noopener");
+    const agentsButton = document.getElementById(ui.agents);
+    if (agentsButton) agentsButton.onclick = () => {
+      if (typeof provisionOpenDialog === "function") provisionOpenDialog();
+    };
     document.getElementById(ui.stop).onclick = () => {
       GM_setValue(K.paused, "");
       GM_setValue(K.pause, null);

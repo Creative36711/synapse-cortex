@@ -217,6 +217,10 @@
     }
     // Окно могли открыть во время асинхронной самопроверки выше.
     if (typeof document !== "undefined" && document.getElementById?.("cfn-connections")) return;
+    // Provisioning Arena-агентов — отдельный административный контур. Он читает
+    // свой request/job/lock до auto/pending-логики и не трогает K.pending/K.expect.
+    // Пока запрос или job активен, обычный командный цикл не начинается.
+    if (typeof consumeProvision === "function" && await consumeProvision()) return;
     // Незавершённая отправка живёт в очереди и не зависит от автоцикла:
     // иначе после перехода на страницу адресата задание никто не досылал.
     const auto = autoOn();

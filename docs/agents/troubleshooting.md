@@ -50,3 +50,14 @@
 - **Чего НЕ делать.** Не отправлять исходное задание заново, не слать compact-retry
   как при недоставленном, не напоминать о маркере как при забытом, не считать это
   `budget_exceeded` только по слову «limit».
+
+## Provisioning Arena-агентов (1.10.0)
+- `provision-no-admin`: нет активной роли с `Agent Admin=true` (Coordinator/Reviewer). Мастер создаёт/включает админ-роль вручную.
+- `provision_repo_trigger_ambiguous` / `provision_repo_option_missing`: repo picker неоднозначен или repo не найден. Проверьте allowlist и поле «Репозиторий»; скрипт не кликает «Add repositories».
+- URL не появился за `agentUrlWaitMs`: пауза. Новая сессия повторно не создаётся, если URL уже захвачен.
+- `tool-call limit` на bootstrap: пауза (continuation для provisioning в v1 нет).
+- Rename failed: URL сохранён, новой сессии нет; проверьте sidebar и имя роли (≤100).
+- `provision-conflict`: Agent URL/Статус изменены другим процессом; скрипт не перезаписывает.
+- Автоактивация заблокирована: URL записан, `Agent State=создан`, Статус остаётся прежним. Причины: второй Coordinator, нет активного Reviewer, имя sidebar не совпадает, repo изменился, активная работа, не удалось добавить «Кому».
+- `provision_old_archive_unverified`: замена успешна, архив старого не подтверждён — проверьте старый чат вручную; отката нет.
+- Суточный лимит (`agentProvisionDailyMax`) или активный командный ход: запрос не выдаётся.
