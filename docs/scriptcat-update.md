@@ -42,15 +42,21 @@
 - **1.9.0** — конструктор промптов (profiles/blocks/compiler), контракты
   `agent-protocol.json`/`prompt-coverage.json`, пилотный транспорт и coverage-оракул.
 - **1.9.1** — tool-call limit continuation (`30-tool-limit.js`, `continuation.*`),
-  Gateway **1.7.1** (UTF-8 байты и конфликт дубликата). Gateway в 1.10.0 не менялся.
+  Gateway **1.7.1** (UTF-8 байты и конфликт дубликата).
 - **1.10.0 (D-032)** — provisioning Arena-агентов: `31-provision-core.js`,
   `32-provision-dom.js`, `33-provision-flow.js`, `34-provision-ui.js`, кнопка
   «🤖 Агенты», маркер `CF_AGENT_PROVISION_RESULT`, профиль `admin.provision`
   (overhead ≤1800), аддитивные поля Notion «Роли». Контур выключен по умолчанию;
   право одобрения — только `Agent Admin=true` свежей строки. DOM без `radix-*` id
-  и `nth-child`. Gateway остаётся **1.7.1**; публичный `synapse` не меняется.
+  и `nth-child`. Публичный `synapse` не меняется; Gateway поднят до **1.8.0**
+  отдельным решением D-033 в том же PR (см. ниже).
   Bootstrap-пробник по умолчанию пуст (проектные имена не зашиваются); точный текст
   задаёт Мастер в профиле. Живая приёмка — только в окне D-027 после подтверждения.
+- **Gateway 1.8.0 (D-033, в том же PR)** — закрыт долг D-031 ≠ Gateway 1.7.1:
+  `saveArtifact` принимает имена D-031 (`<МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>`),
+  PNG/base64 (лимит 262144 по декодированным байтам) и подкаталог `artifacts/<МИССИЯ>`
+  по явному `subdir` (один уровень). Legacy UUID/manual имена и текстовые MIME
+  сохранены; ключ и папки проекта не меняются. Контракт protocolVersion **1.2**.
 
 ## 3. Проверки транспорта (локальные, без сети)
 

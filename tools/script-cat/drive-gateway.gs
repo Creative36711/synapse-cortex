@@ -1,4 +1,4 @@
-/** Relay ScriptCat Drive gateway 1.7.1. Deploy as a web app executing as the owner. */
+/** Relay ScriptCat Drive gateway 1.8.0. Deploy as a web app executing as the owner. */
 const CF_KEY_PROPERTY = "CF_GATEWAY_KEY";
 const CF_PROJECTS_PROPERTY = "CF_GATEWAY_PROJECTS_V1";
 const CF_SETUP_PROJECT_ID = "CF_SETUP_PROJECT_ID";
@@ -8,7 +8,9 @@ const CF_LOGS_FOLDER_NAME = "logs";
 const CF_PAYLOADS_FOLDER_NAME = "payloads";
 const CF_ARTIFACTS_FOLDER_NAME = "artifacts";
 const CF_ARTIFACT_MAX_BYTES = 262144;
-const CF_ARTIFACT_MIME = { md: "text/markdown", txt: "text/plain", json: "application/json", csv: "text/csv" };
+const CF_ARTIFACT_MIME = { md: "text/markdown", txt: "text/plain", json: "application/json", csv: "text/csv", png: "image/png" };
+const CF_ARTIFACT_BINARY_EXT = { png: true };
+const CF_ARTIFACT_EXT = "(md|txt|json|csv|png)";
 // Optional explicit compatibility settings; never assume a previous project's folder.
 const CF_LEGACY_LOG_FOLDER_NAME_PROPERTY = "CF_LEGACY_LOG_FOLDER_NAME";
 const CF_LEGACY_RUN_LOG_FOLDER_ID_PROPERTY = "CF_LEGACY_RUN_LOG_FOLDER_ID";
@@ -123,7 +125,7 @@ function doGet() {
   return json_({
     ok: true,
     service: "Relay Drive gateway",
-    version: "1.7.1",
+    version: "1.8.0",
   });
 }
 
@@ -146,7 +148,7 @@ function doPost(e) {
         return json_({
           ok: true,
           service: "Relay Drive gateway",
-          version: "1.7.1",
+          version: "1.8.0",
           ...(project ? { projectScoped: true, projectId: project.id, project: folderInfo_(layout.project) } : {}),
           arena: folderInfo_(layout.arena),
           logs: folderInfo_(layout.logs),
@@ -202,30 +204,44 @@ function doPost(e) {
 
     if (request.action === "saveArtifact") {
       const name = safeArtifactName_(request.name);
-      const content = String(request.content || "");
-      // Размер — в UTF-8 байтах, а не в длине JS-строки: кириллица занимает 2
-      // байта на символ, и content.length пропустил бы файл за лимит.
-      const byteLength = Utilities.newBlob(content).getBytes().length;
-      if (byteLength > CF_ARTIFACT_MAX_BYTES) throw new Error("Артефакт превышает допустимый размер (UTF-8 байты).");
       const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
       const mime = CF_ARTIFACT_MIME[ext];
-      if (!mime) throw new Error("Артефакт только md/txt/json/csv.");
+      if (!mime) throw new Error("Артефакт только md/txt/json/csv/png.");
+      const binary = Boolean(CF_ARTIFACT_BINARY_EXT[ext]);
+      const encoding = String(request.encoding || (binary ? "base64" : "utf8")).toLowerCase();
+      const content = String(request.content || "");
+      let bytes;
+      if (binary) {
+        if (encoding !== "base64") throw new Error("PNG артефакт передаётся в base64 (encoding=base64).");
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(content) || content.length % 4 !== 0)
+          throw new Error("Некорректный base64 артефакта.");
+        bytes = Utilities.base64Decode(content);
+      } else {
+        if (encoding !== "utf8") throw new Error("Текстовый артефакт передаётся в utf8.");
+        // Размер — в UTF-8 байтах, а не в длине JS-строки: кириллица занимает 2
+        // байта на символ, и content.length пропустил бы файл за лимит.
+        bytes = Utilities.newBlob(content).getBytes();
+      }
+      if (bytes.length > CF_ARTIFACT_MAX_BYTES)
+        throw new Error(binary ? "Артефакт превышает допустимый размер (байты)." : "Артефакт превышает допустимый размер (UTF-8 байты).");
+      const subdir = safeArtifactSubdir_(request.subdir, name);
       return withScriptLock_(function () {
         const artifacts = layoutForRequest().artifacts;
-        const matches = artifacts.getFilesByName(name);
+        const target = subdir ? artifactSubfolder_(artifacts, subdir) : artifacts;
+        const matches = target.getFilesByName(name);
         if (matches.hasNext()) {
           const existing = matches.next();
           verifyArtifactPlacement_(existing, artifacts);
-          // Совпало имя — сверяем содержимое. Иначе молча вернули бы старый
-          // отчёт вместо нового; разное содержимое — явный конфликт.
-          const existingContent = existing.getBlob().getDataAsString("UTF-8");
-          if (existingContent !== content)
+          // Совпало имя — сверяем содержимое побайтово. Иначе молча вернули бы
+          // старый отчёт вместо нового; разное содержимое — явный конфликт.
+          const existingBytes = existing.getBlob().getBytes();
+          if (Utilities.base64Encode(existingBytes) !== Utilities.base64Encode(bytes))
             throw new Error("Артефакт с таким именем уже есть, но содержимое другое: конфликт. Возьмите новое имя.");
-          return json_({ ok: true, fileId: existing.getId(), name: name, duplicate: true });
+          return json_({ ok: true, fileId: existing.getId(), name: name, duplicate: true, ...(subdir ? { subdir: subdir } : {}) });
         }
-        const file = artifacts.createFile(name, content, mime);
+        const file = target.createFile(Utilities.newBlob(bytes, mime, name));
         verifyArtifactPlacement_(file, artifacts);
-        return json_({ ok: true, fileId: file.getId(), name: name, duplicate: false });
+        return json_({ ok: true, fileId: file.getId(), name: name, duplicate: false, ...(subdir ? { subdir: subdir } : {}) });
       });
     }
 
@@ -249,7 +265,7 @@ function doPost(e) {
       if (project) {
         const layout = layoutForRequest();
         if (!isDirectChildOf_(file, layout.logs.getId()) && !isDirectChildOf_(file, layout.payloads.getId()) &&
-            !isDirectChildOf_(file, layout.artifacts.getId()))
+            !isInArtifacts_(file, layout.artifacts))
           throw new Error("Чтение разрешено только из logs, payloads или artifacts этого проекта.");
       }
       const mime = String(file.getMimeType() || "");
@@ -340,26 +356,74 @@ function safePayloadName_(value) {
 }
 
 /**
- * Имя артефакта: <dispatch_id>_<run_id>__<slug>.<ext> либо
- * manual__<project>__<slug>.<ext>. Только md/txt/json/csv, без путей.
+ * Имя артефакта (D-031 + совместимость):
+ *   <dispatch_id>_<run_id>__<slug>.<ext>
+ *   manual__<project>__<slug>.<ext>
+ *   <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>(__supplement-N)?.<ext>
+ * Только md/txt/json/csv/png, без путей.
  */
 function safeArtifactName_(value) {
   const name = String(value || "").trim();
-  const ok = /^(?:[0-9a-fA-F-]{36}_[0-9a-fA-F-]{36}|manual__[a-z0-9][a-z0-9._-]{0,50})__[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(md|txt|json|csv)$/.test(name);
-  if (!ok) throw new Error("Имя артефакта: <dispatch>_<run>__<slug>.<md|txt|json|csv> или manual__<project>__<slug>.<ext>.");
+  const legacy = new RegExp("^[0-9a-fA-F-]{36}_[0-9a-fA-F-]{36}__[A-Za-z0-9][A-Za-z0-9._-]{0,120}\\." + CF_ARTIFACT_EXT + "$");
+  const manual = new RegExp("^manual__[a-z0-9][a-z0-9._-]{0,50}__[A-Za-z0-9][A-Za-z0-9._-]{0,120}\\." + CF_ARTIFACT_EXT + "$");
+  const d031 = new RegExp(
+    "^[A-Za-z][A-Za-z0-9]{0,15}-[A-Za-z0-9][A-Za-z0-9-]{0,15}" +
+    "__[A-Za-z][A-Za-z0-9]{0,7}-[A-Za-z0-9][A-Za-z0-9-]{0,15}" +
+    "__(report|evidence|audit|logs|shot)" +
+    "__(?:\\d{4}-\\d{2}-\\d{2}|[0-9a-fA-F]{7,40})" +
+    "(?:__supplement-[1-9][0-9]{0,2})?\\." + CF_ARTIFACT_EXT + "$");
+  if (!legacy.test(name) && !manual.test(name) && !d031.test(name))
+    throw new Error("Имя артефакта: <dispatch>_<run>__<slug>, manual__<project>__<slug> или <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>; расширения md/txt/json/csv/png.");
   return name;
+}
+
+/** Миссия из имени D-031; для legacy/manual — пустая строка. */
+function artifactMission_(name) {
+  const parts = String(name || "").split("__");
+  return parts.length >= 4 && /^[A-Za-z][A-Za-z0-9]{0,15}-[A-Za-z0-9][A-Za-z0-9-]{0,15}$/.test(parts[0]) ? parts[0] : "";
+}
+
+/** Подкаталог artifacts: только явный запрос, только схема D-031, имя == миссия. */
+function safeArtifactSubdir_(value, name) {
+  const subdir = String(value === undefined || value === null ? "" : value).trim();
+  if (!subdir) return "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,50}$/.test(subdir) || subdir.includes("..") ||
+      ["logs", "payloads", "artifacts"].includes(subdir.toLowerCase()))
+    throw new Error("Подкаталог artifacts должен быть безопасным именем первого уровня.");
+  const mission = artifactMission_(name);
+  if (!mission || subdir.toLowerCase() !== mission.toLowerCase())
+    throw new Error("Подкаталог artifacts разрешён только для схемы D-031 и должен совпадать с миссией.");
+  return subdir;
+}
+
+function artifactSubfolder_(artifacts, subdir) {
+  const matches = artifacts.getFoldersByName(subdir);
+  const found = [];
+  while (matches.hasNext()) found.push(matches.next());
+  if (found.length > 1) throw new Error("В artifacts несколько подкаталогов " + subdir + ": сначала разберите их вручную.");
+  return found.length === 1 ? found[0] : artifacts.createFolder(subdir);
+}
+
+function isInArtifacts_(file, artifacts) {
+  if (isDirectChildOf_(file, artifacts.getId())) return true;
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (isDirectChildOf_(parents.next(), artifacts.getId())) return true;
+  }
+  return false;
 }
 
 function isReadableMime_(mime) {
   return mime.startsWith("text/") || mime === "application/json";
 }
 
-/** Артефакт обязан лежать прямым ребёнком artifacts; файл в корне/другой папке отклоняется. */
+/** Артефакт лежит в artifacts или его подкаталоге первого уровня; корень/чужая папка отклоняются. */
 function verifyArtifactPlacement_(file, artifacts) {
-  if (!isDirectChildOf_(file, artifacts.getId()))
-    throw new Error("Артефакт должен лежать прямо в папке artifacts этого проекта.");
-  if (!isReadableMime_(String(file.getMimeType() || "")))
-    throw new Error("Артефакт только текстовый (md/txt/json/csv).");
+  if (!isInArtifacts_(file, artifacts))
+    throw new Error("Артефакт должен лежать в папке artifacts этого проекта или её подкаталоге первого уровня.");
+  const mime = String(file.getMimeType() || "");
+  if (!isReadableMime_(mime) && mime !== "image/png")
+    throw new Error("Артефакт только md/txt/json/csv/png.");
 }
 
 function isDirectChildOf_(file, folderId) {

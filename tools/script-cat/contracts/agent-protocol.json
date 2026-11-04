@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.1",
+  "protocolVersion": "1.2",
   "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
@@ -302,7 +302,7 @@
       },
       "artifacts": {
         "purpose": "свободные результаты агентов",
-        "name": "<dispatch_id>_<run_id>__<slug>.<ext>",
+        "name": "<dispatch_id>_<run_id>__<slug>.<ext> | manual__<project>__<slug>.<ext> | <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>(__supplement-N)?.<ext>",
         "manualName": "manual__<project>__<slug>.<ext>",
         "creator": "агент через Gateway или Drive-коннектор с проверкой ScriptCat"
       }
@@ -312,12 +312,22 @@
       "text/plain",
       "text/markdown",
       "application/json",
-      "text/csv"
+      "text/csv",
+      "image/png"
     ],
     "artifactMaxBytes": 262144,
-    "gatewayVersion": "1.7.1",
-    "artifactSizeSemantics": "лимит 262144 считается в UTF-8 байтах (Utilities.newBlob(content).getBytes().length), не в длине JS-строки",
-    "duplicatePolicy": "совпало имя и содержимое — duplicate; совпало имя, но содержимое другое — явный конфликт (не молчаливый старый отчёт)"
+    "gatewayVersion": "1.8.0",
+    "artifactSizeSemantics": "лимит 262144: для текста — UTF-8 байты (Utilities.newBlob(content).getBytes().length), для PNG — декодированные base64 байты",
+    "duplicatePolicy": "совпало имя и содержимое — duplicate; совпало имя, но содержимое другое — явный конфликт (не молчаливый старый отчёт)",
+    "artifactExtensions": [
+      "md",
+      "txt",
+      "json",
+      "csv",
+      "png"
+    ],
+    "artifactBinaryEncoding": "PNG передаётся как base64 (encoding=base64); размер считается по декодированным байтам",
+    "artifactSubdirPolicy": "подкаталог первого уровня artifacts/<МИССИЯ> только по явному subdir, равному миссии из имени D-031; legacy/manual — плоско; вложенные пути запрещены"
   },
   "rules": {
     "R-ROLES": {
@@ -652,5 +662,13 @@
     ],
     "profile": "admin.provision",
     "overheadMax": 1800
+  },
+  "d031": {
+    "since": "Gateway 1.8.0",
+    "decision": "D-033 закрывает долг D-031 ≠ Gateway 1.7.1 в том же PR #44 по команде Мастера",
+    "nameScheme": "<МИССИЯ>__<КАРТОЧКА>__<вид>__<дата или SHA>.<ext>, вид: report|evidence|audit|logs|shot, опционально __supplement-N",
+    "png": "image/png, base64, байтовый лимит 262144",
+    "subdirs": "один уровень artifacts/<МИССИЯ> по явному запросу; создание подкаталога — решение Warden/Мастера, не импровизация агента",
+    "compat": "старые UUID/manual имена и текстовые MIME сохранены; ключ и папки проекта не меняются; ретро-переименование запрещено"
   }
 }

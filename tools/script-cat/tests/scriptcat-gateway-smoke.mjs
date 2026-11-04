@@ -1,4 +1,4 @@
-// Current Relay userscript ↔ Drive Gateway 1.5 contract.
+// Current Relay userscript ↔ Drive Gateway 1.8.0 contract.
 // This is a local boundary probe with fake network responses; the Apps Script
 // implementation itself is exercised by drive-gateway-arena-smoke.mjs.
 
@@ -14,12 +14,16 @@ const version = source.match(/^\/\/ @version\s+(\d+\.\d+\.\d+)\s*$/m)?.[1];
 assert.ok(version, 'active userscript has a semantic version');
 
 const gatewaySource = await readFile(new URL('../drive-gateway.gs', import.meta.url), 'utf8');
-assert.match(gatewaySource, /Relay ScriptCat Drive gateway 1\.7\.1/);
-assert.match(gatewaySource, /version: "1\.7\.1"/);
+assert.match(gatewaySource, /Relay ScriptCat Drive gateway 1\.8\.0/);
+assert.match(gatewaySource, /version: "1\.8\.0"/);
 assert.match(gatewaySource, /CF_ARTIFACTS_FOLDER_NAME = "artifacts"/);
 assert.match(gatewaySource, /saveArtifact/);
 assert.match(gatewaySource, /verifyArtifactPlacement_/);
-assert.match(gatewaySource, /Utilities\.newBlob\(content\)\.getBytes\(\)\.length/, 'размер артефакта считается в UTF-8 байтах');
+assert.match(gatewaySource, /Utilities\.newBlob\(content\)\.getBytes\(\)/, 'размер текста считается в UTF-8 байтах');
+assert.match(gatewaySource, /bytes\.length > CF_ARTIFACT_MAX_BYTES/, 'байтовый лимит применяется к декодированному содержимому');
+assert.match(gatewaySource, /image\/png/, 'PNG входит в MIME-whitelist');
+assert.match(gatewaySource, /Utilities\.base64Decode\(content\)/, 'PNG принимается в base64');
+assert.match(gatewaySource, /safeArtifactSubdir_/, 'подкаталог artifacts проверяется явно');
 assert.match(gatewaySource, /содержимое другое: конфликт/, 'duplicate с другим содержимым — конфликт');
 assert.match(gatewaySource, /Same Dispatch\/Run pair|dispatchId.*runId/s, 'Gateway uses the dispatch/run identity');
 assert.match(gatewaySource, /CF_ARENA_FOLDER_NAME = "Arena"/);
