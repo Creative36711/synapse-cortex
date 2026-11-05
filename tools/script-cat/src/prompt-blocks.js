@@ -31,11 +31,17 @@
     def("repo.boundary", { ruleIds: ["R-REPO-BOUNDARY"], render: () =>
       "D-022: пиши только в целевой repo. synapse (MIT) — роли ядра; cortex закрыт и ролям ядра не виден; ссылка на cortex в synapse — дефект." });
 
-    def("authority.core", { ruleIds: ["R-ZONES", "R-SECRETS"], render: (c) =>
-      `Зона (${c.role?.zone || "своя"}) — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай.` });
+    // D-038: зона роли — это факт (как task.scope), а не шаблон. Вынесена в
+    // verbatim-блок role.zone и не входит в overhead; authority.core несёт только
+    // правило о зонах. Боевая длинная зона Executor Core (~158 зн.) пробивала
+    // executor.card (2859 > 2800); вынос факта даёт запас без подъёма бюджета.
+    def("role.zone", { verbatim: true, render: (c) => line("Зона роли", c.role?.zone) });
 
-    def("authority.executor", { ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
-      "Исполнитель: правишь зону+Scope, PR мержишь сам (gh pr merge <N> --squash). Чужая правка — карточкой владельцу." });
+    def("authority.core", { version: 2, ruleIds: ["R-ZONES", "R-SECRETS"], render: () =>
+      "Зона роли — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай." });
+
+    def("authority.executor", { version: 2, ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
+      "Исполнитель: правишь зону+Scope, PR мержишь сам. Чужая правка — карточкой владельцу." });
 
     def("authority.auditor", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: () =>
       "Аудитор: только чтение и проверка; ни ветки/коммита/пуша/PR. Находки — в отчёт, чинит исполнитель. Новые проверки можно, ослаблять нельзя." });

@@ -223,4 +223,34 @@ for (const req of cases) {
   assert.equal(r.blocks[0].id, 'coordinator.prime', 'прайм остался первым блоком');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона)');
+// 16. D-038: регрессия K-21 — реальная длинная зона Executor Core влезает в
+// executor.card без подъёма бюджета. D-036 закрыл auditor.card и plan, но
+// executor.card с длинной зоной не проверялся; боевая зона ~158 зн. пробила
+// бюджет (2859 > 2800). Лечение: зона роли вынесена в verbatim-блок role.zone
+// (факт, как task.scope) и не входит в overhead; authority.core несёт только
+// правило о зонах; команда мержа не дублируется в authority.executor.
+{
+  const longZone = 'src/core/**, src/schema/**, src/i18n/**, tools/notice-verifier/**, contracts/**, docs/design/core/**, docs/decisions/**, package.json, NOTICE, tsconfig.json';
+  const k21 = dispatchRequest('Executor', {
+    task: { ...task(), title: 'SYN-1 · K-21 · Исправить offline NOTICE verifier без потери атрибуций' },
+    role: { name: 'Executor Core', fn: 'Executor', zone: longZone },
+    target: { repo: 'Creative36711/synapse', baseBranch: 'main' },
+  });
+  const r = PromptCompiler.compile(k21);
+  assert.ok(r.ok, `K-21 с длинной зоной компилируется: ${r.error?.message}`);
+  assert.ok(r.metrics.overheadChars <= 2800, `K-21 overhead ${r.metrics.overheadChars} ≤ 2800 без подъёма бюджета`);
+  assert.ok(r.text.includes('Зона роли:') && r.text.includes(longZone), 'зона роли видна исполнителю целиком');
+  assert.equal(r.blocks.find((b) => b.id === 'role.zone')?.verbatim, true, 'зона — verbatim-факт, не overhead');
+  assert.ok(r.text.includes('merged:true только после мержа'), 'Executor по-прежнему учит pr/merged');
+  assert.match(r.text, /gh pr merge <N> --squash/, 'команда мержа осталась в git.executor');
+  // Overhead не зависит от длины зоны: зона — verbatim-факт, запас не съедается.
+  const longer = PromptCompiler.compile(dispatchRequest('Executor', {
+    task: { ...task(), title: 'SYN-1 · K-21 · Исправить offline NOTICE verifier без потери атрибуций' },
+    role: { name: 'Executor Core', fn: 'Executor', zone: `${longZone}, docs/adr/**, tools/**, src/**` },
+    target: { repo: 'Creative36711/synapse', baseBranch: 'main' },
+  }));
+  assert.ok(longer.ok, 'ещё более длинная зона компилируется');
+  assert.equal(longer.metrics.overheadChars, r.metrics.overheadChars, 'overhead не зависит от длины зоны (verbatim)');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim)');
