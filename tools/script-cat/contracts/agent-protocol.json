@@ -1,6 +1,6 @@
 {
-  "protocolVersion": "1.9",
-  "sourceSha": "354f25b6f5f3dc809135352415ee3bf50e26a16d",
+  "protocolVersion": "1.10",
+  "sourceSha": "c6edbb7ad9f3f134df0b974c1ad826659ee8969d",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -769,5 +769,16 @@
     "protocolUnchanged": "агентский контракт (промпты/маркеры) не менялся — protocolVersion остаётся 1.9; фикс транспорт-внутренний",
     "safety": "отметку жизни fetch не ставит (это сетевой запрос, не честная пауза); проверка ID/защита выдачи не тронуты; логика GM-then-fetch и идемпотентный append сохранены",
     "regression": "relay-fetch-timeout-integration: зависший fetch обрывается по таймауту и не висит; успешный ответ возвращается; пины таймаутов шлюз 45 с / ntfy 15 с; в шлюзе и ntfy нет fetch без таймаута; gateway(append) ловится try/catch. Harness relay-gateway-path-smoke / relay-ntfy-transport-smoke / scriptcat-gateway-smoke переведены на fetchWithTimeout (pass-through к моку)"
+  },
+  "d042": {
+    "decision": "D-042",
+    "summary": "Обратная связь Координатору (note) доходит до промпта блоком plan.note; отказ выдачи Reviewer исполним (поле «Кому», рабочие роли). Warden не получает рабочих карточек и не становится Auditor",
+    "incident": "SYN-1 · K-22 «Ратификация решения GameSpec и локализационного контракта»: Contract Architect выполнил работу (PR synapse#9 слит → Submitted), но Координатор вернул карточку в Ready с «Кому» = Warden и трижды назвал next:\"Warden\" (19:44:10/19:45:09/19:46:09). Транспорт трижды верно отказал (decisionRoute → ask) и встал в паузу. Мастер: Warden — главный по организации процесса, карточки не принимает, к нему только через обратную связь; в прошлом проекте так Warden превратился в Auditor",
+    "cause": "decisionRoute refusal-note передавался в requestPlan → coordinatorPrompt как `note`, но coordinatorPrompt НЕ клал его в compile-контекст, и блока plan.note не существовало — заметка терялась. Координатор получал тот же снимок очереди («K-22 (Warden, Sequence …)») без объяснения и повторял запрещённый ход до паузы. Guard работал, обратная связь не доходила. Та же потеря касалась всех заметок: dispatch-miss, Submitted/Rework, reviewer-отказ",
+    "fix": "Новый verbatim-блок plan.note (audience Coordinator) рендерит note как «Обратная связь транспорта: …»; добавлен в coordinator.plan и coordinator.recovery. coordinatorPrompt кладёт note в контекст; requestPlan передаёт note и в recovery-envelope. Отказ decisionRoute для Reviewer стал исполнимым: названо поле «Кому», перечислены активные Executor/Auditor, сказано оставить Ready и повторить next; ратификация/статус ADR/правка файлов названы работой исполнителя. Пауза после трёх попыток сохранена",
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion 1.10 (аддитивно): добавлен блок plan.note в coordinator.plan/coordinator.recovery. Бюджет overhead coordinator.plan (3200) не поднят — plan.note verbatim, добавляет лишь разделитель; маркер остаётся последним блоком",
+    "safety": "Защита Reviewer не ослаблена: decisionRoute по-прежнему ask (не dispatch), пауза после трёх попыток; dispatchTask/consumePending fail-closed не тронуты. note не подменяет решение Координатора и не конвертирует карточку в вопрос/done — лишь объясняет отказ. Пустая/пробельная заметка блок не создаёт",
+    "regression": "relay-coordinator-note-delivery-integration: plan.note зарегистрирован (verbatim, Coordinator); note дословно в full и recovery промпте; пустая/пробельная заметка блока не создаёт; overhead не растёт (≤3200); маркер последний; отказ Reviewer исполним («Кому», рабочие роли, Ready, пауза сохранена); проводка note в контекст coordinatorPrompt и recovery-envelope. relay-reviewer-task-guard-integration по-прежнему зелёный (пины note и паузы сохранены)"
   }
 }
