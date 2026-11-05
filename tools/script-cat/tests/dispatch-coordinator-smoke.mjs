@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 82, 'the 78 prior tests plus four provisioning suites remain in the suite');
+assert.equal(tests.length, 83, 'the 82 prior suites plus the D-044 delivery-receipt suite remain in the suite');
 for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
   assert.ok(tests.includes(added), `${added} suite present`);
 }
@@ -41,6 +41,7 @@ const currentContractCompanions = [
   'drive-gateway-arena-smoke.mjs',
   'scriptcat-gateway-smoke.mjs',
   'relay-portability-guard-smoke.mjs',
+  'relay-delivery-receipt-smoke.mjs',
 ];
 for (const name of currentContractCompanions) {
   assert.ok(tests.includes(name), `${name} preserves a current-contract companion scenario`);
@@ -125,7 +126,7 @@ const retryStart = source.indexOf('  function retryRejectedHandoff(expect, alert
 const retryEnd = source.indexOf('\n  /**', retryStart);
 assert.ok(retryStart > 0 && retryEnd > retryStart, 'retryRejectedHandoff is present');
 const retryFn = new Function(
-  'C', 'Date', 'minimalPrompt', 'GM_setValue', 'K', 'log',
+  'C', 'Date', 'minimalPrompt', 'GM_setValue', 'K', 'log', 'forgetDeliveryReceipt',
   `${source.slice(retryStart, retryEnd)}\nreturn retryRejectedHandoff;`,
 );
 const now = 1_000_000;
@@ -133,7 +134,7 @@ const clock = { now: () => now };
 const state = new Map();
 const logs = [];
 const set = (key, value) => state.set(key, value);
-const retry = retryFn(config, clock, () => ({ text: 'Прочитай актуальную карточку.' }), set, keys, (message) => logs.push(message));
+const retry = retryFn(config, clock, () => ({ text: 'Прочитай актуальную карточку.' }), set, keys, (message) => logs.push(message), () => {});
 const sent = {
   kind: 'dispatch', dispatchId: CARD_ID, runId: RUN_ID,
   roleId: AGENT_ID, roleName: 'Builder', roleUrl: `https://arena.ai/agent/${AGENT_ID}`,

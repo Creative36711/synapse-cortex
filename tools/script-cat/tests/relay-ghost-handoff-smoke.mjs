@@ -38,7 +38,7 @@ function make({ expect = null, pending = null, rolled = true } = {}) {
   store.set('cfn-plan-at', 12345);
   const released = [];
   const fn = new Function(
-    'GM_getValue', 'GM_setValue', 'K', 'releaseUndelivered',
+    'GM_getValue', 'GM_setValue', 'K', 'releaseUndelivered', 'restoreMissingSendMark',
     `${helper}
      return dropGhostHandoff;`,
   );
@@ -50,6 +50,9 @@ function make({ expect = null, pending = null, rolled = true } = {}) {
       released.push({ ref: exp.ref, why });
       return rolled;
     },
+    // D-044: восстановление по квитанции/реплике проверяется отдельной пробой
+    // relay-delivery-receipt-smoke; здесь настоящие фантомы без доказательств.
+    () => null,
   );
   return { call, store, released };
 }

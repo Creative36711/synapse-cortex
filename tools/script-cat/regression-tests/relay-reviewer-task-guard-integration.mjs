@@ -457,8 +457,8 @@ for (const legacy of [oldExpect, { ...oldExpect, roleFn: '', roleName: 'Неза
   const debug = cut('    resend: () => {', '    step: () =>');
   for (const waiting of [oldExpect, { ...oldExpect, roleFn: '', roleName: 'Другой' }, { ...oldExpect, roleFn: 'Executor', roleName: 'Warden' }]) {
     const store = new Map([[K.expect, clone(waiting)]]);
-    const fn = new Function('GM_getValue', 'GM_setValue', 'K', `return ({${debug}}).resend;`)(
-      (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K,
+    const fn = new Function('GM_getValue', 'GM_setValue', 'K', 'forgetDeliveryReceipt', `return ({${debug}}).resend;`)(
+      (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K, () => {},
     );
     assert.match(fn(), /не переотправляю/);
     assert.deepEqual(store.get(K.expect), waiting);
@@ -467,8 +467,8 @@ for (const legacy of [oldExpect, { ...oldExpect, roleFn: '', roleName: 'Неза
   for (const kind of ['review', 'answer']) {
     const waiting = { kind, roleFn: 'Reviewer', roleId: warden.id, text: 'исходный текст', ref: 'ref-1', sentAt: 123, verified: true };
     const store = new Map([[K.expect, clone(waiting)]]);
-    const fn = new Function('GM_getValue', 'GM_setValue', 'K', `return ({${debug}}).resend;`)(
-      (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K,
+    const fn = new Function('GM_getValue', 'GM_setValue', 'K', 'forgetDeliveryReceipt', `return ({${debug}}).resend;`)(
+      (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K, () => {},
     );
     assert.equal(fn(), 'задание возвращено в очередь');
     assert.equal(store.get(K.expect).kind, kind);

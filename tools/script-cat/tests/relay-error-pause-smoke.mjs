@@ -119,7 +119,7 @@ assert.match(missingFn, /tries/, 'счётчик попыток хранится
   assert.match(calls.at(-1).message, /Копия ответа сохранена локально/);
 }
 assert.match(src, /const watermark = lastMessageId\(\);/, 'водяной знак снимается на странице адресата до отправки');
-assert.match(src, /const mark = delivery\.msgId \|\| watermark;\s*const sentAt = Date\.now\(\);\s*GM_setValue\(K\.expect, \{\s*\.\.\.expect, watermark: mark, sentAt, verified: true/, 'отметка ставится после успешной доставки');
+assert.match(src, /const mark = delivery\.msgId \|\| watermark;\s*const sentAt = Date\.now\(\);[\s\S]*?recordDeliveryReceipt\(expect, \{ messageId: delivery\.msgId, sentAt, watermark: mark, seen \}\);\s*GM_setValue\(K\.expect, \{\s*\.\.\.expect, watermark: mark, sentAt, verified: true/, 'отметка и квитанция ставятся после успешной доставки');
 
 // 7. Классификатор ntfy: тихо / громко / молча.
 const ntfyStart = src.indexOf('const QUIET_NTFY = [');
