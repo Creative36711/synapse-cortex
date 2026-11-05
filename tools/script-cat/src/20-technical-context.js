@@ -79,11 +79,16 @@
     return null;
   }
 
-  /** D-034: какие блоки съели бюджет — топ-4 по overhead, чтобы пауза была диагностируемой. */
+  /** D-034/D-043: какие блоки съели бюджет — топ-4 по связанному лимиту.
+   * При total показываем полный размер fact-блоков, а не их нулевой overhead:
+   * K-29 упёрлась в оракул/Scope, но прежняя диагностика называла marker/git. */
   function budgetBreakdownLine(error) {
     const blocks = error?.detail?.blocks;
     if (!Array.isArray(blocks) || !blocks.length) return "";
-    const top = blocks.filter((b) => b.overhead > 0).sort((a, b) => b.overhead - a.overhead).slice(0, 4)
-      .map((b) => `${b.id} ${b.overhead}`).join(", ");
-    return top ? `Overhead по блокам: ${top}. ` : "";
+    const total = Number(error?.detail?.total) > 0;
+    const key = total ? "chars" : "overhead";
+    const top = blocks.filter((b) => b[key] > 0).sort((a, b) => b[key] - a[key]).slice(0, 4)
+      .map((b) => `${b.id} ${b[key]}`).join(", ");
+    if (!top) return "";
+    return total ? `Размер блоков (знаки): ${top}. ` : `Overhead по блокам: ${top}. `;
   }

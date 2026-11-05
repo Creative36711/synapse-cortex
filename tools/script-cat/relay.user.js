@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.7
+// @version      1.12.8
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -579,7 +579,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.7";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.8";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9079,13 +9079,18 @@
     return null;
   }
 
-  /** D-034: какие блоки съели бюджет — топ-4 по overhead, чтобы пауза была диагностируемой. */
+  /** D-034/D-043: какие блоки съели бюджет — топ-4 по связанному лимиту.
+   * При total показываем полный размер fact-блоков, а не их нулевой overhead:
+   * K-29 упёрлась в оракул/Scope, но прежняя диагностика называла marker/git. */
   function budgetBreakdownLine(error) {
     const blocks = error?.detail?.blocks;
     if (!Array.isArray(blocks) || !blocks.length) return "";
-    const top = blocks.filter((b) => b.overhead > 0).sort((a, b) => b.overhead - a.overhead).slice(0, 4)
-      .map((b) => `${b.id} ${b.overhead}`).join(", ");
-    return top ? `Overhead по блокам: ${top}. ` : "";
+    const total = Number(error?.detail?.total) > 0;
+    const key = total ? "chars" : "overhead";
+    const top = blocks.filter((b) => b[key] > 0).sort((a, b) => b[key] - a[key]).slice(0, 4)
+      .map((b) => `${b.id} ${b[key]}`).join(", ");
+    if (!top) return "";
+    return total ? `Размер блоков (знаки): ${top}. ` : `Overhead по блокам: ${top}. `;
   }
 
   // ───────────────────────────── промпты ─────────────────────────────
@@ -9174,12 +9179,20 @@
       payloadChannel: Boolean(ctx.payloadRef?.fileId),
     });
     if (delivery.strategy === "pause") {
-      pause(
-        `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
-          `${budgetBreakdownLine(delivery.error)}` +
-          "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
-        { kind: "prompt-compile", ref: task.id },
-      );
+      // D-043: выдача проверяет промпт до Running и получает отказ как причину
+      // для нового плана. Общая пауза остаётся запасным путём и третьим промахом.
+      const advice = typeof ctx.onCompileError === "function"
+        ? delivery.error.code === "budget_exceeded"
+          ? "Карточка осталась Ready, агенту ничего не отправлено. Перепланируй постановку: убери повторы и справочные детали, сохрани обязательные проверки; при необходимости разбей работу на последовательные карточки с полными условиями и Dependency. Не ослабляй и не обрезай оракул. Payload Drive File ID вмещает большой текст задания, но не заменяет inline-оракул/Scope. Затем повтори next с исправленной карточкой."
+          : "Карточка осталась Ready, агенту ничего не отправлено. Исправь названные факты/профиль карточки и повтори next."
+        : "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».";
+      const reason = `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
+        `${budgetBreakdownLine(delivery.error)}${advice}`;
+      if (typeof ctx.onCompileError === "function") {
+        ctx.onCompileError(reason);
+        return null;
+      }
+      pause(reason, { kind: "prompt-compile", ref: task.id });
       return null;
     }
     return delivery.envelope;
@@ -12095,15 +12108,15 @@
           GM_setValue("cfn-dispatch-miss", 0);
           pause(
             `Координатор третий раз подряд направляет ход в «${route.roleName}», но ${why}. ` +
-              "Работа не потеряна, очередь на месте: посмотрите карточку в Notion, поправьте её состояние " +
-              "(работа должна стоять в Ready) и нажмите «Продолжить».",
+              "Работа не потеряна, очередь на месте: посмотрите карточку в Notion, исправьте названную причину " +
+              "(для выдачи проверьте состояние и постановку) и нажмите «Продолжить».",
             { kind: "redispatch", ref: card.id },
           );
           return true;
         }
         log(`Ход не передан: ${why}. Возвращаю Координатору.`, true, { ntfy: "quiet" });
         const fresh = await queueOf(mission);
-        await requestPlan(mission, role, fresh, `Карточку выдать не удалось — ${problem}. Поправь её состояние.`, {
+        await requestPlan(mission, role, fresh, `Карточку выдать не удалось — ${problem} Исправь названную причину и повтори next.`, {
           force: true,
         });
         return true;
@@ -12925,8 +12938,6 @@
         ? `сейчас она в «${state || "неизвестном состоянии"}», а не в Ready`
         : "на ней остались следы прошлого ответа";
     }
-    GM_setValue("cfn-dispatch-miss", 0);
-
     // Карточку выдали заново — прошлое неотправленное задание к ней больше не
     // относится: иначе оно ушло бы вторым сообщением уже после новой выдачи.
     const stale = GM_getValue(K.pending, null);
@@ -12947,9 +12958,38 @@
         throw new Error(`Payload не прочитан: ${e.message}`);
       }
     }
+    const previousLogId = rt(fresh.properties["Output Drive File ID"]);
+    // D-034: снимок большого payload фиксируется до сборки сообщения. D-043:
+    // сам промпт проверяется ДО журнала и Running. Иначе oversized-карточка
+    // создавала журнал/ожидание, затем откатывалась, а null назывался дублем.
+    let payloadRefId = payloadId;
+    let payloadPointer = false;
+    if (payloadId && payload.trim().length > (C.payloadInlineMax || 1500)) {
+      const saved = await gateway("savePayload", "", { name: `${card.id}_${runId}__assignment.md`, content: payload });
+      payloadRefId = String(saved?.fileId || "").trim();
+      if (!payloadRefId) throw new Error("Шлюз не вернул ID снимка задания (payload).");
+      payloadPointer = true;
+    }
+    const dispatchCtx = { repo: targetRepo, branch: targetBranch };
+    if (payloadRefId) {
+      dispatchCtx.payloadRef = { fileId: payloadRefId, url: `https://drive.google.com/file/d/${payloadRefId}/view` };
+      dispatchCtx.payloadPointer = payloadPointer;
+    }
+    let compileProblem = "";
+    // logId в промпт не входит; журнал создаётся только после успешной сборки.
+    const prompt = executorPrompt(fresh, role, payload, "", runId, mission?.id || "", {
+      ...dispatchCtx,
+      onCompileError: (reason) => { compileProblem = reason; },
+    });
+    if (!prompt) {
+      // Это отказ сборки, а не дубль и не сетевой сбой. Счётчик промахов ещё
+      // не сброшен: Координатор получает причину через plan.note (D-042), а
+      // третий одинаковый отказ останавливает цикл штатной защитой.
+      return `${compileProblem || `Промпт не собран (dispatch ${card.id}); карточка осталась Ready, агенту ничего не отправлено.`} ` +
+        "Журнал выдачи не создавался; статус карточки не менял.";
+    }
     // Каждому новому Run — свой журнал. Поле карточки может указывать на
     // прошлую попытку или даже чужую миссию; его нельзя использовать повторно.
-    const previousLogId = rt(fresh.properties["Output Drive File ID"]);
     const created = await gateway("createLog", "", { dispatchId: card.id, runId });
     const logId = String(created?.fileId || "").trim();
     if (!logId) throw new Error("Шлюз не вернул ID журнала новой выдачи.");
@@ -12960,6 +13000,7 @@
       return `карточка изменилась перед выдачей (${recheck || "состояние, адресат или следы ответа"}); ` +
         `статус не меняю, созданный пустой журнал ${logId} оставлен для проверки`;
     }
+    GM_setValue("cfn-dispatch-miss", 0);
     await patch(card.id, {
       "Dispatch State": { select: { name: "Running" } },
       "Run ID": { rich_text: [{ type: "text", text: { content: runId } }] },
@@ -12991,29 +13032,9 @@
       `Выдан ход ${roleName}: «${taskTitle(fresh)}»` +
         (payload.trim() ? "." : " (отдельного файла с заданием нет — текст собран из карточки)."),
     );
-    // D-034: канал payloads. Большое задание не инлайнится: на каждый прогон
-    // фиксируется снимок в Arena/<project>/payloads (как и журнал в logs), и в
-    // промпт уходит указатель на него. Снимок стабилен, даже если исходный
-    // payload отредактируют во время хода. Оракул/Scope остаются в промпте;
-    // файл их не заменяет. Отказ шлюза — явная ошибка, не тихий инлайн.
-    let payloadRefId = payloadId;
-    let payloadPointer = false;
-    if (payloadId && payload.trim().length > (C.payloadInlineMax || 1500)) {
-      const saved = await gateway("savePayload", "", { name: `${card.id}_${runId}__assignment.md`, content: payload });
-      payloadRefId = String(saved?.fileId || "").trim();
-      if (!payloadRefId) throw new Error("Шлюз не вернул ID снимка задания (payload).");
-      payloadPointer = true;
-    }
-    // Карточка уже в Running, задание в очереди: отсюда выдача состоялась, даже
-    // если `sendToRole` не отправил текст (тот же текст уходил минуту назад —
-    // это защита от дубля, а не отказ). Отказ отправки разбирает сторож
-    // неотправленной очереди, а не вызывающий.
-    const dispatchCtx = { repo: targetRepo, branch: targetBranch };
-    if (payloadRefId) {
-      dispatchCtx.payloadRef = { fileId: payloadRefId, url: `https://drive.google.com/file/d/${payloadRefId}/view` };
-      dispatchCtx.payloadPointer = payloadPointer;
-    }
-    const queued = await sendToRole(role, executorPrompt(fresh, role, payload, logId, runId, mission?.id || "", dispatchCtx), "dispatch", card.id, {
+    // Отправляем уже проверенный текст. Null сюда больше не приходит из-за
+    // бюджета; отказ очереди по-прежнему разбирает сторож неотправленной выдачи.
+    const queued = await sendToRole(role, prompt, "dispatch", card.id, {
       runId,
       missionId: mission?.id || "",
       logId,
@@ -13024,17 +13045,16 @@
       url: fresh.url || "",
     });
     if (!queued) {
-      // Очередь не создалась (сработала защита от повтора — тот же текст уже
-      // уходил этой роли минуту назад). Значит хода нет, а карточка уже
-      // Running: без ожидания её никто не поведёт, и Координатор увидит
-      // «работу», которой нет. Возвращаем в Ready и говорим об этом прямо.
+      // Очередь не создалась: возможен повтор, запрещённый адресат или другой
+      // защитный отказ sendToRole. Хода нет, а карточка уже Running; возвращаем
+      // Ready, не выдавая неподтверждённую причину за доказанный дубль (D-043).
       const left = GM_getValue(K.expect, null);
       if (!left || norm(left.ref) !== norm(card.id)) {
         await releaseUndelivered(
           { kind: "dispatch", ref: card.id, runId, title: taskTitle(card) },
           "задание не поставлено в очередь",
         );
-        return "задание не поставлено в очередь (то же сообщение уже уходило)";
+        return "задание не поставлено в очередь (отправка не подтверждена; возможен защитный отказ от дубля или адресата)";
       }
     }
     return true;

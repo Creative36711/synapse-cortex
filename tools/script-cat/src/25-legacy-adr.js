@@ -983,15 +983,15 @@
           GM_setValue("cfn-dispatch-miss", 0);
           pause(
             `Координатор третий раз подряд направляет ход в «${route.roleName}», но ${why}. ` +
-              "Работа не потеряна, очередь на месте: посмотрите карточку в Notion, поправьте её состояние " +
-              "(работа должна стоять в Ready) и нажмите «Продолжить».",
+              "Работа не потеряна, очередь на месте: посмотрите карточку в Notion, исправьте названную причину " +
+              "(для выдачи проверьте состояние и постановку) и нажмите «Продолжить».",
             { kind: "redispatch", ref: card.id },
           );
           return true;
         }
         log(`Ход не передан: ${why}. Возвращаю Координатору.`, true, { ntfy: "quiet" });
         const fresh = await queueOf(mission);
-        await requestPlan(mission, role, fresh, `Карточку выдать не удалось — ${problem}. Поправь её состояние.`, {
+        await requestPlan(mission, role, fresh, `Карточку выдать не удалось — ${problem} Исправь названную причину и повтори next.`, {
           force: true,
         });
         return true;

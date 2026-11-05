@@ -168,8 +168,8 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
 // ── 5. Порядок: файл читается до выдачи, запись в журнал — до отправки ────
 assert.match(
   src.slice(from, to),
-  /gateway\("read", payloadId\)[\s\S]*?gateway\("append", logId[\s\S]*?sendToRole\(role, executorPrompt/,
-  'чтение файла → журнал → отправка',
+  /gateway\("read", payloadId\)[\s\S]*?const prompt = executorPrompt[\s\S]*?await patch\(card\.id[\s\S]*?gateway\("append", logId[\s\S]*?sendToRole\(role, prompt/,
+  'чтение файла → проверка промпта → Running → журнал → отправка',
 );
 
 // ── 5. Координатору сказано, когда файл нужен, а когда нет ────────────────

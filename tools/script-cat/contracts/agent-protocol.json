@@ -1,6 +1,6 @@
 {
   "protocolVersion": "1.10",
-  "sourceSha": "c6edbb7ad9f3f134df0b974c1ad826659ee8969d",
+  "sourceSha": "98d19f3a068cc7e41ff40c8f5a01dea020383642",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -780,5 +780,16 @@
     "protocolNote": "protocolVersion 1.10 (аддитивно): добавлен блок plan.note в coordinator.plan/coordinator.recovery. Бюджет overhead coordinator.plan (3200) не поднят — plan.note verbatim, добавляет лишь разделитель; маркер остаётся последним блоком",
     "safety": "Защита Reviewer не ослаблена: decisionRoute по-прежнему ask (не dispatch), пауза после трёх попыток; dispatchTask/consumePending fail-closed не тронуты. note не подменяет решение Координатора и не конвертирует карточку в вопрос/done — лишь объясняет отказ. Пустая/пробельная заметка блок не создаёт",
     "regression": "relay-coordinator-note-delivery-integration: plan.note зарегистрирован (verbatim, Coordinator); note дословно в full и recovery промпте; пустая/пробельная заметка блока не создаёт; overhead не растёт (≤3200); маркер последний; отказ Reviewer исполним («Кому», рабочие роли, Ready, пауза сохранена); проводка note в контекст coordinatorPrompt и recovery-envelope. relay-reviewer-task-guard-integration по-прежнему зелёный (пины note и паузы сохранены)"
+  },
+  "d043": {
+    "decision": "D-043",
+    "summary": "Бюджет выдачи проверяется до Running; отказ сборки доходит Координатору через plan.note с размерами fact-блоков и исполнимой подсказкой. Лимиты и оракул сохранены",
+    "incident": "SYN-1 · K-29 «Вендоринг CJK-шрифтов Noto Sans JP/KR/SC и fallback-стек темы (D-016, вариант C)»: 22:24:30 выдача Executor Core не собрала промпт, budget_exceeded total 10381 > 7500; карточка откатилась в Ready, 22:24:43 запрошен новый план, цикл на паузе. Отдельного payload нет; оракул 4232, Scope 1435, инварианты 1035, намерение 626",
+    "cause": "dispatchTask создавал журнал и ставил Running ДО executorPrompt; compile pause возвращал null, sendToRole(null) не отправлял, а вызывающий ошибочно называл результат дублем («то же сообщение уже уходило»). budgetBreakdownLine при total показывал только overhead marker/git/identity/phases, а не контентные блоки. Payload-канал выносит только прикреплённое тело задания, не оракул/Scope/инварианты; compact dispatch не уменьшает полный профиль",
+    "fix": "Снимок payload и промпт собираются до createLog и patch Running; sendToRole получает проверенный текст. Отказ сборки возвращается строкой в requestPlan → plan.note (D-042): карточка осталась Ready, агенту ничего не отправлено, журнал выдачи не создаётся; убрать повторы/справочные детали, при необходимости разбить работу с полными условиями и Dependency, не ослаблять/не обрезать оракул; payload не заменяет inline-оракул/Scope. cfn-dispatch-miss сбрасывается только после успешной сборки; третий подряд отказ паузит. budgetBreakdownLine при total показывает топ-4 chars fact-блоков, overhead-диагностика D-034 сохранена. Ложное сообщение о дубле убрано; поздний fail-closed guard остаётся запасным путём",
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.10: транспорт-внутренний порядок проверки и диагностика, агентский маркер/профили/блоки не менялись. ScriptCat 1.12.8; Gateway 1.8.0 и digest 1.5 не менялись",
+    "safety": "Оракул/Scope/инварианты verbatim и не режутся; Executor ≤7500, Auditor ≤5500, Reviewer ≤7000 сохранены. Нет автоматического нового Drive-payload канала для полей карточки, нет укороченного задания, нет автопродолжения после паузы. Счётчик промахов не сбрасывается до успешной сборки; пауза после трёх отказов сохранена",
+    "regression": "relay-dispatch-budget-preflight-integration на дословной фикстуре K-29 (fixtures/k29-card.json): ранний отказ до журнала/Running/отправки/паузы; причина с размерами блоков и подсказкой; счётчик не сброшен; два возврата через plan.note, третий — пауза redispatch; успешная выдача сбрасывает счётчик; поздний guard и лимит 7500 сохранены. relay-payload-smoke/payload-channel/reviewer-task-guard/coordinator-note-delivery зелёные"
   }
 }
