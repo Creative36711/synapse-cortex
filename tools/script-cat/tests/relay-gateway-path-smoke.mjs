@@ -27,15 +27,23 @@ assert.ok(gwFrom > 0 && gwTo > gwFrom, 'gateway на месте');
 const gwBlock = src.slice(gwFrom, gwTo);
 
 assert.ok(/await request\("POST", url, headers, payload\)/.test(gwBlock), 'шлюз идёт путём расширения');
-assert.ok(/await fetch\(url/.test(gwBlock), 'fetch остался запасным путём');
-assert.ok(gwBlock.indexOf('await request(') < gwBlock.indexOf('await fetch(url'), 'сначала расширение, потом fetch');
+assert.ok(/await fetchWithTimeout\(url/.test(gwBlock), 'fetch остался запасным путём (D-041: с таймаутом)');
+assert.ok(gwBlock.indexOf('await request(') < gwBlock.indexOf('await fetchWithTimeout(url'), 'сначала расширение, потом fetch');
 assert.ok(/err\.relay = "gateway"/.test(gwBlock), 'ошибка помечена как шлюз');
 assert.ok(/networkish/.test(reqBlock), 'сетевые сбои отличаются от отказов');
 
 const load = ({ gm, fetchImpl }) => {
   const calls = { gm: 0, fetch: 0 };
+  // D-041: шлюз зовёт fetchWithTimeout (fetch + таймаут). В пробе таймаут не
+  // нужен — передаём pass-through к моку fetch, логика путей не меняется.
+  const mockedFetch = async () => {
+    calls.fetch += 1;
+    const reply = fetchImpl(calls.fetch);
+    if (reply.error) throw new Error(reply.error);
+    return { ok: reply.status ? reply.status < 400 : true, status: reply.status || 200, json: async () => reply.body };
+  };
   const api = new Function(
-    'GM_xmlhttpRequest', 'sleep', 'GM_getValue', 'K', 'fetch',
+    'GM_xmlhttpRequest', 'sleep', 'GM_getValue', 'K', 'fetchWithTimeout',
     `${reqBlock}\n${gwBlock}\nreturn { request, gateway, networkish };`,
   )(
     (opts) => {
@@ -47,12 +55,7 @@ const load = ({ gm, fetchImpl }) => {
     async () => {},
     (k) => (k === 'cfn-gw-url' ? 'https://script.google.com/macros/s/x/exec' : k === 'cfn-gw-key' ? 'k' : ''),
     { gwUrl: 'cfn-gw-url', gwKey: 'cfn-gw-key' },
-    async () => {
-      calls.fetch += 1;
-      const reply = fetchImpl(calls.fetch);
-      if (reply.error) throw new Error(reply.error);
-      return { ok: reply.status ? reply.status < 400 : true, status: reply.status || 200, json: async () => reply.body };
-    },
+    (url, opts) => mockedFetch(url, opts),
   );
   return { api, calls };
 };

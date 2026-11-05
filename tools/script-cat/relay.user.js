@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.5
+// @version      1.12.6
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -369,6 +369,24 @@
     busyAt = Date.now();
     return new Promise((r) => setTimeout(r, ms));
   };
+
+  /**
+   * `fetch` с таймаутом: запасной сетевой путь не имеет права висеть вечно.
+   *
+   * D-041 (05.11.2026): GM-путь ограничен (45 с шлюз, 15 с ntfy), а fallback
+   * `fetch` без AbortController мог зависнуть навсегда. Шаг молчал, сторож
+   * тишины через 120 с перезапускал его посреди выдачи: карточка уже стояла в
+   * Running, а ожидание и промпт ещё не создались — Координатор получал план
+   * заново при живой карточке. Таймаут делает отказ явным и ловимым: вызывающий
+   * разбирает его (журнал попытки не записался — выдача продолжается), а не
+   * зависает. Отметку жизни НЕ ставим: это сетевой запрос, а не честная пауза.
+   */
+  function fetchWithTimeout(url, opts = {}, ms = 45000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`таймаут запроса ${Math.round(ms / 1000)} с`)), ms);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */
   const flat = (x) => String(x || "").replace(/[\s\u00a0]+/g, " ").trim().toLowerCase();
@@ -561,7 +579,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.5";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.6";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -626,7 +644,8 @@
     }
 
     try {
-      const res = await fetch(url, { method: "POST", headers, body: payload });
+      // D-041: таймаут как у GM-пути ntfy (15 с) — fallback не висит вечно.
+      const res = await fetchWithTimeout(url, { method: "POST", headers, body: payload }, 15000);
       if (res.ok) return { via: "fetch", status: res.status };
       const text = (await res.text()).slice(0, 120);
       throw new Error(`HTTP ${res.status} ${text}`.trim());
@@ -645,7 +664,8 @@
       out.push(`GM: ${e.message}`);
     }
     try {
-      const res = await fetch(`${NTFY_BASE}/v1/health`, { cache: "no-store" });
+      // D-041: таймаут как у GM-пути ntfy (15 с) — fallback не висит вечно.
+      const res = await fetchWithTimeout(`${NTFY_BASE}/v1/health`, { cache: "no-store" }, 15000);
       out.push(`fetch: HTTP ${res.status} ${(await res.text()).slice(0, 80)}`.trim());
     } catch (e) {
       out.push(`fetch: ${e.message}`);
@@ -3278,7 +3298,9 @@
     let fetchError = "";
     if (!refused) {
       try {
-        const res = await fetch(url, { method: "POST", headers, body: payload });
+        // D-041: запасной путь с таймаутом как у GM (45 с). Без него fetch висел
+        // вечно, шаг молчал, и сторож перезапускал выдачу посреди Running.
+        const res = await fetchWithTimeout(url, { method: "POST", headers, body: payload }, 45000);
         const data = await res.json();
         if (data && data.ok === true) return data;
         if (action === "append" && /duplicate/i.test(String((data && data.error) || ""))) return { ok: true, duplicate: true };

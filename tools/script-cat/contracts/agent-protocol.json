@@ -1,6 +1,6 @@
 {
   "protocolVersion": "1.9",
-  "sourceSha": "f3df3f80dc2759277053577915882968535ad1cc",
+  "sourceSha": "354f25b6f5f3dc809135352415ee3bf50e26a16d",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -758,5 +758,16 @@
     "safety": "проверка ID не ослаблена: чужие/битые/противоречащие ID — сразу пауза; напоминание только повторяет маркер с ID из промпта, ничего не принимает и не подменяет; после markerReminders напоминаний — пауза",
     "regression": "relay-marker-ids-reminder-integration: dispatchIdState на боевом маркере K-21 (missing), конфликт/битые/противоречащие синонимы (conflict), короткие синонимы (match); пины маршрутизации submitExecutor и reminder.marker why=ids в тотал-бюджете 900 с точными ID. relay-review-dispatch-integration: нет run/dispatch сдачи → напоминание ids, чужие ID → пауза",
     "reminderWhy": "ids — маркер есть, но без dispatch_id/run_id этой выдачи; thin — маркер без отчёта; пусто — маркера нет"
+  },
+  "d041": {
+    "decision": "D-041",
+    "summary": "Запасной fetch ограничен таймаутом (шлюз 45 с, ntfy 15 с): шаг не зависает навсегда, сторож не перезапускает выдачу посреди Running",
+    "incident": "SYN-1: после маркера Координатора («дальше Contract Architect») выдача поставила карточку в Running, затем gateway(append) завис на fallback-fetch без таймаута. Лог «Выдан ход» и sendToRole (ожидание+промпт) не выполнились. Сторож тишины через 131 с снял блокировку и перезапустил шаг; ожидания выдачи не было — Координатор получил план заново при живой карточке в Running",
+    "cause": "GM-путь ограничен (requestOnce 45 с), а запасной fetch в gatewayWithCredentials и ntfy шёл без AbortController/таймаута и мог висеть вечно. Сетевой запрос не отмечает жизнь (busyAt), поэтому сторож тишины (120 с) срабатывал и перезапускал шаг посреди выдачи",
+    "fix": "fetchWithTimeout(url,opts,ms) в 03-utils: fetch + AbortController с таймаутом, таймер очищается. Применён во всех трёх запасных fetch: gatewayWithCredentials (45 с), ntfyPublish (15 с), ntfyHealth (15 с) — по таймауту их GM-путей. Отказ становится явным и ловимым: gateway(append) в dispatchTask обёрнут в try/catch, незаписанный журнал попытки логируется, выдача продолжается (карточка Running, промпт уходит агенту)",
+    "budgetsRaised": false,
+    "protocolUnchanged": "агентский контракт (промпты/маркеры) не менялся — protocolVersion остаётся 1.9; фикс транспорт-внутренний",
+    "safety": "отметку жизни fetch не ставит (это сетевой запрос, не честная пауза); проверка ID/защита выдачи не тронуты; логика GM-then-fetch и идемпотентный append сохранены",
+    "regression": "relay-fetch-timeout-integration: зависший fetch обрывается по таймауту и не висит; успешный ответ возвращается; пины таймаутов шлюз 45 с / ntfy 15 с; в шлюзе и ntfy нет fetch без таймаута; gateway(append) ловится try/catch. Harness relay-gateway-path-smoke / relay-ntfy-transport-smoke / scriptcat-gateway-smoke переведены на fetchWithTimeout (pass-through к моку)"
   }
 }

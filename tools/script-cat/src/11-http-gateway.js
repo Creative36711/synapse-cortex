@@ -295,7 +295,9 @@
     let fetchError = "";
     if (!refused) {
       try {
-        const res = await fetch(url, { method: "POST", headers, body: payload });
+        // D-041: запасной путь с таймаутом как у GM (45 с). Без него fetch висел
+        // вечно, шаг молчал, и сторож перезапускал выдачу посреди Running.
+        const res = await fetchWithTimeout(url, { method: "POST", headers, body: payload }, 45000);
         const data = await res.json();
         if (data && data.ok === true) return data;
         if (action === "append" && /duplicate/i.test(String((data && data.error) || ""))) return { ok: true, duplicate: true };
