@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.8",
+  "protocolVersion": "1.9",
   "roleProfile": {
     "Executor": "executor.card",
     "Auditor": "auditor.card",

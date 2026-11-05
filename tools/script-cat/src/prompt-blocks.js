@@ -196,9 +196,12 @@
 
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
+      const ids = c.reminder?.why === "ids";
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
-        thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.` : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
+        ids ? `Маркер ${c.reminder?.markerName} есть, но в нём нет dispatch_id/run_id этой выдачи. Повтори маркер с ID из этого напоминания; работу не повторяй.`
+          : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
+          : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
         "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
       ].join("\n");
     } });

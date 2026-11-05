@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.4
+// @version      1.12.5
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -561,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.4";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.5";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -4503,11 +4503,15 @@
   }
 
   /**
-   * Напоминание о формате. Две формулировки — чтобы подряд идущие напоминания
-   * не выглядели механической копией, и чтобы в чате не было слова ScriptCat.
+   * Напоминание о формате. Несколько формулировок — чтобы подряд идущие
+   * напоминания не выглядели механической копией, и чтобы в чате не было слова
+   * ScriptCat.
    *
    * why = "thin" — маркер есть, а отчёта нет (NAR-1.8, 23.10.2026: агент понял
    * «ответь одной последней строкой» буквально, а в журнал попал только маркер).
+   * why = "ids" — маркер есть, но без dispatch_id/run_id этой выдачи (D-040,
+   * 05.11.2026: Executor прислал маркер с «task» вместо ID). Работа сделана —
+   * просим повторить только маркер с ID из напоминания, не переделывать ход.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
     const ctx = {
@@ -4863,10 +4867,12 @@
       log(
         why === "thin"
           ? `${role.name} прислал только маркер ${markerName}, без отчёта — напоминание ${sent + 1} из ${C.markerReminders}.`
+          : why === "ids"
+          ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : "Relay: нет маркера" },
       );
       await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
         missionId: expect.missionId,
@@ -4893,6 +4899,9 @@
       (why === "thin"
         ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: проверьте страницу агента. "
+        : why === "ids"
+        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
@@ -8544,9 +8553,12 @@
 
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
+      const ids = c.reminder?.why === "ids";
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
-        thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.` : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
+        ids ? `Маркер ${c.reminder?.markerName} есть, но в нём нет dispatch_id/run_id этой выдачи. Повтори маркер с ID из этого напоминания; работу не повторяй.`
+          : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
+          : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
         "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
       ].join("\n");
     } });
@@ -9310,6 +9322,27 @@
       (duration ? ` До обработки ответа: ${duration}.` : "");
   }
 
+  // D-040: различаем «ID выдачи в маркере нет» (формат-дефект: агент сделал
+  // работу, но не скопировал dispatch_id/run_id) и «ID чужие/битые» (возможно,
+  // ответ прошлой выдачи). Первое — напоминаем с точными ID через ту же
+  // лестницу, что и при отсутствии маркера; второе — сразу пауза, чужой ответ
+  // не принимаем. Значения ID не подменяются ни в одном случае (adoptIds).
+  function dispatchIdState(result, expect) {
+    const values = (names) => names
+      .map((name) => result?.[name])
+      .filter((value) => value !== undefined && value !== null && String(value).trim());
+    const gap = (vals, expected) => {
+      if (!vals.length) return "missing";
+      if (!isUuid(expected) || vals.some((value) => !isUuid(value) || norm(value) !== norm(expected))) return "conflict";
+      return "ok";
+    };
+    const d = gap(values(["dispatch_id", "dispatch", "dispatchId"]), expect.ref);
+    const r = gap(values(["run_id", "run", "runId"]), expect.runId);
+    if (d === "conflict" || r === "conflict") return "conflict";
+    if (d === "missing" || r === "missing") return "missing";
+    return "match";
+  }
+
   async function submitExecutor(role, expect, manual = false) {
     const receivedAt = Date.now();
     if (!expect || expect.kind !== "dispatch") {
@@ -9378,6 +9411,12 @@
 
     if (!matchesDispatch(hit.result)) {
       const retained = retainRejectedResult(expect, "dispatch-identity", replies);
+      // D-040: маркер есть, но ID выдачи не указаны — это формат-дефект, а не
+      // чужой ответ. Напоминаем с точными ID (лестница markerReminders), работу
+      // не повторяем. Чужие/битые ID — по-прежнему сразу пауза для разбора.
+      if (dispatchIdState(hit.result, expect) === "missing") {
+        return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "ids");
+      }
       pause("Ответ не подтверждён для текущей карточки и попытки (dispatch_id / run_id). " +
         (retained ? "Карточка, ожидание и копия ответа сохранены локально; " : "Карточка и ожидание сохранены, локальная копия не записалась — сохраните ответ из чата вручную; ") +
         "попросите агента повторить маркер с ID этой выдачи.", {

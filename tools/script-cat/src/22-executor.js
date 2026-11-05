@@ -130,6 +130,27 @@
       (duration ? ` До обработки ответа: ${duration}.` : "");
   }
 
+  // D-040: различаем «ID выдачи в маркере нет» (формат-дефект: агент сделал
+  // работу, но не скопировал dispatch_id/run_id) и «ID чужие/битые» (возможно,
+  // ответ прошлой выдачи). Первое — напоминаем с точными ID через ту же
+  // лестницу, что и при отсутствии маркера; второе — сразу пауза, чужой ответ
+  // не принимаем. Значения ID не подменяются ни в одном случае (adoptIds).
+  function dispatchIdState(result, expect) {
+    const values = (names) => names
+      .map((name) => result?.[name])
+      .filter((value) => value !== undefined && value !== null && String(value).trim());
+    const gap = (vals, expected) => {
+      if (!vals.length) return "missing";
+      if (!isUuid(expected) || vals.some((value) => !isUuid(value) || norm(value) !== norm(expected))) return "conflict";
+      return "ok";
+    };
+    const d = gap(values(["dispatch_id", "dispatch", "dispatchId"]), expect.ref);
+    const r = gap(values(["run_id", "run", "runId"]), expect.runId);
+    if (d === "conflict" || r === "conflict") return "conflict";
+    if (d === "missing" || r === "missing") return "missing";
+    return "match";
+  }
+
   async function submitExecutor(role, expect, manual = false) {
     const receivedAt = Date.now();
     if (!expect || expect.kind !== "dispatch") {
@@ -198,6 +219,12 @@
 
     if (!matchesDispatch(hit.result)) {
       const retained = retainRejectedResult(expect, "dispatch-identity", replies);
+      // D-040: маркер есть, но ID выдачи не указаны — это формат-дефект, а не
+      // чужой ответ. Напоминаем с точными ID (лестница markerReminders), работу
+      // не повторяем. Чужие/битые ID — по-прежнему сразу пауза для разбора.
+      if (dispatchIdState(hit.result, expect) === "missing") {
+        return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "ids");
+      }
       pause("Ответ не подтверждён для текущей карточки и попытки (dispatch_id / run_id). " +
         (retained ? "Карточка, ожидание и копия ответа сохранены локально; " : "Карточка и ожидание сохранены, локальная копия не записалась — сохраните ответ из чата вручную; ") +
         "попросите агента повторить маркер с ID этой выдачи.", {

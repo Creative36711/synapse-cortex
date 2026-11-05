@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.4**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.5**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -109,6 +109,16 @@
   мягким 6000 и жёстким 7500 идёт стратегией compact с тем же полным контентом, оракул
   цел. Регрессия `prompts-smoke` §17. Контракт protocolVersion **1.8**. Gateway/digest
   не менялись. Карточки больше 7500 — через payload-канал или отдельное решение.
+- **1.12.5 (D-040)** — маркер без `dispatch_id`/`run_id` этой выдачи напоминает с точными
+  ID, а не зовёт Мастера сразу. Боевой K-21: Executor слил PR, но прислал маркер с `task`
+  вместо ID и без `status`; транспорт верно отказал в подтверждении, но сразу ушёл в
+  паузу, минуя напоминания. Теперь `dispatchIdState` различает «ID нет` (формат-дефект →
+  до `markerReminders` напоминаний `reminder.marker` `why=ids` с точными ID, повторить
+  только маркер) и «ID чужие/битые` (→ прежняя сразу-пауза `marker-mismatch`). Проверка
+  ID не ослаблена: значения не подменяются, запись по неверному ID не идёт. Бюджеты не
+  подняты. Регрессия `relay-marker-ids-reminder-integration` + обновлён
+  `relay-review-dispatch-integration`. Контракт protocolVersion **1.9**. Gateway/digest
+  не менялись.
 
 ## 3. Проверки транспорта (локальные, без сети)
 
