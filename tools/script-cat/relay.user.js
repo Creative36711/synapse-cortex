@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.0
+// @version      1.12.1
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -561,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.1";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8478,14 +8478,19 @@
       const auditor = c.role?.fn === "Auditor";
       return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
     };
-    def("marker.agent", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
+    def("marker.agent", { version: 2, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.",
         "Если продолжить нельзя — назови блокер, не выдумывай результат.",
         `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted"}`,
       ].join("\n");
+      // D-036: в маркере аудитора нет pr/merged — не учим его полям, которых
+      // у него нет, и экономим overhead под длинную зону роли (K-20).
+      const fields = c.role?.fn === "Auditor"
+        ? "check:0=pass."
+        : "check:0=pass; pr:null если не нужен; merged:true только после мержа.";
       return [
-        "ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). check:0=pass; pr:null если не нужен; merged:true только после мержа. ID из промпта:",
+        `ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). ${fields} ID из промпта:`,
         markerJson(c, "CF_AGENT_RESULT"),
       ].join("\n");
     } });
@@ -8493,8 +8498,8 @@
     // после десятка tool-вызовов его «не видел» и честно отказывался выдать
     // (правило «не восстанавливай по памяти»). Короткое напоминание в начале
     // праймит маркер; авторитетный формат с IDs остаётся в конце.
-    def("coordinator.prime", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: () =>
-      "Заверши ход маркером последней строкой ответа. Формат и IDs — в конце промпта: скопируй их оттуда, не по памяти. Не забудь маркер." });
+    def("coordinator.prime", { version: 2, ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: () =>
+      "Заверши ход маркером последней строкой; формат и IDs — в конце промпта." });
     def("marker.coordinator", { ruleIds: ["R-MARKER"], audience: ["Coordinator"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход завершён, сдай полный отчёт и последней строкой CF_COORDINATOR_RESULT с этими IDs.",
@@ -8554,8 +8559,8 @@
     // D-035: исполнитель/аудитор раньше не получали адрес папки артефактов
     // (drive.layout — только Координатору) и клали отчёты в корень Диска.
     // Блок короткий, чтобы влезть в бюджет auditor.card без его подъёма.
-    def("drive.artifacts", { ruleIds: ["R-EVIDENCE"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) =>
-      `Артефакты в Arena/${c.drive?.project || "<project>"}/artifacts, не корень Диска; ссылки в поле artifacts.` });
+    def("drive.artifacts", { version: 2, ruleIds: ["R-EVIDENCE"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) =>
+      `Артефакты в Arena/${c.drive?.project || "<project>"}/artifacts, не корень Диска.` });
     def("delivery.retry", { render: (c) => {
       const id = String(c.task?.id || "");
       const url = c.task?.url || (id ? `https://app.notion.com/p/${id.replace(/-/g, "")}` : "");

@@ -194,4 +194,33 @@ for (const req of cases) {
   assert.ok(custom.text.includes('Arena/other-proj/artifacts'), 'project из ctx, не хардкод');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов)');
+// 14. D-036: регрессия K-20 — реальная ДЛИННАЯ зона роли + main-ветка влезают
+// в auditor.card без подъёма бюджета. D-035 добавил блоки, но фикстура K-17 была
+// с короткой зоной; боевая зона Spec Auditor ~150 зн. и пробила бюджет. Лечение:
+// coordinator.prime/drive.artifacts урезаны, marker.agent аудитора не учит pr/merged.
+{
+  const longZone = 'docs/agents/**, tools/script-cat/**, contracts/**, docs/DECISIONS.md, docs/REGULATION.md, docs/design/**, docs/process/**, docs/agents/roles/**';
+  const k20 = dispatchRequest('Auditor', {
+    task: { ...task(), title: 'SYN-1 · K-20 · Промежуточный независимый аудит O-8' },
+    role: { name: 'Spec Auditor', fn: 'Auditor', zone: longZone },
+    target: { repo: 'Creative36711/synapse', baseBranch: 'main' },
+  });
+  const r = PromptCompiler.compile(k20);
+  assert.ok(r.ok, `K-20 с длинной зоной компилируется: ${r.error?.message}`);
+  assert.ok(r.metrics.overheadChars <= 2200, `K-20 overhead ${r.metrics.overheadChars} ≤ 2200 без подъёма бюджета`);
+  // маркер аудитора не содержит pr/merged — значит, и инструкция их не объясняет
+  assert.ok(!r.text.includes('merged:true только после мержа'), 'аудитору не объясняют pr/merged, которых нет в его маркере');
+  const exec = PromptCompiler.compile(dispatchRequest('Executor'));
+  assert.ok(exec.text.includes('merged:true только после мержа'), 'Executor по-прежнему учит pr/merged');
+}
+
+// 15. D-036: длинная зона Координатора + прайм маркера влезают в coordinator.plan.
+{
+  const longZone = 'docs/agents/**, tools/script-cat/**, contracts/**, docs/DECISIONS.md, docs/REGULATION.md, docs/design/**, docs/process/**, docs/agents/roles/**, docs/adr/**';
+  const r = PromptCompiler.compile(planRequest({ role: { name: 'Coordinator', fn: 'Coordinator', zone: longZone } }));
+  assert.ok(r.ok, `plan с длинной зоной компилируется: ${r.error?.message}`);
+  assert.ok(r.metrics.overheadChars <= 3200, `plan overhead ${r.metrics.overheadChars} ≤ 3200 без подъёма бюджета`);
+  assert.equal(r.blocks[0].id, 'coordinator.prime', 'прайм остался первым блоком');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона)');
