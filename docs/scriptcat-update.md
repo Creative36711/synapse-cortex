@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.5**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.6**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -119,6 +119,17 @@
   подняты. Регрессия `relay-marker-ids-reminder-integration` + обновлён
   `relay-review-dispatch-integration`. Контракт protocolVersion **1.9**. Gateway/digest
   не менялись.
+- **1.12.6 (D-041)** — запасной `fetch` ограничен таймаутом: выдача не зависает посреди
+  Running. Боевой SYN-1: карточка встала в Running, но `gateway("append")` завис на
+  fallback-fetch без таймаута; «Выдан ход» и ожидание не создались, сторож через 131 с
+  перезапустил шаг, и Координатор получил план заново при живой карточке. GM-путь
+  ограничен (45 с), а запасной fetch — нет. Теперь `fetchWithTimeout` (fetch +
+  AbortController) во всех трёх запасных fetch по таймауту их GM-путей: шлюз **45 с**,
+  ntfy **15 с**. Отказ явный и ловимый: `gateway("append")` в `dispatchTask` обёрнут в
+  try/catch — журнал попытки не записался, но выдача продолжается. Отметку жизни fetch
+  не ставит. Регрессия `relay-fetch-timeout-integration`; harness gateway/ntfy-проб
+  переведены на `fetchWithTimeout`. Контракт protocolVersion **1.9** не менялся
+  (транспорт-внутренний фикс). Gateway/digest не менялись.
 
 ## 3. Проверки транспорта (локальные, без сети)
 

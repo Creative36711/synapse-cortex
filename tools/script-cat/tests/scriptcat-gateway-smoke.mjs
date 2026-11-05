@@ -48,8 +48,10 @@ const gatewayEnd = source.indexOf('\n  // ────────────�
 assert.ok(gatewayStart > 0 && gatewayEnd > gatewayStart, 'active gateway transport exists');
 const makeGateway = ({ store, request, fetchImpl }) => {
   const waits = [];
+  // D-041: шлюз зовёт fetchWithTimeout (fetch + таймаут); в пробе таймаут не
+  // нужен — pass-through к моку fetch, логика путей и тело запроса не меняются.
   const gateway = new Function(
-    'GM_getValue', 'K', 'request', 'networkish', 'sleep', 'fetch',
+    'GM_getValue', 'K', 'request', 'networkish', 'sleep', 'fetchWithTimeout',
     `${source.slice(gatewayStart, gatewayEnd)}\nreturn gateway;`,
   )(
     (key, fallback) => (store.has(key) ? store.get(key) : fallback),
@@ -57,7 +59,7 @@ const makeGateway = ({ store, request, fetchImpl }) => {
     request,
     networkish,
     async (ms) => { waits.push(ms); },
-    fetchImpl,
+    (url, opts) => fetchImpl(url, opts),
   );
   return { gateway, waits };
 };

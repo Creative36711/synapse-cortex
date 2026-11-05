@@ -14,6 +14,24 @@
     busyAt = Date.now();
     return new Promise((r) => setTimeout(r, ms));
   };
+
+  /**
+   * `fetch` с таймаутом: запасной сетевой путь не имеет права висеть вечно.
+   *
+   * D-041 (05.11.2026): GM-путь ограничен (45 с шлюз, 15 с ntfy), а fallback
+   * `fetch` без AbortController мог зависнуть навсегда. Шаг молчал, сторож
+   * тишины через 120 с перезапускал его посреди выдачи: карточка уже стояла в
+   * Running, а ожидание и промпт ещё не создались — Координатор получал план
+   * заново при живой карточке. Таймаут делает отказ явным и ловимым: вызывающий
+   * разбирает его (журнал попытки не записался — выдача продолжается), а не
+   * зависает. Отметку жизни НЕ ставим: это сетевой запрос, а не честная пауза.
+   */
+  function fetchWithTimeout(url, opts = {}, ms = 45000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`таймаут запроса ${Math.round(ms / 1000)} с`)), ms);
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */
   const flat = (x) => String(x || "").replace(/[\s\u00a0]+/g, " ").trim().toLowerCase();

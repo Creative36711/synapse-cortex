@@ -56,7 +56,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.5";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.6";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -121,7 +121,8 @@
     }
 
     try {
-      const res = await fetch(url, { method: "POST", headers, body: payload });
+      // D-041: таймаут как у GM-пути ntfy (15 с) — fallback не висит вечно.
+      const res = await fetchWithTimeout(url, { method: "POST", headers, body: payload }, 15000);
       if (res.ok) return { via: "fetch", status: res.status };
       const text = (await res.text()).slice(0, 120);
       throw new Error(`HTTP ${res.status} ${text}`.trim());
@@ -140,7 +141,8 @@
       out.push(`GM: ${e.message}`);
     }
     try {
-      const res = await fetch(`${NTFY_BASE}/v1/health`, { cache: "no-store" });
+      // D-041: таймаут как у GM-пути ntfy (15 с) — fallback не висит вечно.
+      const res = await fetchWithTimeout(`${NTFY_BASE}/v1/health`, { cache: "no-store" }, 15000);
       out.push(`fetch: HTTP ${res.status} ${(await res.text()).slice(0, 80)}`.trim());
     } catch (e) {
       out.push(`fetch: ${e.message}`);

@@ -29,12 +29,14 @@ const end = src.indexOf('function notifyNtfy(');
 assert.ok(start > 0 && end > start, 'блок транспорта найден');
 const block = src.slice(start, end);
 
+// D-041: ntfy зовёт fetchWithTimeout (fetch + таймаут); в пробе таймаут не
+// нужен — pass-through к моку fetch, логика путей не меняется.
 const load = (stubs = {}) =>
   new Function(
     'GM_xmlhttpRequest',
-    'fetch',
+    'fetchWithTimeout',
     `${block}\nreturn { normalizeNtfyTopic, ntfyPublish, ntfyHealth };`,
-  )(stubs.GM_xmlhttpRequest, stubs.fetch);
+  )(stubs.GM_xmlhttpRequest, (url, opts) => stubs.fetch(url, opts));
 
 // 3.1. Старый топик Мастера проходит и в исходном виде, и ссылкой.
 const { normalizeNtfyTopic } = load();
