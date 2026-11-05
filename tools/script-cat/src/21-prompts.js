@@ -123,6 +123,7 @@
         reworkLimit: C.reworkLimit, returned: returnBlock(mission),
       },
       turnId,
+      note,
       queue: { summary: queueSummary, ready, rework, draft: drafts, answerLine, openLine: openQuestions, answersLine: answers },
       delivery: { tier: "full", attempt: 1 },
     }, `plan ${mission.id}`);

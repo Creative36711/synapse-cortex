@@ -23,14 +23,14 @@
     });
     def("coordinator.plan", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "plan.note", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
       budget: { overhead: 3200 },
     });
     def("coordinator.recovery", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "plan.note", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 1500 },

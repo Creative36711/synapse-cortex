@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.6
+// @version      1.12.7
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -579,7 +579,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.6";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.7";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8594,6 +8594,13 @@
     def("delivery.recovery", { render: () =>
       "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
+    // D-042: обратная связь Координатору (отказ выдачи, подсказка по очереди).
+    // Раньше note передавался в coordinatorPrompt, но не попадал в контекст —
+    // Координатор не видел причину отказа и повторял запрещённый ход до паузы.
+    def("plan.note", { verbatim: true, audience: ["Coordinator"], render: (c) => {
+      const n = String(c.note || "").trim();
+      return n ? `Обратная связь транспорта: ${n}` : "";
+    } });
     def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
       "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
     // D-035: исполнитель/аудитор раньше не получали адрес папки артефактов
@@ -8678,14 +8685,14 @@
     });
     def("coordinator.plan", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "plan.note", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
       budget: { overhead: 3200 },
     });
     def("coordinator.recovery", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "plan.note", "authority.coordinator", "delivery.recovery", "queue.snapshot", "answers.delta", "marker.coordinator"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 1500 },
@@ -9206,6 +9213,7 @@
         reworkLimit: C.reworkLimit, returned: returnBlock(mission),
       },
       turnId,
+      note,
       queue: { summary: queueSummary, ready, rework, draft: drafts, answerLine, openLine: openQuestions, answersLine: answers },
       delivery: { tier: "full", attempt: 1 },
     }, `plan ${mission.id}`);
@@ -9892,8 +9900,17 @@
       const why = `«${name}» — приёмка (Reviewer): обычную рабочую карточку ей не выдают. ` +
         "Переназначь её подходящему Auditor или Executor; вопросы и предложения по-прежнему направляются приёмке, " +
         "а завершённая очередь передаётся ей через next: done.";
-      if (misses >= 2) return { kind: "pause", reason: `${why} Координатор повторил запретную выдачу три раза; очередь сохранена.` };
-      return { kind: "ask", note: why };
+      // D-042: отказ должен быть исполнимым. Координатор упорно называл Warden,
+      // потому что не понимал, КАК исправить: карточка стояла в Ready с «Кому» =
+      // Warden. Называем поле, доступные рабочие роли и что ратификация/правка
+      // файлов — работа исполнителя, а приёмщик лишь отвечает на вопросы.
+      const workers = list.filter((r) => ["Executor", "Auditor"].includes(r.fn)).map((r) => r.name);
+      const how = ` Исправь адресацию: в карточке смени поле «Кому» с «${name}» на рабочую роль` +
+        (workers.length ? ` (${workers.join(", ")})` : " (Executor или Auditor)") +
+        `, оставь карточку в Ready и повтори next с этой ролью. Не ставь «Кому» = «${name}» снова: ` +
+        "ратификация решений, статус ADR и любая правка файлов — работа исполнителя по карточке; приёмщик только отвечает на вопросы и принимает миссию.";
+      if (misses >= 2) return { kind: "pause", reason: `${why}${how} Координатор повторил запретную выдачу три раза; очередь сохранена.` };
+      return { kind: "ask", note: `${why}${how}` };
     }
     if (!target) {
       // Карточка этой роли может уже лежать в Ready — тогда дело не в
@@ -12144,6 +12161,7 @@
     const recoveryEnvelope = PromptCompiler.compile({
       kind: "plan", role: promptRole(role), mission: { id: mission.id, name: rt(mission.properties["Миссия"]) },
       turnId,
+      note,
       queue: { summary, ready: readyLine(queue.ready), rework: reworkLine(queue.rework), draft: drafts, answerLine, openLine: briefing.openLine, answersLine: briefing.answersLine },
       delivery: { tier: "recovery" },
     });

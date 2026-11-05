@@ -215,6 +215,13 @@
     def("delivery.recovery", { render: () =>
       "Это продолжение того же хода после сбоя доставки, не новая задача и не новая выдача. Сохрани все ID. Разбери снимок очереди и продолжи по правилам своей роли." });
     def("mission.returned", { verbatim: true, audience: ["Coordinator"], render: (c) => c.mission?.returned || "" });
+    // D-042: обратная связь Координатору (отказ выдачи, подсказка по очереди).
+    // Раньше note передавался в coordinatorPrompt, но не попадал в контекст —
+    // Координатор не видел причину отказа и повторял запрещённый ход до паузы.
+    def("plan.note", { verbatim: true, audience: ["Coordinator"], render: (c) => {
+      const n = String(c.note || "").trim();
+      return n ? `Обратная связь транспорта: ${n}` : "";
+    } });
     def("drive.layout", { version: 2, ruleIds: ["R-REPO-BOUNDARY"], audience: ["Coordinator"], render: () =>
       "Drive: Arena/<project>/{logs,payloads,artifacts}; раскладка — docs/agents/drive.md. Payload Drive File ID — большое задание из Arena/<project>/payloads: транспорт шлёт указатель, оракул остаётся в промпте; для малых карточек обычно не нужен. Журнал попытки — logs; свободные результаты — artifacts." });
     // D-035: исполнитель/аудитор раньше не получали адрес папки артефактов

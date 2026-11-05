@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.6**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.7**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -130,6 +130,18 @@
   не ставит. Регрессия `relay-fetch-timeout-integration`; harness gateway/ntfy-проб
   переведены на `fetchWithTimeout`. Контракт protocolVersion **1.9** не менялся
   (транспорт-внутренний фикс). Gateway/digest не менялись.
+- **1.12.7 (D-042)** — обратная связь Координатору доходит до промпта; Warden не получает
+  рабочих карточек. Боевой SYN-1 · K-22: Координатор вернул карточку в Ready с «Кому» =
+  Warden и трижды назвал `next:"Warden"`; транспорт верно отказал и встал в паузу.
+  Причина петли: заметка отказа (`note`) передавалась в `coordinatorPrompt`, но не
+  попадала в compile-контекст, и блока `plan.note` не было — Координатор не видел причину
+  и повторял ход. Теперь verbatim-блок `plan.note` («Обратная связь транспорта: …») в
+  `coordinator.plan`/`coordinator.recovery`, `note` кладётся в контекст. Отказ Reviewer
+  исполним: поле «Кому», активные Executor/Auditor, оставить Ready. Warden (Reviewer)
+  карточек не принимает — только обратная связь; защита (ask + пауза после трёх попыток)
+  не ослаблена. Бюджет overhead не поднят. Регрессия
+  `relay-coordinator-note-delivery-integration`. Контракт protocolVersion **1.10**
+  (аддитивно). Gateway/digest не менялись.
 
 ## 3. Проверки транспорта (локальные, без сети)
 
