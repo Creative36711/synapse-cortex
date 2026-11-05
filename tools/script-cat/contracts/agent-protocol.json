@@ -1,6 +1,6 @@
 {
-  "protocolVersion": "1.5",
-  "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
+  "protocolVersion": "1.6",
+  "sourceSha": "a84ba46f196f44bbe54139020bef809682ef59ae",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -714,5 +714,15 @@
     "fix": "coordinator.prime и drive.artifacts урезаны; marker.agent аудитора больше не объясняет pr/merged (их нет в его маркере). Бюджеты НЕ подняты",
     "budgetsRaised": false,
     "regression": "K-20 с длинной зоной + main компилируется в auditor.card ≤2200; plan с длинной зоной ≤3200; Executor по-прежнему учит pr/merged (prompts-smoke §14–15)"
+  },
+  "d037": {
+    "decision": "D-037",
+    "summary": "Сторож ADR обходит все репозитории профиля, а не только главный: предложение из второго репозитория доходит до приёмки",
+    "incident": "вопрос по ADR SYN-1 (репозиторий synapse) завис в «Ждёт»: сторож читал docs/decisions только главного репозитория профиля synapse-cortex, где папки нет (404), поэтому полный текст с Git blob SHA не дописывался и предохранитель не пропускал вопрос к приёмке",
+    "cause": "refreshDecisions был зашит на C.repo/C.branch (ограничение 1.8.2); 404 папки decisions уходил в catch и возвращал пустой снимок — молчаливый no-op, самолечения не было",
+    "fix": "refreshDecisions итерирует C.repos (fallback на single-repo C.repo/C.branch); 404 папки одного репозитория не останавливает обход; кэш cfn-adr-text составной repo/file с миграцией плоских ключей; строка несёт repo/branch; proposalQuestion строит ссылку и ключ дедупликации из репозитория предложения",
+    "budgetsRaised": false,
+    "regression": "relay-adr-multirepo-integration: главный репозиторий без папки decisions (404) не роняет обход; предложение второго репозитория найдено, несёт repo/branch, доходит до доставки; ссылка и ключ из репозитория предложения; миграция плоского кэша; обратная совместимость single-repo",
+    "limitation": "дедупликация adrRefsOf/sameQuestionRow/decidedAdrNames идёт по имени файла (file:<имя>) кросс-репо: имена ADR должны быть уникальны в профиле"
   }
 }

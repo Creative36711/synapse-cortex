@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.1**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.2**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -81,6 +81,16 @@
   без подъёма бюджетов: `coordinator.prime`/`drive.artifacts` урезаны, `marker.agent`
   аудитора не учит `pr/merged` (их нет в его маркере). Проба K-20 с длинной зоной
   (`prompts-smoke` §14–15). Контракт protocolVersion **1.5**. Gateway/digest не менялись.
+- **1.12.2 (D-037)** — мультирепо-сторож ADR: предложение второго репозитория доходит
+  до приёмки. Боевой вопрос по `SYN-1` (репозиторий `synapse`) завис в «Ждёт»: сторож
+  `refreshDecisions` читал `docs/decisions` только главного репозитория профиля
+  `synapse-cortex`, где папки нет (404), и молча возвращал пустой снимок — полный текст
+  с Git blob SHA не дописывался, предохранитель не пропускал вопрос к приёмке. Лечение:
+  сторож обходит все `C.repos` (fallback single-repo), 404 папки одного репозитория не
+  роняет обход, кэш `cfn-adr-text` составной `repo/file` с миграцией плоских ключей,
+  строка несёт `repo`/`branch`, ссылка и ключ дедупликации — из репозитория предложения.
+  Регрессия `relay-adr-multirepo-integration`. Контракт protocolVersion **1.6**.
+  Gateway/digest не менялись. Имена ADR должны быть уникальны в профиле (дедуп по имени).
 
 ## 3. Проверки транспорта (локальные, без сети)
 
@@ -90,7 +100,7 @@
 npm run scriptcat:check     # relay.user.js соответствует src/ (node build.mjs --check)
 npm run scriptcat:guard     # переносимый комплект не содержит прежнего имени проекта
 npm run test                # 82 smoke-пробы транспорта (включая provisioning)
-npm run test:regression     # 15 интеграционных проб (включая схему Notion в фикстуре)
+npm run test:regression     # 16 интеграционных проб (включая схему Notion в фикстуре)
 npm run verify              # всё вышеперечисленное подряд
 ```
 

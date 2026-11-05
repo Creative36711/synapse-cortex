@@ -102,7 +102,12 @@
         const page = await notion("GET", `pages/${item.id}`);
         if (sel(page.properties?.["Статус"]) !== Q.wait) return false;
         const complete = await questionFromRowComplete(page);
-        if (!(await verifiedAdrMaterial(complete))) throw new Error("полный текст не совпадает с Git blob SHA");
+        if (!(await verifiedAdrMaterial(complete))) {
+          const hasMarker = /\bCF_ADR_CONTENT\s+[0-9a-f]{40}\b/i.test(String(complete.fullText || ""));
+          throw new Error(hasMarker
+            ? "полный текст не совпадает с Git blob SHA"
+            : "сторож ещё не дописал полный текст файла с Git blob SHA");
+        }
         item = { ...item, fullText: complete.fullText, url: complete.url || item.url };
       } catch (e) {
         logThrottled(`adr-body:${item.id}`, `Предложение не передано приёмке: ${e.message}. Вопрос и ожидание сохранены; проверьте полный текст и SHA.`, true);

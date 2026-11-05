@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.1
+// @version      1.12.2
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -561,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.1";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.2";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -11125,7 +11125,11 @@
     const content = String(row?.content || "");
     if (!content.trim() || !/^[0-9a-f]{40}$/i.test(String(row?.sha || ""))) throw new Error(`Полный текст и SHA предложения ${file || "без имени"} не прочитаны.`);
     const path = `${ADR_FOLDER}/${file}`;
-    const url = `https://github.com/${C.repo}/blob/${(C.branch || "main").split("/").map(encodeURIComponent).join("/")}/${ADR_FOLDER}/${encodeURIComponent(file)}`;
+    // D-037: репозиторий и ветка берутся из самого предложения (сторож обходит
+    // все репозитории профиля), а не только из главного C.repo/C.branch.
+    const repo = String(row?.repo || C.repo || "");
+    const branch = String(row?.branch || C.branch || "main");
+    const url = `https://github.com/${repo}/blob/${branch.split("/").map(encodeURIComponent).join("/")}/${ADR_FOLDER}/${encodeURIComponent(file)}`;
     return {
       text: `Предложение ${path}: принять, отклонить или оставить как есть?`,
       url,
@@ -11133,7 +11137,7 @@
       contentSha: row.sha,
       contentText: content.trim(),
       fullText: fullQuestionText([
-        `Предложение лежит в репозитории: ${path} (${C.branch || "main"}), статус «proposed».`,
+        `Предложение лежит в репозитории: ${path} (${repo}@${branch}), статус «proposed».`,
         `Материал: ${url}`,
         missionName ? `Миссия: ${missionName}` : "",
         "",
@@ -11216,7 +11220,11 @@
           mission: missionName,
           // Идентификаторы старых строк дают новому уточнению свой ключ, даже
           // если прежнее уточнение затем ошибочно закрыли без ответа.
-          key: needsReview ? `adr-full-confirm:${row.file}:${row.sha}:${problems.join(":")}` : `adr-full:${row.file}:${row.sha}`,
+          // D-037: репозиторий входит в ключ, когда он известен, — одноимённые
+          // файлы из разных репозиториев не дедуплицируются между собой.
+          key: needsReview
+            ? `adr-full-confirm:${row.repo ? `${row.repo}/` : ""}${row.file}:${row.sha}:${problems.join(":")}`
+            : `adr-full:${row.repo ? `${row.repo}/` : ""}${row.file}:${row.sha}`,
         });
       } catch (e) {
         dbg("решения: предложение не передано приёмке", e.message);
@@ -11230,29 +11238,56 @@
     if (!force && Date.now() - cache.at < C.adrCheckMs) return cache.rows;
     const token = GM_getValue(K.ghToken, "");
     try {
-      const list = await request(
-        "GET",
-        `https://api.github.com/repos/${C.repo}/contents/${ADR_FOLDER}?ref=${encodeURIComponent(C.branch || "main")}`,
-        githubHeaders(token),
-      );
-      if (!Array.isArray(list)) throw new Error("GitHub вернул не список файлов");
+      // D-037: сторож обходит ВСЕ репозитории профиля, а не только главный.
+      // Предложение может лежать во втором репозитории (например, synapse),
+      // и тогда полный текст с SHA никогда не дописывался бы в вопрос —
+      // предохранитель не пропустил бы его к приёмке. 404 папки decisions
+      // в одном репозитории не останавливает обход остальных.
+      const repos = (Array.isArray(C.repos) && C.repos.length
+        ? C.repos
+        : [{ repo: C.repo, branch: C.branch || "main" }]).filter((r) => r && r.repo);
       const texts = GM_getValue("cfn-adr-text", {}) || {};
-      const rows = [];
-      for (const item of list) {
-        if (!item || item.type !== "file" || !/\.md$/i.test(item.name || "")) continue;
-        const cached = texts[item.name];
-        let status = cached && cached.sha === item.sha ? cached.status : "";
-        let content = cached && cached.sha === item.sha ? String(cached.content || "") : "";
-        if (!status || (status === ADR_PROPOSED && !content)) {
-          const fileUrl = `https://api.github.com/repos/${C.repo}/contents/${ADR_FOLDER}/${encodeURIComponent(item.name)}?ref=${encodeURIComponent(C.branch || "main")}`;
-          const file = await request("GET", fileUrl, githubHeaders(token));
-          content = b64Text(file && file.content);
-          if (!content || file.sha !== item.sha) throw new Error(`Не прочитан полный текст или изменился SHA ${item.name}.`);
-          status = adrStatusOf(content) || "нет";
-          texts[item.name] = { sha: item.sha, status, ...(status === ADR_PROPOSED ? { content } : {}) };
+      // Плоский кэш до D-037 относился к главному репозиторию: переносим его
+      // под составной ключ, чтобы имена файлов из разных репозиториев не смешивались.
+      for (const key of Object.keys(texts)) {
+        if (!key.includes("/")) {
+          texts[`${C.repo}/${key}`] = texts[key];
+          delete texts[key];
         }
-        if (status === ADR_PROPOSED)
-          rows.push({ file: item.name, sha: item.sha, url: item.html_url || "", content });
+      }
+      const rows = [];
+      for (const entry of repos) {
+        const repo = String(entry.repo);
+        const branch = String(entry.branch || "main");
+        let list;
+        try {
+          list = await request(
+            "GET",
+            `https://api.github.com/repos/${repo}/contents/${ADR_FOLDER}?ref=${encodeURIComponent(branch)}`,
+            githubHeaders(token),
+          );
+        } catch (e) {
+          if (Number(e.status) === 404) continue; // папки decisions нет — не ошибка
+          throw e;
+        }
+        if (!Array.isArray(list)) throw new Error("GitHub вернул не список файлов");
+        for (const item of list) {
+          if (!item || item.type !== "file" || !/\.md$/i.test(item.name || "")) continue;
+          const cacheKey = `${repo}/${item.name}`;
+          const cached = texts[cacheKey];
+          let status = cached && cached.sha === item.sha ? cached.status : "";
+          let content = cached && cached.sha === item.sha ? String(cached.content || "") : "";
+          if (!status || (status === ADR_PROPOSED && !content)) {
+            const fileUrl = `https://api.github.com/repos/${repo}/contents/${ADR_FOLDER}/${encodeURIComponent(item.name)}?ref=${encodeURIComponent(branch)}`;
+            const file = await request("GET", fileUrl, githubHeaders(token));
+            content = b64Text(file && file.content);
+            if (!content || file.sha !== item.sha) throw new Error(`Не прочитан полный текст или изменился SHA ${item.name}.`);
+            status = adrStatusOf(content) || "нет";
+            texts[cacheKey] = { sha: item.sha, status, ...(status === ADR_PROPOSED ? { content } : {}) };
+          }
+          if (status === ADR_PROPOSED)
+            rows.push({ file: item.name, sha: item.sha, url: item.html_url || "", content, repo, branch });
+        }
       }
       GM_setValue("cfn-adr-text", texts);
       const answered = await decidedAdrNames();
@@ -12450,7 +12485,12 @@
         const page = await notion("GET", `pages/${item.id}`);
         if (sel(page.properties?.["Статус"]) !== Q.wait) return false;
         const complete = await questionFromRowComplete(page);
-        if (!(await verifiedAdrMaterial(complete))) throw new Error("полный текст не совпадает с Git blob SHA");
+        if (!(await verifiedAdrMaterial(complete))) {
+          const hasMarker = /\bCF_ADR_CONTENT\s+[0-9a-f]{40}\b/i.test(String(complete.fullText || ""));
+          throw new Error(hasMarker
+            ? "полный текст не совпадает с Git blob SHA"
+            : "сторож ещё не дописал полный текст файла с Git blob SHA");
+        }
         item = { ...item, fullText: complete.fullText, url: complete.url || item.url };
       } catch (e) {
         logThrottled(`adr-body:${item.id}`, `Предложение не передано приёмке: ${e.message}. Вопрос и ожидание сохранены; проверьте полный текст и SHA.`, true);

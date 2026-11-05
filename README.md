@@ -15,7 +15,7 @@
 ## Быстрый старт
 
 ```bash
-npm run verify        # сборка ScriptCat + guard + 72 smoke + 14 regression
+npm run verify        # сборка ScriptCat + guard + 72 smoke + 16 regression
 ```
 
 Переменных окружения и секретов для этой проверки не требуется. Ключи Notion / Drive / GitHub
