@@ -1,6 +1,6 @@
 {
-  "protocolVersion": "1.8",
-  "sourceSha": "83d311296254656707c6c6702a6111a07788e30b",
+  "protocolVersion": "1.9",
+  "sourceSha": "f3df3f80dc2759277053577915882968535ad1cc",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -747,5 +747,16 @@
     "executorTotalBudget": 7500,
     "regression": "prompts-smoke §17: карточка K-21 total >6500 и ≤7500 со старым лимитом даёт паузу, с новым доставляется целиком; оракул и инварианты не порезаны; пин DISPATCH_TOTAL.Executor=7500",
     "overflowPath": "карточки больше 7500 — через payload-канал D-034 (для assignment) или отдельное явное решение; оракул/Scope не режутся"
+  },
+  "d040": {
+    "decision": "D-040",
+    "summary": "Маркер без dispatch_id/run_id этой выдачи напоминает с точными ID (лестница markerReminders), а не зовёт Мастера сразу; чужие/битые ID по-прежнему пауза",
+    "incident": "K-21 (synapse): Executor Core выполнил работу и слил PR #8, но финальный маркер прислал как CF_AGENT_RESULT: {\"task\":\"K-21\",...,\"merged\":true,\"pr\":...} — с двоеточием, с task вместо dispatch_id/run_id и без status. Транспорт верно отказал в подтверждении (защита от зачёта чужой/прошлой попытки), но сразу ушёл в паузу marker-mismatch, минуя напоминания; цикл встал и потребовал ручного вмешательства при сделанной работе",
+    "cause": "ветка mismatch в submitExecutor не различала «ID выдачи нет» (формат-дефект) и «ID чужие/битые» (возможно ответ прошлой выдачи): оба случая сразу пауза. Лестница напоминаний markerMissing применялась только когда маркера не было вовсе",
+    "fix": "dispatchIdState(result,expect) классифицирует match/missing/conflict. missing (ни один присутствующий ID не противоречит выдаче, но ID не хватает) → markerMissing(...,why=ids) шлёт до markerReminders напоминаний с точными dispatch_id/run_id (блок reminder.marker why=ids просит повторить только маркер, работу не переделывать). conflict → прежняя пауза marker-mismatch. Значения ID не подменяются (adoptIds), запись в Notion по неверному ID не идёт",
+    "budgetsRaised": false,
+    "safety": "проверка ID не ослаблена: чужие/битые/противоречащие ID — сразу пауза; напоминание только повторяет маркер с ID из промпта, ничего не принимает и не подменяет; после markerReminders напоминаний — пауза",
+    "regression": "relay-marker-ids-reminder-integration: dispatchIdState на боевом маркере K-21 (missing), конфликт/битые/противоречащие синонимы (conflict), короткие синонимы (match); пины маршрутизации submitExecutor и reminder.marker why=ids в тотал-бюджете 900 с точными ID. relay-review-dispatch-integration: нет run/dispatch сдачи → напоминание ids, чужие ID → пауза",
+    "reminderWhy": "ids — маркер есть, но без dispatch_id/run_id этой выдачи; thin — маркер без отчёта; пусто — маркера нет"
   }
 }

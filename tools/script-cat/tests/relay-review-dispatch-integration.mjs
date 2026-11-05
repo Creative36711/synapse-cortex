@@ -286,7 +286,10 @@ for (const mergeResult of ['closed', 'unconfirmed', 'claim-rejected']) {
 }
 
 // Неверные идентификаторы/вердикт/статус не подставляются под текущий run.
-for (const [label, reviewOverrides, agentOverrides] of [
+// D-040: «ID выдачи нет» (формат-дефект) — напоминание с точными ID через
+// markerMissing("ids"); «ID чужие/битые» и дефекты вердикта — пауза. Ни в одном
+// случае ID не подменяются и запись в Notion не идёт.
+for (const [label, reviewOverrides, agentOverrides, reminds] of [
   ['старый run вердикта', { run_id: OTHER_RUN }, {}],
   ['чужая карточка вердикта', { dispatch_id: OTHER_MISSION }, {}],
   ['чужая миссия вердикта', { mission_id: OTHER_MISSION }, {}],
@@ -294,8 +297,8 @@ for (const [label, reviewOverrides, agentOverrides] of [
   ['недопустимый вердикт', { verdict: 'maybe' }, {}],
   ['rework без замечаний', { verdict: 'rework' }, {}],
   ['старый run сдачи', {}, { run_id: OTHER_RUN }],
-  ['нет run сдачи', {}, { run_id: '' }],
-  ['нет dispatch сдачи', {}, { dispatch_id: '' }],
+  ['нет run сдачи', {}, { run_id: '' }, true],
+  ['нет dispatch сдачи', {}, { dispatch_id: '' }, true],
   ['противоречащий синоним run', {}, { run_id: RUN, run: OTHER_RUN }],
   ['противоречащий синоним dispatch вердикта', { dispatch_id: CARD, dispatch: OTHER_MISSION }, {}],
   ['не submitted', {}, { status: 'working' }],
@@ -306,7 +309,12 @@ for (const [label, reviewOverrides, agentOverrides] of [
   assert.equal(state(h.pages.get(CARD)), 'Running', label);
   assert.equal(h.calls.writes, 0, label);
   assert.equal(h.calls.patches.length, 0, label);
-  assert.equal(h.pauses.at(-1).kind, 'marker-mismatch', label);
+  if (reminds) {
+    assert.equal(h.calls.markerMissing.at(-1)?.why, 'ids', `${label}: напоминание с ID, не пауза`);
+    assert.equal(h.pauses.length, 0, `${label}: напоминание, а не пауза`);
+  } else {
+    assert.equal(h.pauses.at(-1).kind, 'marker-mismatch', label);
+  }
   assert.deepEqual(h.getExpect(), e, label);
   const retained = h.storage.get('cfn-rejected-results-v1');
   if (/run|dispatch|карточка вердикта/.test(label)) {

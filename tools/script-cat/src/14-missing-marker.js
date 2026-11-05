@@ -13,11 +13,15 @@
   }
 
   /**
-   * Напоминание о формате. Две формулировки — чтобы подряд идущие напоминания
-   * не выглядели механической копией, и чтобы в чате не было слова ScriptCat.
+   * Напоминание о формате. Несколько формулировок — чтобы подряд идущие
+   * напоминания не выглядели механической копией, и чтобы в чате не было слова
+   * ScriptCat.
    *
    * why = "thin" — маркер есть, а отчёта нет (NAR-1.8, 23.10.2026: агент понял
    * «ответь одной последней строкой» буквально, а в журнал попал только маркер).
+   * why = "ids" — маркер есть, но без dispatch_id/run_id этой выдачи (D-040,
+   * 05.11.2026: Executor прислал маркер с «task» вместо ID). Работа сделана —
+   * просим повторить только маркер с ID из напоминания, не переделывать ход.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
     const ctx = {
@@ -373,10 +377,12 @@
       log(
         why === "thin"
           ? `${role.name} прислал только маркер ${markerName}, без отчёта — напоминание ${sent + 1} из ${C.markerReminders}.`
+          : why === "ids"
+          ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : "Relay: нет маркера" },
       );
       await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
         missionId: expect.missionId,
@@ -403,6 +409,9 @@
       (why === "thin"
         ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: проверьте страницу агента. "
+        : why === "ids"
+        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
