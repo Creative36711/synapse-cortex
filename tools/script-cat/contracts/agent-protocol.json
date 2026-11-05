@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.4",
+  "protocolVersion": "1.5",
   "sourceSha": "7bed48dba5d77ebd005109fe953349aa25be1f31",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
@@ -705,5 +705,14 @@
     "auditorCardBudget": 2200,
     "regression": "K-17-подобная карточка компилируется в auditor.card ≤2200 с блоком drive.artifacts; скелет auditor.card ≤2050; coordinator.plan/recovery несут coordinator.prime и держат бюджет",
     "driveCleanup": "отчёты Spec Auditor SYN-1 K-17/K-19, лежавшие в корне Диска, перенесены в artifacts (перенос не меняет ID/URL, ретро-переименование запрещено D-031)"
+  },
+  "d036": {
+    "decision": "D-036",
+    "summary": "Хотфикс регрессии D-035: длинная зона роли пробила бюджет auditor.card/coordinator.plan",
+    "incident": "боевая K-20 (Spec Auditor, зона ~150 зн., main): overhead 2209 > 2200; plan Координатора: 3202 > 3200. Обе паузы budget_exceeded, карточка возвращена в Ready",
+    "cause": "блоки D-035 (coordinator.prime 130, drive.artifacts 78) съели запас; фикстура K-17 была с короткой зоной (~35 зн.) и не ловила боевую длинную зону",
+    "fix": "coordinator.prime и drive.artifacts урезаны; marker.agent аудитора больше не объясняет pr/merged (их нет в его маркере). Бюджеты НЕ подняты",
+    "budgetsRaised": false,
+    "regression": "K-20 с длинной зоной + main компилируется в auditor.card ≤2200; plan с длинной зоной ≤3200; Executor по-прежнему учит pr/merged (prompts-smoke §14–15)"
   }
 }
