@@ -1,6 +1,6 @@
 {
-  "protocolVersion": "1.6",
-  "sourceSha": "a84ba46f196f44bbe54139020bef809682ef59ae",
+  "protocolVersion": "1.7",
+  "sourceSha": "1c8fc66fc563634f07da7c1a9bbf354aa5491803",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -724,5 +724,16 @@
     "budgetsRaised": false,
     "regression": "relay-adr-multirepo-integration: главный репозиторий без папки decisions (404) не роняет обход; предложение второго репозитория найдено, несёт repo/branch, доходит до доставки; ссылка и ключ из репозитория предложения; миграция плоского кэша; обратная совместимость single-repo",
     "limitation": "дедупликация adrRefsOf/sameQuestionRow/decidedAdrNames идёт по имени файла (file:<имя>) кросс-репо: имена ADR должны быть уникальны в профиле"
+  },
+  "d038": {
+    "decision": "D-038",
+    "summary": "Зона роли вынесена в verbatim-факт role.zone: длинная зона Executor Core больше не пробивает бюджет executor.card",
+    "incident": "боевая K-21 (Executor Core, зона ~158 зн., main): overhead 2859 > 2800 executor.card, пауза budget_exceeded, ход не передан. D-036 закрыл auditor.card и coordinator.plan, но executor.card с длинной зоной не проверялся",
+    "cause": "зона роли инлайнилась в authority.core как overhead; боевая длинная зона (~158 зн.) съела запас. Фикстуры D-036 покрывали auditor/plan, но не executor.card",
+    "fix": "зона роли — факт (как task.scope), вынесена в verbatim-блок role.zone и не входит в overhead; authority.core несёт только правило о зонах; role.zone добавлен во все 4 профиля с authority.core и запрещён в continuation/pilot; команда мержа не дублируется в authority.executor (остаётся в git.executor). Бюджеты НЕ подняты",
+    "budgetsRaised": false,
+    "executorCardBudget": 2800,
+    "regression": "K-21 с длинной зоной Executor Core компилируется в executor.card ≤2800 (overhead ~2678, запас ~122); зона видна целиком и verbatim; overhead не зависит от длины зоны; Executor по-прежнему учит pr/merged; команда мержа в git.executor (prompts-smoke §16)",
+    "zoneIndependentOverhead": true
   }
 }

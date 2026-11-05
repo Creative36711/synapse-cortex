@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.2
+// @version      1.12.3
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -561,7 +561,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.2";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.3";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8379,11 +8379,17 @@
     def("repo.boundary", { ruleIds: ["R-REPO-BOUNDARY"], render: () =>
       "D-022: пиши только в целевой repo. synapse (MIT) — роли ядра; cortex закрыт и ролям ядра не виден; ссылка на cortex в synapse — дефект." });
 
-    def("authority.core", { ruleIds: ["R-ZONES", "R-SECRETS"], render: (c) =>
-      `Зона (${c.role?.zone || "своя"}) — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай.` });
+    // D-038: зона роли — это факт (как task.scope), а не шаблон. Вынесена в
+    // verbatim-блок role.zone и не входит в overhead; authority.core несёт только
+    // правило о зонах. Боевая длинная зона Executor Core (~158 зн.) пробивала
+    // executor.card (2859 > 2800); вынос факта даёт запас без подъёма бюджета.
+    def("role.zone", { verbatim: true, render: (c) => line("Зона роли", c.role?.zone) });
 
-    def("authority.executor", { ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
-      "Исполнитель: правишь зону+Scope, PR мержишь сам (gh pr merge <N> --squash). Чужая правка — карточкой владельцу." });
+    def("authority.core", { version: 2, ruleIds: ["R-ZONES", "R-SECRETS"], render: () =>
+      "Зона роли — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай." });
+
+    def("authority.executor", { version: 2, ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
+      "Исполнитель: правишь зону+Scope, PR мержишь сам. Чужая правка — карточкой владельцу." });
 
     def("authority.auditor", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: () =>
       "Аудитор: только чтение и проверка; ни ветки/коммита/пуша/PR. Находки — в отчёт, чинит исполнитель. Новые проверки можно, ослаблять нельзя." });
@@ -8624,21 +8630,21 @@
 
     def("executor.card", {
       audience: ["Executor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["queue.coordinator", "review.protocol", "pilot.brief", "pilot.stop"],
       budget: { overhead: 2800 },
     });
     def("auditor.card", {
       audience: ["Auditor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["git.executor", "queue.coordinator", "pilot.brief"],
       budget: { overhead: 2200 },
     });
     def("coordinator.plan", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
       budget: { overhead: 3200 },
@@ -8652,7 +8658,7 @@
     });
     def("reviewer.mission", {
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
@@ -8690,7 +8696,7 @@
       audience: ["pilot"], marker: null,
       blocks: ["pilot.repo", "pilot.brief", "pilot.stop"],
       requiredFacts: ["pilot.brief", "pilot.startSha"],
-      forbidden: team.flatMap(() => []).concat(["authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer", "marker.agent", "marker.coordinator", "marker.review", "marker.answer", "questions.protocol", "adr.protocol", "repo.boundary", "phases.bans"]),
+      forbidden: team.flatMap(() => []).concat(["authority.core", "role.zone", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer", "marker.agent", "marker.coordinator", "marker.review", "marker.answer", "questions.protocol", "adr.protocol", "repo.boundary", "phases.bans"]),
       budget: { overhead: 250 },
     });
 
@@ -8698,7 +8704,7 @@
     // Аудитория строго по типу хода; маркер исходного хода; запрещены блоки
     // полного задания, очереди, регламента и pilot-блоки. Overhead ≤ 700.
     const contForbidden = ["identity.task", "identity.mission", "repo.target", "repo.boundary",
-      "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+      "authority.core", "role.zone", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
       "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
       "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
       "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",

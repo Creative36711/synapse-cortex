@@ -9,7 +9,7 @@
 
 ## 1. Что перенесено как есть
 
-`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.2**): userscript `relay.user.js`,
+`tools/script-cat/` — транспорт Relay/ScriptCat (на переносе 1.6.0, сейчас **1.12.3**): userscript `relay.user.js`,
 исходники `src/`, шаблон баз Notion `NOTION-TEMPLATE.json`, Drive Gateway `drive-gateway.gs`
 и манифест `appsscript.json`. Код транспорта не переписывался под Synapse: проектные адреса
 задаются профилем (четыре источника Notion, регламент, репозиторий, базовая ветка, папка Drive).
@@ -91,6 +91,15 @@
   строка несёт `repo`/`branch`, ссылка и ключ дедупликации — из репозитория предложения.
   Регрессия `relay-adr-multirepo-integration`. Контракт protocolVersion **1.6**.
   Gateway/digest не менялись. Имена ADR должны быть уникальны в профиле (дедуп по имени).
+- **1.12.3 (D-038)** — зона роли как verbatim-факт: длинная зона Executor не пробивает
+  бюджет. Боевая K-21 (Executor Core, зона ~158 зн.) дала overhead 2859 > 2800
+  `executor.card`; D-036 закрыл auditor/plan, но executor.card с длинной зоной не
+  проверялся. Лечение без подъёма бюджетов: зона роли вынесена в verbatim-блок
+  `role.zone` (факт, как task.scope) и не входит в overhead; `authority.core` несёт
+  только правило о зонах; `role.zone` во всех 4 профилях с authority.core, запрещён в
+  continuation/pilot; команда мержа не дублируется в `authority.executor`. Overhead
+  executor.card теперь не зависит от длины зоны (~2678, запас ~122). Регрессия
+  `prompts-smoke` §16 (K-21). Контракт protocolVersion **1.7**. Gateway/digest не менялись.
 
 ## 3. Проверки транспорта (локальные, без сети)
 

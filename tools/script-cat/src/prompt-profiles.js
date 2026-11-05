@@ -9,21 +9,21 @@
 
     def("executor.card", {
       audience: ["Executor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["queue.coordinator", "review.protocol", "pilot.brief", "pilot.stop"],
       budget: { overhead: 2800 },
     });
     def("auditor.card", {
       audience: ["Auditor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["git.executor", "queue.coordinator", "pilot.brief"],
       budget: { overhead: 2200 },
     });
     def("coordinator.plan", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
-      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
+      blocks: ["coordinator.prime", "identity.mission", "mission.returned", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
       budget: { overhead: 3200 },
@@ -37,7 +37,7 @@
     });
     def("reviewer.mission", {
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
@@ -75,7 +75,7 @@
       audience: ["pilot"], marker: null,
       blocks: ["pilot.repo", "pilot.brief", "pilot.stop"],
       requiredFacts: ["pilot.brief", "pilot.startSha"],
-      forbidden: team.flatMap(() => []).concat(["authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer", "marker.agent", "marker.coordinator", "marker.review", "marker.answer", "questions.protocol", "adr.protocol", "repo.boundary", "phases.bans"]),
+      forbidden: team.flatMap(() => []).concat(["authority.core", "role.zone", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer", "marker.agent", "marker.coordinator", "marker.review", "marker.answer", "questions.protocol", "adr.protocol", "repo.boundary", "phases.bans"]),
       budget: { overhead: 250 },
     });
 
@@ -83,7 +83,7 @@
     // Аудитория строго по типу хода; маркер исходного хода; запрещены блоки
     // полного задания, очереди, регламента и pilot-блоки. Overhead ≤ 700.
     const contForbidden = ["identity.task", "identity.mission", "repo.target", "repo.boundary",
-      "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+      "authority.core", "role.zone", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
       "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
       "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
       "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",
