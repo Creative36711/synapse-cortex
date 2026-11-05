@@ -1,6 +1,7 @@
 // Конструктор промптов: профили, бюджеты, маркеры, изоляция пилота, покрытие
 // ruleId и инварианты #37/#38/#40. Источник истины — src/prompt-*.js.
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import {
   PromptCompiler, PROMPT_PROFILES, PROMPT_BLOCKS,
   dispatchRequest, planRequest, reviewRequest, answerRequest, reminderRequest, pilotRequest,
@@ -13,7 +14,7 @@ const BUDGETS = {
   'delivery.compact': 1500, 'pilot.synapse': 250,
 };
 const TOTALS = {
-  'executor.card': 6500, 'auditor.card': 5500, 'coordinator.plan': 7500, 'reviewer.mission': 7000,
+  'executor.card': 7500, 'auditor.card': 5500, 'coordinator.plan': 7500, 'reviewer.mission': 7000,
   'reviewer.answer': 6000, 'reminder.marker': 900,
 };
 
@@ -253,4 +254,37 @@ for (const req of cases) {
   assert.equal(longer.metrics.overheadChars, r.metrics.overheadChars, 'overhead не зависит от длины зоны (verbatim)');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim)');
+// 17. D-039: боевая K-21 с крупным оракулом (total > 6500) доставляется после
+// подъёма total-лимита Executor до 7500. Overhead уже lean (D-038), избыток —
+// подлинный контент задачи (оракул/инварианты), который не режется молча (D-034).
+// Боевой путь: DISPATCH_TOTAL.Executor=7500, softLimit 6000 → карточка между
+// лимитами уходит стратегией compact с ТЕМ ЖЕ полным контентом (delivery-smoke §2).
+{
+  const src = readFileSync(new URL('../src/21-prompts.js', import.meta.url), 'utf8');
+  assert.match(src, /Executor: 7500/, 'DISPATCH_TOTAL.Executor поднят до 7500 (D-039)');
+  const longZone = 'src/core/**, src/schema/**, src/i18n/**, tools/notice-verifier/**, contracts/**, docs/design/core/**, docs/decisions/**, package.json, NOTICE, tsconfig.json';
+  const big = {
+    ...task(),
+    title: 'SYN-1 · K-21 · Исправить offline NOTICE verifier без потери атрибуций',
+    intent: 'Починить offline-верификатор NOTICE так, чтобы он проверял атрибуции без сети и не терял ни одной записи.',
+    invariants: 'Существующие атрибуции сохраняются дословно; порядок записей не меняется; verifier работает полностью offline; ни одна лицензия не теряется; поведение остальных проверок не меняется. '.repeat(8),
+    acceptance: 'node tools/notice-verifier/verify.mjs --offline возвращает 0; количество атрибуций в NOTICE равно количеству в реестре (253); grep -c attributions = 253; ни одна строка не потеряна; отчёт с SHA и кодом возврата; каждая проверка закрыта командой или артефактом. '.repeat(8),
+    scope: 'tools/notice-verifier/**, NOTICE, docs/design/core/notice.md',
+    freedom: 'Структуру проверки выбирает исполнитель, если инварианты соблюдены.',
+  };
+  const req = dispatchRequest('Executor', { task: big, role: { name: 'Executor Core', fn: 'Executor', zone: longZone } });
+  const full = PromptCompiler.compile({ ...req, delivery: { tier: 'full', hardLimit: 0 } });
+  assert.ok(full.metrics.chars > 6500, `карточка ${full.metrics.chars} больше старого лимита 6500 — подъём был нужен`);
+  assert.ok(full.metrics.chars <= 7500, `карточка ${full.metrics.chars} в новом лимите 7500`);
+  // Старый лимит давал паузу (боевой инцидент 16:52:10).
+  const old = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 6500, payloadChannel: false });
+  assert.equal(old.strategy, 'pause', 'со старым лимитом 6500 карточка не собиралась');
+  // Новый лимит доставляет карточку целиком, оракул и инварианты не порезаны.
+  const d = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 7500, payloadChannel: false });
+  assert.notEqual(d.strategy, 'pause', 'K-21 доставляется, а не пауза');
+  assert.ok(d.envelope.metrics.chars <= 7500, 'доставка в лимите 7500');
+  assert.ok(d.envelope.text.includes(big.acceptance.trim()), 'оракул не порезан');
+  assert.ok(d.envelope.text.includes(big.invariants.trim()), 'инварианты не порезаны');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim), D-039 (K-21 total Executor 7500)');

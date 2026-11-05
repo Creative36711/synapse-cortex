@@ -59,7 +59,12 @@
 
   // D-034: total-лимиты выдачи по ролям (docs/agents/protocol.md). Раньше они
   // жили только в оракулах; теперь их соблюдает и боевой путь доставки.
-  const DISPATCH_TOTAL = { Executor: 6500, Auditor: 5500, Reviewer: 7000 };
+  // D-039: Executor поднят 6500 → 7500 (явное бюджетное решение). После диеты
+  // D-036 и verbatim-зоны D-038 overhead стал lean (~2678, не зависит от зоны);
+  // боевая K-21 (total 6642) упёрлась в total-лимит из-за подлинного контента
+  // задачи (оракул/инварианты), который не режется молча (D-034). 7500 — как у
+  // Координатора; карточки больше — через payload-канал или отдельное решение.
+  const DISPATCH_TOTAL = { Executor: 7500, Auditor: 5500, Reviewer: 7000 };
 
   /** Выдача рабочей карточки (Executor/Auditor/историческая Reviewer). */
   function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {

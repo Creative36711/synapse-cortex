@@ -1,6 +1,6 @@
 {
-  "protocolVersion": "1.7",
-  "sourceSha": "1c8fc66fc563634f07da7c1a9bbf354aa5491803",
+  "protocolVersion": "1.8",
+  "sourceSha": "83d311296254656707c6c6702a6111a07788e30b",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -735,5 +735,17 @@
     "executorCardBudget": 2800,
     "regression": "K-21 с длинной зоной Executor Core компилируется в executor.card ≤2800 (overhead ~2678, запас ~122); зона видна целиком и verbatim; overhead не зависит от длины зоны; Executor по-прежнему учит pr/merged; команда мержа в git.executor (prompts-smoke §16)",
     "zoneIndependentOverhead": true
+  },
+  "d039": {
+    "decision": "D-039",
+    "summary": "Total-лимит выдачи Executor поднят 6500 → 7500: боевая K-21 с крупным оракулом доставляется, а не встаёт в паузу",
+    "incident": "после D-038 overhead-гейт прошёл, но боевая K-21 (total 6642) упёрлась во второй гейт: total 6642 > жёсткого лимита 6500 executor.card, пауза budget_exceeded, карточка возвращена в Ready и цикл остановился снова",
+    "cause": "избыток — подлинный контент задачи (оракул/инварианты/Scope), который не режется молча (D-034) и не уходит в payload (оракул остаётся inline). Overhead уже lean после D-036 (диета) и D-038 (зона verbatim); связывающее ограничение — total-лимит",
+    "fix": "DISPATCH_TOTAL.Executor 6500 → 7500 (как у Координатора). Явное бюджетное решение — санкционированный D-036 шаг после диеты и verbatim-зоны. Карточка между softLimit 6000 и hardLimit 7500 доставляется стратегией compact с тем же полным контентом (delivery-smoke §2), оракул/инварианты целы",
+    "budgetsRaised": true,
+    "raisedBudget": "executor.card total 6500 → 7500 (overhead 2800 НЕ менялся)",
+    "executorTotalBudget": 7500,
+    "regression": "prompts-smoke §17: карточка K-21 total >6500 и ≤7500 со старым лимитом даёт паузу, с новым доставляется целиком; оракул и инварианты не порезаны; пин DISPATCH_TOTAL.Executor=7500",
+    "overflowPath": "карточки больше 7500 — через payload-канал D-034 (для assignment) или отдельное явное решение; оракул/Scope не режутся"
   }
 }
