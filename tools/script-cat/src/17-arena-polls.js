@@ -1132,6 +1132,116 @@
   };
 
   /**
+   * D-044: квитанция подтверждённой доставки живёт отдельно от `expect`.
+   *
+   * K-30 (05.11, 23:28–23:35): журнал зафиксировал «Задание отправлено»
+   * с id сообщения, агент закончил ход и прислал маркер этой выдачи, но
+   * позднее `expect.sentAt` оказался пуст — и уборка фантомов вернула
+   * карточку в Ready со словами «работы не было». Отсутствие локальной
+   * отметки не доказывает отсутствие доставки: запись ожидания могла быть
+   * перезаписана/потеряна после подтверждения. Поэтому факт «сообщение
+   * найдено в чате» сохраняется отдельной квитанцией до снятия очереди.
+   */
+  const DELIVERY_RECEIPT_KEY = "cfn-delivery-receipts-v1";
+  function handoffReceiptKey(expect) {
+    return [
+      expect?.kind || "", norm(expect?.ref), norm(expect?.runId),
+      norm(expect?.turnId), norm(expect?.questionId), norm(expect?.roleId),
+    ].join("|");
+  }
+  function recordDeliveryReceipt(expect, delivery) {
+    if (!expect || !delivery?.messageId) return;
+    const key = handoffReceiptKey(expect);
+    const prior = GM_getValue(DELIVERY_RECEIPT_KEY, []);
+    const list = Array.isArray(prior) ? prior.filter((item) => item && item.key !== key) : [];
+    list.push({
+      key,
+      kind: expect.kind || "", ref: expect.ref || "", runId: expect.runId || "",
+      turnId: expect.turnId || "", questionId: expect.questionId || "",
+      roleId: expect.roleId || "", messageId: delivery.messageId,
+      sentAt: Number(delivery.sentAt) || Date.now(),
+      watermark: delivery.watermark || delivery.messageId,
+      seen: Array.isArray(delivery.seen) ? delivery.seen.slice(-40) : [],
+    });
+    GM_setValue(DELIVERY_RECEIPT_KEY, list.slice(-100));
+  }
+  function deliveryReceipt(expect) {
+    if (!expect) return null;
+    const key = handoffReceiptKey(expect);
+    const list = GM_getValue(DELIVERY_RECEIPT_KEY, []);
+    const hit = (Array.isArray(list) ? list : []).find((item) =>
+      item && item.key === key && item.messageId && Number(item.sentAt) > 0 &&
+      (!expect.roleId || norm(item.roleId) === norm(expect.roleId)));
+    return hit || null;
+  }
+  /** Намеренный отказ доставки (капча/ошибка Arena/повтор) гасит квитанцию. */
+  function forgetDeliveryReceipt(expect) {
+    if (!expect) return;
+    const key = handoffReceiptKey(expect);
+    const prior = GM_getValue(DELIVERY_RECEIPT_KEY, []);
+    if (!Array.isArray(prior) || !prior.some((item) => item && item.key === key)) return;
+    GM_setValue(DELIVERY_RECEIPT_KEY, prior.filter((item) => item && item.key !== key));
+  }
+
+  /** Своя реплика именно этой выдачи в открытом чате адресата. */
+  function dispatchPromptInChat(expect) {
+    if (!expect || expect.kind !== "dispatch" || !isUuid(expect.ref) || !isUuid(expect.runId) ||
+        !expect.roleId || norm(roleFromPath()) !== norm(expect.roleId)) return null;
+    // Капча/ошибка Arena могли оставить реплику в транскрипте, но ход не принять.
+    // Такая реплика не доказывает доставку; квитанция к этому моменту погашена.
+    if (expect.captcha === true || GM_getValue(K.pending, null)?.captcha === true) return null;
+    const dead = GM_getValue(K.deadSend, "");
+    const nodes = userMessages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const raw = messageRaw(nodes[i]);
+      const ids = raw.match(/\(dispatch\s+([0-9a-f-]{36})\s*,\s*run\s+([0-9a-f-]{36})\s*\)/i);
+      if (!ids || norm(ids[1]) !== norm(expect.ref) || norm(ids[2]) !== norm(expect.runId)) continue;
+      const id = nodeId(nodes[i]);
+      if (!id || (dead && id === dead)) continue;
+      return { id, at: idTime(id) };
+    }
+    return null;
+  }
+
+  /**
+   * Восстановить отметку отправки по квитанции или по самой реплике в чате.
+   * Возвращает восстановленное ожидание либо null, если доказательств нет.
+   */
+  function restoreMissingSendMark(expect) {
+    if (!expect || Number(expect.sentAt)) return expect || null;
+    const receipt = deliveryReceipt(expect);
+    const proof = receipt
+      ? { messageId: receipt.messageId, sentAt: Number(receipt.sentAt), watermark: receipt.watermark, seen: receipt.seen, source: "квитанция доставки" }
+      : (() => {
+          const node = dispatchPromptInChat(expect);
+          if (!node) return null;
+          return {
+            messageId: node.id, sentAt: node.at || Number(expect.at) || Date.now(),
+            watermark: node.id, seen: expect.seen || [], source: "реплика задания в чате",
+          };
+        })();
+    if (!proof) return null;
+    const restored = {
+      ...expect,
+      sentAt: proof.sentAt,
+      verified: true,
+      watermark: proof.watermark || proof.messageId,
+      seen: Array.isArray(proof.seen) ? proof.seen : (expect.seen || []),
+      ...(expect.kind === "dispatch" && !expect.isDispatchReminder && !(Number(expect.tries) > 0)
+        ? { dispatchSentAt: Number(expect.dispatchSentAt) || proof.sentAt }
+        : {}),
+    };
+    GM_setValue(K.expect, restored);
+    log(
+      `Отметка отправки «${expect.title || expect.ref || expect.kind}» восстановлена: ${proof.source} ` +
+        `(сообщение ${proof.messageId}). Карточку в Ready не возвращаю; читаю ответ этой выдачи.`,
+      false,
+      { ntfy: "quiet", title: "Relay: доставка восстановлена" },
+    );
+    return restored;
+  }
+
+  /**
    * Ожидание без отметки отправки — след прошлой попытки, а не ход.
    *
    * 24.10 в 16:35 карточка NAR-1.12 ушла в Running, а страница Arena упала до
@@ -1141,10 +1251,10 @@
    * до `releaseStalled`, и всё это время Координатор видел «1 Running» и
    * выдавать её не мог.
    *
-   * Отметки отправки нет — значит работы по карточке не было, и в Running ей
-   * держаться не за что, на какой бы странице ни стоял Мастер. Возвращаем
-   * Ready, снимаем ожидание и разрешаем новый план сразу: ход начинается
-   * заново с чистого листа.
+   * D-044: прежде чем объявить ход фантомом, ищем квитанцию доставки и саму
+   * реплику этой выдачи в чате. Если доказательство есть — восстанавливаем
+   * ожидание и не трогаем карточку. Настоящий фантом (нет ни квитанции, ни
+   * реплики) по-прежнему возвращается в Ready.
    *
    * `ignoreQueue` — очередь уже признана просроченной и снимается этим же
    * шагом: тогда она не повод оставить карточку в Running.
@@ -1155,6 +1265,7 @@
     const expect = GM_getValue(K.expect, null);
     if (!expect || Number(expect.sentAt)) return null;
     if (!ignoreQueue && GM_getValue(K.pending, null)) return null;
+    if (restoreMissingSendMark(expect)) return null;
     const rolled = await releaseUndelivered(expect, why);
     GM_setValue(K.expect, null);
     GM_setValue("cfn-plan-at", 0);
@@ -1314,6 +1425,7 @@
             return true;
           }
         }
+        forgetDeliveryReceipt(waiting);
         GM_setValue(K.expect, { ...waiting, undelivered: false, cardRolled: false, sentAt: null, verified: false });
         GM_setValue(K.pending, { ...pending, undelivered: false, at: Date.now() });
       }
@@ -1462,7 +1574,10 @@
     if (delivery.captcha) {
       const waiting = GM_getValue(K.expect, null);
       journalDelivery(waiting, "captcha", "captcha");
-      if (waiting) GM_setValue(K.expect, { ...waiting, captcha: true, sentAt: null, verified: false });
+      if (waiting) {
+        forgetDeliveryReceipt(waiting);
+        GM_setValue(K.expect, { ...waiting, captcha: true, sentAt: null, verified: false });
+      }
       // Очередь остаётся, но с отметкой: после решения капчи сначала надо
       // посмотреть, не дошло ли сообщение всё-таки. Отсчёт TTL начинается
       // заново — человек решает капчу не за десять секунд.
@@ -1510,6 +1625,7 @@
         // снова станет Running с тем же Run ID.
         GM_setValue(K.pending, { ...pending, undelivered: true, sendTries: 0, at: Date.now() });
         if (failed) {
+          forgetDeliveryReceipt(failed);
           GM_setValue(K.expect, {
             ...failed,
             undelivered: true,
@@ -1531,22 +1647,35 @@
       return true;
     }
     const expect = GM_getValue(K.expect, null);
-    if (expect && norm(expect.roleId) === norm(me)) {
-      // Граница «после отправки» — id подтвердившего сообщения, а не последнего
-      // перед отправкой: ответ агента читается строго после нашей реплики, и
-      // старое сообщение с тем же текстом границу не сдвигает (1.4.84).
-      // Если id не пришёл (старая ветка), остаётся прежний водяной знак.
-      const mark = delivery.msgId || watermark;
-      const sentAt = Date.now();
-      GM_setValue(K.expect, {
-        ...expect, watermark: mark, sentAt, verified: true, seen,
-        // sentAt обновляется также для напоминаний; отдельная отметка нужна
-        // только для продолжительности работы и не управляет состоянием хода.
-        ...(isDispatchAssignment(expect, pending, me) ? { dispatchSentAt: sentAt } : {}),
-      });
-      dbg("Send: доставка подтверждена, отметка внутри чата", { watermark: mark, via: delivery.via || "message" });
-      journalDelivery(expect, "delivered");
+    // D-044: сообщение в чате есть, а ожидание потеряно/подменено — это не
+    // «отправлено и можно забыть». Не снимаем очередь молча и не пишем успех:
+    // нужна сверка, иначе следующий шаг потеряет ход или продублирует его.
+    if (!expect || norm(expect.roleId) !== norm(me)) {
+      pause(
+        `Сообщение подтверждено в чате (${delivery.msgId || "id не получен"}), но ожидание выдачи ` +
+          "потеряно или относится другому агенту. Очередь сохранена; автоматически не повторяю. " +
+          "Сверьте чат, карточку и Run ID, затем снимите ход кнопкой ↺ или продолжите вручную.",
+        { kind: "delivery-state-lost", ref: expect?.ref || "", runId: expect?.runId || "" },
+      );
+      return true;
     }
+    // Граница «после отправки» — id подтвердившего сообщения, а не последнего
+    // перед отправкой: ответ агента читается строго после нашей реплики, и
+    // старое сообщение с тем же текстом границу не сдвигает (1.4.84).
+    // Если id не пришёл (старая ветка), остаётся прежний водяной знак.
+    const mark = delivery.msgId || watermark;
+    const sentAt = Date.now();
+    // Квитанция пишется ДО снятия очереди: даже если запись `expect` позднее
+    // потеряет `sentAt`, факт доставки этой выдачи останется проверяемым.
+    if (delivery.msgId) recordDeliveryReceipt(expect, { messageId: delivery.msgId, sentAt, watermark: mark, seen });
+    GM_setValue(K.expect, {
+      ...expect, watermark: mark, sentAt, verified: true, seen,
+      // sentAt обновляется также для напоминаний; отдельная отметка нужна
+      // только для продолжительности работы и не управляет состоянием хода.
+      ...(isDispatchAssignment(expect, pending, me) ? { dispatchSentAt: sentAt } : {}),
+    });
+    dbg("Send: доставка подтверждена, отметка внутри чата", { watermark: mark, via: delivery.via || "message" });
+    journalDelivery(expect, "delivered");
     GM_setValue(K.pending, null);
     GM_setValue(K.deadSend, "");
     pendingNoticeAt = 0;

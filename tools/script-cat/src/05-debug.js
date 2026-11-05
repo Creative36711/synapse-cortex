@@ -184,6 +184,7 @@
         return "Старую или нераспознанную карточку Reviewer не переотправляю: ожидание сохранено, проверьте чат и Run ID.";
       if (["review", "answer"].includes(waiting.kind)) {
         // Приёмка и ответы сохраняют связь с исходной миссией/вопросом.
+        forgetDeliveryReceipt(waiting);
         GM_setValue(K.expect, { ...waiting, sentAt: null, verified: false });
         GM_setValue(K.pending, { roleId: waiting.roleId, text: waiting.text, at: Date.now() });
         return "задание возвращено в очередь";

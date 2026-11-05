@@ -196,11 +196,13 @@ assert.match(tickBody, /reviveUnverifiedHandoff\(\);/, 'тик вызывает 
 // 5. Ожидание без отправки не считается ходом.
 assert.match(tickBody, /if \(expect && !Number\(expect\.sentAt\)\)/, 'ожидание без отправки не считается ходом');
 const noSendBlock = tickBody.slice(tickBody.indexOf('!Number(expect.sentAt)'), tickBody.indexOf('const waited'));
-assert.match(noSendBlock, /GM_setValue\(K\.expect, null\);/, 'ожидание снимается');
+assert.match(noSendBlock, /const live = GM_getValue\(K\.expect, null\);/, 'D-044: решение по живому состоянию, а не по устаревшему снимку');
+assert.match(noSendBlock, /if \(!ghost2 && live && Number\(live\.sentAt\)\) \{\s*expect = live;/, 'восстановленная доставка не стирается');
+assert.match(noSendBlock, /GM_setValue\(K\.expect, null\);/, 'настоящий фантом снимается');
 assert.match(noSendBlock, /GM_setValue\("cfn-plan-at", 0\);/, 'троттлинг плана сбрасывается');
 assert.match(noSendBlock, /снимаю ожидание и начинаю ход заново/, 'причина видна в журнале');
 assert.match(noSendBlock, /expect = null;/, 'шаг продолжается без ожидания');
-assert.match(src, /const mark = delivery\.msgId \|\| watermark;\s*const sentAt = Date\.now\(\);\s*GM_setValue\(K\.expect, \{\s*\.\.\.expect, watermark: mark, sentAt, verified: true/, 'отметка ставится только после подтверждённой доставки');
+assert.match(src, /const mark = delivery\.msgId \|\| watermark;\s*const sentAt = Date\.now\(\);[\s\S]*?recordDeliveryReceipt\(expect, \{ messageId: delivery\.msgId, sentAt, watermark: mark, seen \}\);\s*GM_setValue\(K\.expect, \{\s*\.\.\.expect, watermark: mark, sentAt, verified: true/, 'отметка и квитанция ставятся только после подтверждённой доставки');
 assert.match(src, /pendingTtlMs: 600000/, 'TTL очереди в конфиге');
 assert.match(src, /replyWaitMs: 1800000/, 'предел ожидания ответа в конфиге');
 assert.match(src, /function dropHandoff\(reason\)/, 'зависшая передача снимается целиком');
@@ -214,7 +216,12 @@ assert.match(cpBody, /await releaseUndelivered\(/, 'отказ отправки 
 assert.match(tickBody, /await releaseUndelivered\(stuck/, 'молчание агента снимает Running, а не ждёт 45 минут');
 
 // 6. Поведение: мини-DOM и заглушки вместо браузера.
-const load = ({ pending, editor, send, panels = [], stop = false, now = 1_000_000, expect = null, skip = false, overlay = false, stickyOverlay = false, sendCovered = false, deadSend = false, disabledSend = false, rollback = false, captcha = false, captchaAfterClick = false, sentAlready = false }) => {
+const load = ({ pending, editor, send, panels = [], stop = false, now = 1_000_000, expect = undefined, skip = false, overlay = false, stickyOverlay = false, sendCovered = false, deadSend = false, disabledSend = false, rollback = false, captcha = false, captchaAfterClick = false, sentAlready = false }) => {
+  // D-044: подтверждённая доставка требует живого ожидания. Старые пробы,
+  // не задававшие expect, моделировали штатный ход с ожиданием адресата.
+  const expectState = expect === undefined
+    ? { roleId: pending?.roleId || 'coordinator', kind: 'plan', ref: 'm1' }
+    : expect;
   const out = { logs: [], sets: new Map(), pauses: [], clicks: [], timers: [], rollback: { calls: [], result: rollback } };
   const state = { now };
   const advance = (ms) => { state.now += ms; };
@@ -314,12 +321,14 @@ const load = ({ pending, editor, send, panels = [], stop = false, now = 1_000_00
     "getComputedStyle", "Date", "setTimeout", "HTMLTextAreaElement", "HTMLInputElement", "InputEvent",
     "busySettled", "busyLabel", "messages", "nodeId", "idTime", "C", "dbg", "debugSendButton", "describe", "autoOn", "flat", "ui",
     "appReady", "roleRows",
+    // D-044: уборка фантомов ищет квитанцию/реплику выдачи в чате.
+    "isUuid", "userMessages", "messageRaw",
     // 1.4.78: проверка Continue перед отправкой.
     "waitFor", "patience", "mergedFlag",
     `${promptShim}\n${sendBlock}\n${contBlock}\nreturn { consumePending, closeCompletionPlaque, ensureComposer };`,
   );
   const api = fn(
-    (k, d) => (k === "cfn-pending" ? pending : k === "cfn-expect" ? expect : d),
+    (k, d) => (out.sets.has(k) ? out.sets.get(k) : k === "cfn-pending" ? pending : k === "cfn-expect" ? expectState : d),
     (k, v) => out.sets.set(k, v),
     { pending: "cfn-pending", expect: "cfn-expect" },
     (x) => String(x || "").replace(/-/g, "").toLowerCase(),
@@ -362,7 +371,10 @@ const load = ({ pending, editor, send, panels = [], stop = false, now = 1_000_00
     // 1.4.63: шаг начинается с проверки, что страница отрисована.
     () => ({ ok: true, why: "" }),
     // 1.4.92: доставка рабочей или старой очереди проверяет актуальную роль.
-    async () => [{ id: pending?.roleId, name: expect?.roleName || "Coordinator", fn: expect?.kind === "dispatch" ? "Executor" : "Coordinator", status: "Активна" }],
+    async () => [{ id: pending?.roleId, name: expectState?.roleName || "Coordinator", fn: expectState?.kind === "dispatch" ? "Executor" : "Coordinator", status: "Активна" }],
+    (x) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(x || "")),
+    () => [],
+    (n) => String(n?.textContent || ""),
     // 1.4.78: на фейковой странице Continue нет — проверка проходит вхолостую.
     async (check) => (check() || null),
     (ms) => ms,

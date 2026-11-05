@@ -15,6 +15,9 @@ assert.equal(contract.protocolVersion, '1.10');
 assert.match(contract.sourceSha, /^[0-9a-f]{40}$/, 'sourceSha — 40-hex');
 assert.equal(contract.d043?.budgetsRaised, false, 'D-043 не поднимал бюджеты');
 assert.match(contract.d043?.protocolNote || '', /остаётся 1\.10/, 'D-043 транспорт-внутренний');
+assert.equal(contract.d044?.budgetsRaised, false, 'D-044 не поднимал бюджеты');
+assert.match(contract.d044?.protocolNote || '', /остаётся 1\.10/, 'D-044 транспорт-внутренний');
+assert.match(contract.d044?.fix || '', /квитанц/, 'D-044: квитанция доставки');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',

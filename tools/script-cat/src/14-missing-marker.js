@@ -163,6 +163,7 @@
       at: Date.now(),
       sendTries: 0,
     });
+    forgetDeliveryReceipt(expect);
     GM_setValue(K.expect, {
       ...expect,
       text,
@@ -236,6 +237,7 @@
       at: Date.now(),
       sendTries: 0,
     });
+    forgetDeliveryReceipt(expect);
     GM_setValue(K.expect, {
       ...expect,
       sentAt: null,

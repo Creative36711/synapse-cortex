@@ -16,5 +16,7 @@ export const promptShim = `${modules}
   function compileOrPause(req, label) { const r = PromptCompiler.compile(req); if (r.ok) return r; if (typeof pause === "function") pause((r.error && r.error.message) || label); return null; }
   function recordPromptAttempt() {}
   function journalDelivery() {}
+  function recordDeliveryReceipt() {}
+  function forgetDeliveryReceipt() {}
   function classifyArenaFailure() { return "unknown"; }
 `;
