@@ -84,12 +84,20 @@
       payloadChannel: Boolean(ctx.payloadRef?.fileId),
     });
     if (delivery.strategy === "pause") {
-      pause(
-        `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
-          `${budgetBreakdownLine(delivery.error)}` +
-          "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
-        { kind: "prompt-compile", ref: task.id },
-      );
+      // D-043: выдача проверяет промпт до Running и получает отказ как причину
+      // для нового плана. Общая пауза остаётся запасным путём и третьим промахом.
+      const advice = typeof ctx.onCompileError === "function"
+        ? delivery.error.code === "budget_exceeded"
+          ? "Карточка осталась Ready, агенту ничего не отправлено. Перепланируй постановку: убери повторы и справочные детали, сохрани обязательные проверки; при необходимости разбей работу на последовательные карточки с полными условиями и Dependency. Не ослабляй и не обрезай оракул. Payload Drive File ID вмещает большой текст задания, но не заменяет inline-оракул/Scope. Затем повтори next с исправленной карточкой."
+          : "Карточка осталась Ready, агенту ничего не отправлено. Исправь названные факты/профиль карточки и повтори next."
+        : "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».";
+      const reason = `Промпт не собран (dispatch ${task.id}): ${delivery.error.code} — ${delivery.error.message}. ` +
+        `${budgetBreakdownLine(delivery.error)}${advice}`;
+      if (typeof ctx.onCompileError === "function") {
+        ctx.onCompileError(reason);
+        return null;
+      }
+      pause(reason, { kind: "prompt-compile", ref: task.id });
       return null;
     }
     return delivery.envelope;
