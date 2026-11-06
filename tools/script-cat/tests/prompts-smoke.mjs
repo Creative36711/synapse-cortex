@@ -14,7 +14,7 @@ const BUDGETS = {
   'delivery.compact': 1500, 'pilot.synapse': 250,
 };
 const TOTALS = {
-  'executor.card': 7500, 'auditor.card': 5500, 'coordinator.plan': 7500, 'reviewer.mission': 7000,
+  'executor.card': 8000, 'auditor.card': 5500, 'coordinator.plan': 7500, 'reviewer.mission': 7000,
   'reviewer.answer': 6000, 'reminder.marker': 900,
 };
 
@@ -260,8 +260,18 @@ for (const req of cases) {
 // Боевой путь: DISPATCH_TOTAL.Executor=7500, softLimit 6000 → карточка между
 // лимитами уходит стратегией compact с ТЕМ ЖЕ полным контентом (delivery-smoke §2).
 {
-  const src = readFileSync(new URL('../src/21-prompts.js', import.meta.url), 'utf8');
-  assert.match(src, /Executor: 7500/, 'DISPATCH_TOTAL.Executor поднят до 7500 (D-039)');
+  // Лимит проверяется боевой функцией доставки: она берёт hardLimit из
+  // DISPATCH_TOTAL.Executor, а не из текста исходника.
+  const srcPrompts = readFileSync(new URL('../src/21-prompts.js', import.meta.url), 'utf8');
+  const total = new Function(`${srcPrompts.slice(srcPrompts.indexOf('  const DISPATCH_TOTAL'), srcPrompts.indexOf('\n', srcPrompts.indexOf('  const DISPATCH_TOTAL')))}return DISPATCH_TOTAL;`)();
+  assert.equal(total.Executor, 8000, 'DISPATCH_TOTAL.Executor поднят до 8000 (D-048)');
+  assert.equal(total.Auditor, 5500, 'Auditor не менялся');
+  assert.equal(total.Reviewer, 7000, 'Reviewer не менялся');
+  // Собранный скрипт — то, что реально работает у Мастера: лимит в бандле
+  // обязан совпадать с исходником, иначе правка живёт только в репозитории.
+  const bundle = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
+  const bundled = new Function(`${bundle.slice(bundle.indexOf('  const DISPATCH_TOTAL'), bundle.indexOf('\n', bundle.indexOf('  const DISPATCH_TOTAL')))}return DISPATCH_TOTAL;`)();
+  assert.deepEqual(bundled, total, 'в relay.user.js те же лимиты, что в исходнике');
   const longZone = 'src/core/**, src/schema/**, src/i18n/**, tools/notice-verifier/**, contracts/**, docs/design/core/**, docs/decisions/**, package.json, NOTICE, tsconfig.json';
   const big = {
     ...task(),
@@ -275,16 +285,49 @@ for (const req of cases) {
   const req = dispatchRequest('Executor', { task: big, role: { name: 'Executor Core', fn: 'Executor', zone: longZone } });
   const full = PromptCompiler.compile({ ...req, delivery: { tier: 'full', hardLimit: 0 } });
   assert.ok(full.metrics.chars > 6500, `карточка ${full.metrics.chars} больше старого лимита 6500 — подъём был нужен`);
-  assert.ok(full.metrics.chars <= 7500, `карточка ${full.metrics.chars} в новом лимите 7500`);
+  assert.ok(full.metrics.chars <= 8000, `карточка ${full.metrics.chars} в новом лимите 8000`);
   // Старый лимит давал паузу (боевой инцидент 16:52:10).
   const old = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 6500, payloadChannel: false });
   assert.equal(old.strategy, 'pause', 'со старым лимитом 6500 карточка не собиралась');
   // Новый лимит доставляет карточку целиком, оракул и инварианты не порезаны.
-  const d = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 7500, payloadChannel: false });
+  const d = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 8000, payloadChannel: false });
   assert.notEqual(d.strategy, 'pause', 'K-21 доставляется, а не пауза');
-  assert.ok(d.envelope.metrics.chars <= 7500, 'доставка в лимите 7500');
+  assert.ok(d.envelope.metrics.chars <= 8000, 'доставка в лимите 8000');
   assert.ok(d.envelope.text.includes(big.acceptance.trim()), 'оракул не порезан');
   assert.ok(d.envelope.text.includes(big.invariants.trim()), 'инварианты не порезаны');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim), D-039 (K-21 total Executor 7500)');
+// 18. D-048: боевая K-43 «комментарий к примеру» встала на 7802 > 7500 —
+// оракул 2541, намерение 944, Scope 747, инварианты 642. Карточка делает правку
+// в один абзац, дробить её не за что: лимит 8000, оракул по-прежнему verbatim.
+{
+  const sizeUp = (text, target) => {
+    let out = String(text);
+    while (out.length < target) out += ' Проверка повторяется на том же SHA? ';
+    return out;
+  };
+  const k43 = {
+    ...task(),
+    title: 'SYN-1 · K-43 · Возврат 1: снять устаревший комментарий examples/cycle.game.yaml (F-1 аудита K-41)',
+    intent: sizeUp('Снять устаревший комментарий к примеру.', 944),
+    invariants: sizeUp('YAML-данные не меняются.', 642),
+    acceptance: sizeUp('grep -n на main не находит старой формулировки.', 2541),
+    scope: sizeUp('examples/cycle.game.yaml', 747),
+    freedom: '',
+  };
+  const req = dispatchRequest('Executor', { task: k43 });
+  const full = PromptCompiler.compile({ ...req, delivery: { tier: 'full', hardLimit: 0 } });
+  assert.ok(full.metrics.chars > 7500, `карточка ${full.metrics.chars} больше прежнего лимита — 06.11 она встала в паузу`);
+  assert.ok(full.metrics.chars <= 8000, `карточка ${full.metrics.chars} в лимите 8000`);
+  assert.equal(
+    PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 7500, payloadChannel: false }).strategy,
+    'pause',
+    'со старым лимитом 7500 карточка не собиралась (боевой инцидент 20:19)',
+  );
+  const d = PromptCompiler.forDelivery(req, { softLimit: 6000, hardLimit: 8000, payloadChannel: false });
+  assert.notEqual(d.strategy, 'pause', 'с лимитом 8000 доставляется');
+  assert.ok(d.envelope.text.includes(k43.acceptance.trim()), 'оракул не порезан');
+  assert.ok(d.envelope.text.includes(k43.invariants.trim()), 'инварианты не порезаны');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim), D-039 (K-21 total Executor 7500), D-048 (K-43 total Executor 8000, оракул verbatim)');

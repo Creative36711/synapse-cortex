@@ -71,7 +71,7 @@ assert.equal(executorPrompt(card, role, '', 'LOG-K29', UUID.run, mission.id, {
 }), null);
 assert.equal(pauses.length, 0, 'ранняя проверка не ставит глобальную паузу');
 assert.match(earlyReason, /budget_exceeded/);
-assert.match(earlyReason, /total \d+ > жёсткого лимита 7500/, 'названы фактический размер и жёсткий лимит');
+assert.match(earlyReason, /total \d+ > жёсткого лимита 8000/, 'названы фактический размер и жёсткий лимит (D-048)');
 // В диагностике chars блока включает подпись поля; длины самих полей закреплены выше.
 assert.match(earlyReason, /task\.acceptance 42\d\d/);
 assert.match(earlyReason, /task\.scope 1442/);

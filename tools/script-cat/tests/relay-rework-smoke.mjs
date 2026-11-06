@@ -104,7 +104,9 @@ assert.equal(api.reworkLine(null), '', 'null тоже пустой');
 // ── 6. Промпт: Rework возвращается, Check=fail — отдельный шаг ─────────────
 const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
 const coord = PromptCompiler.compile(planRequest({ queue: { summary: 's', rework: api.reworkLine([card({ answer: 'причина' })]) } })).text;
-assert.match(coord, /Rework: переделка — в Ready отдельным шагом/, 'путь назад назван');
+assert.match(coord, /Rework — для той же карточки/, 'путь назад назван: та же карточка');
+assert.match(coord, /Rework \+ та же карточка в Ready \(тот же Sequence\), новую не создавай/, 'дубль вместо возврата прямо запрещён');
+assert.match(coord, /Новая карточка — только если находка шире старой/, 'граница названа');
 assert.match(coord, /Check=fail НЕ ставь Rework\+Ready одним ответом/, 'Check=fail требует отдельного Rework (#37)');
 assert.match(coord, /Accepted\/Rework\/Ready — ты/, 'Ready — право Координатора');
 assert.doesNotMatch(coord, /чисти «Submitted At», «PR», «Run ID», иначе выдача откажет/, 'прежняя просьба чистить коннектором убрана');
