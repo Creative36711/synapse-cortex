@@ -264,6 +264,16 @@
       return true;
     }
 
+    // D-046: «pr:null» вместе с «merged:true» — противоречие в формате, а не
+    // отказ среды. Проверить мерж без PR нечем, верить слову «слит» нельзя, но
+    // и останавливать миссию из-за одной строки не за что: работа сделана.
+    // Просим поправить маркер обычной лестницей напоминаний; карточку и журнал
+    // не трогаем, ожидание остаётся живым. Аудитору и Reviewer PR не нужен по
+    // роли — их маркер про мерж не спрашивает.
+    if (role.fn !== "Auditor" && role.fn !== "Reviewer" && prMergeConflict(result)) {
+      return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "pr-claim");
+    }
+
     const page = await notion("GET", `pages/${result.dispatch_id}`);
     const guard = dispatchGuard(page, expect, role);
     if (guard) {

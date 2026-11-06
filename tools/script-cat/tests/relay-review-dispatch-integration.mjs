@@ -147,6 +147,8 @@ function harness({ reviewRequired = true } = {}) {
       throw new Error('Reviewer не должен ждать PR');
     },
     prDeclined: (r) => r && Object.hasOwn(r, 'pr') && r.pr === null,
+    // D-046: новая ветка перед чтением карточки. Здесь маркеров-противоречий нет.
+    prMergeConflict: () => false,
     prUrl: () => '', hasMergedClaim: () => false, rememberAnswerStamp: () => {}, lastMergeCheck: null,
     markerMissing: async (_role, _expect, name, _manual, why = '') => { calls.markerMissing.push({ name, why }); return false; },
     looseResult: () => null, stillWorking: () => false, staleBranchRefusal: () => false,
@@ -158,7 +160,7 @@ function harness({ reviewRequired = true } = {}) {
       notion, patch, gateway, activeMission, lastClosedMission, queueOf, messagesAfter, messages,
       roleFromPath, isUserNode, nodeId, messageRaw, roles, goTo, log, pause, autoOn, autoSet,
       setStatus, missionKind, nowIso, oneLine, firstLine, questionInMarker, askQuestion,
-      ensureMerged, prDeclined, prUrl, prRef, hasMergedClaim, rememberAnswerStamp, lastMergeCheck,
+      ensureMerged, prDeclined, prUrl, prRef, hasMergedClaim, prMergeConflict, rememberAnswerStamp, lastMergeCheck,
       markerMissing, looseResult, stillWorking, staleBranchRefusal, retryStaleBranchHandoff,
       consumePending, returnMission } = env;
     ${parser}\n${ids}\n${missionMatch}\n${cardBinding}\n${retained}\n${report}\n${dispatch}\n${closeMission}\n${reviewStep}\n${adopt}\n${notice}\n${order}

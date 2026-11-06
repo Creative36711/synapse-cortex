@@ -915,6 +915,15 @@
     !!result && (result.merged === true || String(result.status || "").toLowerCase() === "merged");
 
   /**
+   * Значение `pr` говорит «PR не будет» — само по себе, без заявки о мерже.
+   *
+   * Выделено из `prDeclined`, чтобы D-046 мог отличить явный отказ от PR
+   * (`"pr": null`) от забывчивости (поля нет вовсе), не снимая проверку мержа.
+   */
+  const prNoneValue = (pr) =>
+    pr === null || pr === undefined || /^(none|null|no|нет|—|-)$/i.test(String(pr).trim());
+
+  /**
    * «У этой работы нет PR» — сказано в маркере явно.
    *
    * Отчёт, аудит, запись решения в Notion: кода нет, мержить нечего. Пропуск
@@ -931,7 +940,29 @@
     // заявку должен остановить projectPrBoundary, не обходить проверку PR.
     if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && hasMergedClaim(result)) return false;
     if (!result || !("pr" in result)) return false;
-    const pr = result.pr;
-    if (pr === null || pr === undefined) return true;
-    return /^(none|null|no|нет|—|-)$/i.test(String(pr).trim());
+    return prNoneValue(result.pr);
   };
+
+  /**
+   * D-046: маркер заявляет «PR нет» и «слит» одновременно.
+   *
+   * Боевой K-34 (06.11.2026, 13:50:39): проверочная карточка без изменений
+   * ответила `"pr":null,"merged":true` — ровно как учил шаблон промпта, где
+   * рядом с `"pr":"<URL|null>"` стоял литерал `"merged":true`. `prDeclined`
+   * из-за заявки о мерже отвечал false, `projectPrBoundary` требовал номер PR,
+   * карточка уходила в Blocked и цикл вставал. Второй раз за день (13:05:39 —
+   * K-27), первый Мастер правил вручную.
+   *
+   * Противоречие не принимается и не угадывается: `merged` без PR проверить
+   * нечем, а верить слову «слит» нельзя — так можно провести в main код без
+   * сверки репозитория и базовой ветки. Но это дефект формата, а не отказ
+   * среды: работа сделана, поэтому просим поправить одну строку маркера
+   * через обычную лестницу напоминаний (`markerReminders`), а не останавливаем
+   * миссию. Инвариант `projectPrBoundary` при этом не ослаблен: если такой
+   * маркер всё же дойдёт до проверки мержа, он по-прежнему её не пройдёт.
+   *
+   * Аудитор и Reviewer сюда не попадают: у них PR нет по роли, и `merged`
+   * в их маркере не спрашивается.
+   */
+  const prMergeConflict = (result) =>
+    Boolean(result) && ("pr" in result) && prNoneValue(result.pr) && hasMergedClaim(result);

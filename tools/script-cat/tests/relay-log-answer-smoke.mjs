@@ -147,6 +147,8 @@ assert.ok(!/## Ответ \$\{role\.name\}\\n\\n\$\{hit\.text\}/.test(src), 'з�
     'rt',
     'questionInMarker',
     'appendToJournal',
+    // D-046: проверка противоречия pr/merged стоит до чтения карточки и до Drive.
+    'prMergeConflict',
     'runAnswer', 'isUuid', 'activeMission', 'cardInMission',
     `${submitSource}\nreturn submitExecutor;`,
   );
@@ -183,6 +185,7 @@ assert.ok(!/## Ответ \$\{role\.name\}\\n\\n\$\{hit\.text\}/.test(src), 'з�
       appendCalls.push(args);
       throw stopAfterAppend;
     },
+    () => false,
     runtimeRunAnswer, (value) => Boolean(value), async () => ({ id:'m1' }), () => true,
   );
 

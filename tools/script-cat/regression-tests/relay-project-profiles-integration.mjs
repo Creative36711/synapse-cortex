@@ -126,12 +126,24 @@ assert.equal(sent.length, 0, 'токен не отправляется для ч
 assert.equal((await verifyFn.verifyMergeClaim({}, 'secret')).status, 'unknown', 'без номера PR подтверждение невозможно');
 assert.equal(sent.length, 0, 'без номера PR сетевого запроса нет');
 assert.equal((await verifyFn.verifyMergeClaim({pr:null, merged:true}, 'secret')).status, 'boundary', 'заявка о мерже без номера отклоняется');
-const prStart = src.indexOf('  const prDeclined = (result) => {');
-const noPrSource = src.slice(prStart, src.indexOf('  };', prStart) + 4);
-const declinedFor = (legacy) => new Function('ACTIVE_PROFILE', 'hasMergedClaim', `${noPrSource}\nreturn prDeclined;`)({legacy}, (r)=>r?.merged===true);
-assert.equal(declinedFor(false)({pr:null,merged:false}), true, 'новая работа без PR по-прежнему разрешена');
-assert.equal(declinedFor(false)({pr:null,merged:true}), false, 'противоречивый маркер не обходит проверку PR');
-assert.equal(declinedFor(true)({pr:null,merged:true}), true, 'legacy-обработка без PR не изменена');
+// D-046: prDeclined делегирует prNoneValue, поэтому срез берём от prNoneValue до
+// конца prMergeConflict — иначе помощник остаётся за границей среза. Заодно
+// проверяем сам детектор противоречия: маркер не может обойти проверку PR.
+const prStart = src.indexOf('  const prNoneValue = (pr) =>');
+const prEndMark = 'prNoneValue(result.pr) && hasMergedClaim(result);';
+const prEnd = src.indexOf(prEndMark, prStart);
+assert.ok(prStart > 0 && prEnd > prStart, 'срез prNoneValue…prMergeConflict найден');
+const noPrSource = src.slice(prStart, prEnd + prEndMark.length);
+const declinedFor = (legacy) => new Function(
+  'ACTIVE_PROFILE', 'hasMergedClaim',
+  `${noPrSource}\nreturn { prDeclined, prMergeConflict };`,
+)({legacy}, (r)=>r?.merged===true);
+assert.equal(declinedFor(false).prDeclined({pr:null,merged:false}), true, 'новая работа без PR по-прежнему разрешена');
+assert.equal(declinedFor(false).prDeclined({pr:null,merged:true}), false, 'противоречивый маркер не обходит проверку PR');
+assert.equal(declinedFor(true).prDeclined({pr:null,merged:true}), true, 'legacy-обработка без PR не изменена');
+assert.equal(declinedFor(false).prMergeConflict({pr:null,merged:true}), true, 'D-046: противоречие распознано — оно уйдёт в напоминание');
+assert.equal(declinedFor(false).prMergeConflict({pr:null,merged:false}), false, 'D-046: честный «без PR» не трогается');
+assert.equal(declinedFor(false).prMergeConflict({merged:true}), false, 'D-046: пропущенный pr остаётся забывчивостью');
 assert.equal((await verifyFn.verifyMergeClaim({ pr: 'https://github.com/team/synapse/pull/2' }, 'secret')).status, 'merged');
 assert.equal(sent[0].repo, A.repo); response = { merged: true, base: { ref: 'main', repo: { full_name: A.repo } } };
 assert.equal((await verifyFn.verifyMergeClaim({ pr: 2 }, 'secret')).status, 'boundary', 'другая базовая ветка не подтверждает работу');

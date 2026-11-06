@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.10
+// @version      1.12.11
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -630,7 +630,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.10";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.11";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -4593,6 +4593,9 @@
    * why = "ids" — маркер есть, но без dispatch_id/run_id этой выдачи (D-040,
    * 05.11.2026: Executor прислал маркер с «task» вместо ID). Работа сделана —
    * просим повторить только маркер с ID из напоминания, не переделывать ход.
+   * why = "pr-claim" — маркер заявляет «pr:null» и «merged:true» сразу (D-046,
+   * 06.11.2026: проверочные K-27 и K-34 уходили в Blocked). Просим поправить
+   * одну строку: merged:false без изменений либо номер слитого PR.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
     const ctx = {
@@ -4955,10 +4958,12 @@
           ? `${role.name} прислал только маркер ${markerName}, без отчёта — напоминание ${sent + 1} из ${C.markerReminders}.`
           : why === "ids"
           ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
+          : why === "pr-claim"
+          ? `${role.name} прислал маркер ${markerName} с «pr:null» и «merged:true» одновременно — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : why === "pr-claim" ? "Relay: маркер противоречит себе" : "Relay: нет маркера" },
       );
       await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
         missionId: expect.missionId,
@@ -4988,6 +4993,9 @@
         : why === "ids"
         ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
+        : why === "pr-claim"
+        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
@@ -8751,6 +8759,15 @@
     !!result && (result.merged === true || String(result.status || "").toLowerCase() === "merged");
 
   /**
+   * Значение `pr` говорит «PR не будет» — само по себе, без заявки о мерже.
+   *
+   * Выделено из `prDeclined`, чтобы D-046 мог отличить явный отказ от PR
+   * (`"pr": null`) от забывчивости (поля нет вовсе), не снимая проверку мержа.
+   */
+  const prNoneValue = (pr) =>
+    pr === null || pr === undefined || /^(none|null|no|нет|—|-)$/i.test(String(pr).trim());
+
+  /**
    * «У этой работы нет PR» — сказано в маркере явно.
    *
    * Отчёт, аудит, запись решения в Notion: кода нет, мержить нечего. Пропуск
@@ -8767,10 +8784,32 @@
     // заявку должен остановить projectPrBoundary, не обходить проверку PR.
     if (typeof ACTIVE_PROFILE !== "undefined" && !ACTIVE_PROFILE.legacy && hasMergedClaim(result)) return false;
     if (!result || !("pr" in result)) return false;
-    const pr = result.pr;
-    if (pr === null || pr === undefined) return true;
-    return /^(none|null|no|нет|—|-)$/i.test(String(pr).trim());
+    return prNoneValue(result.pr);
   };
+
+  /**
+   * D-046: маркер заявляет «PR нет» и «слит» одновременно.
+   *
+   * Боевой K-34 (06.11.2026, 13:50:39): проверочная карточка без изменений
+   * ответила `"pr":null,"merged":true` — ровно как учил шаблон промпта, где
+   * рядом с `"pr":"<URL|null>"` стоял литерал `"merged":true`. `prDeclined`
+   * из-за заявки о мерже отвечал false, `projectPrBoundary` требовал номер PR,
+   * карточка уходила в Blocked и цикл вставал. Второй раз за день (13:05:39 —
+   * K-27), первый Мастер правил вручную.
+   *
+   * Противоречие не принимается и не угадывается: `merged` без PR проверить
+   * нечем, а верить слову «слит» нельзя — так можно провести в main код без
+   * сверки репозитория и базовой ветки. Но это дефект формата, а не отказ
+   * среды: работа сделана, поэтому просим поправить одну строку маркера
+   * через обычную лестницу напоминаний (`markerReminders`), а не останавливаем
+   * миссию. Инвариант `projectPrBoundary` при этом не ослаблен: если такой
+   * маркер всё же дойдёт до проверки мержа, он по-прежнему её не пройдёт.
+   *
+   * Аудитор и Reviewer сюда не попадают: у них PR нет по роли, и `merged`
+   * в их маркере не спрашивается.
+   */
+  const prMergeConflict = (result) =>
+    Boolean(result) && ("pr" in result) && prNoneValue(result.pr) && hasMergedClaim(result);
 
   // ───────────────────────── реестр маркеров ─────────────────────────
   // Единый источник имён маркеров и их обязательных ID. Используется
@@ -8935,9 +8974,15 @@
       if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
       if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
       const auditor = c.role?.fn === "Auditor";
-      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
+      // D-046: литерал `"merged":true` рядом с `"pr":"<URL|null>"` учил агента
+      // противоречию «PR нет, но слит» — проверочные K-27 и K-34 уходили в
+      // Blocked. Безопасное значение здесь — false: он не противоречит `pr:null`, а
+      // для настоящего PR ведёт к проверке по GitHub, а не вместо неё. Когда
+      // ставить true, говорит правило ниже. Шаблон обязан оставаться валидным
+      // JSON: `validateMarkerIds` разбирает его целиком.
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":false}`);
     };
-    def("marker.agent", { version: 2, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
+    def("marker.agent", { version: 3, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.",
         "Если продолжить нельзя — назови блокер, не выдумывай результат.",
@@ -8947,7 +8992,7 @@
       // у него нет, и экономим overhead под длинную зону роли (K-20).
       const fields = c.role?.fn === "Auditor"
         ? "check:0=pass."
-        : "check:0=pass; pr:null если не нужен; merged:true только после мержа.";
+        : "check:0=pass; без PR pr:null,merged:false; merged:true только после мержа.";
       return [
         `ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). ${fields} ID из промпта:`,
         markerJson(c, "CF_AGENT_RESULT"),
@@ -8998,13 +9043,18 @@
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
       const ids = c.reminder?.why === "ids";
+      const prClaim = c.reminder?.why === "pr-claim";
+      // Бюджет напоминания жёсткий (C.promptBudgets: reminder.marker + marker.agent
+      // ≤ 700, из них 426 — сам шаблон маркера). Поэтому ветка «pr-claim» говорит
+      // за себя и заменяет общую концовку: она уже просит поправить только маркер.
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
         ids ? `Маркер ${c.reminder?.markerName} есть, но в нём нет dispatch_id/run_id этой выдачи. Повтори маркер с ID из этого напоминания; работу не повторяй.`
+          : prClaim ? `В маркере ${c.reminder?.markerName} "pr":null и "merged":true разом — так нельзя. Изменений не было — "pr":null,"merged":false. Слил свой PR — номер PR и "merged":true. Поправь только маркер.`
           : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
           : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
-        "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
-      ].join("\n");
+        prClaim ? "" : "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
+      ].filter(Boolean).join("\n");
     } });
 
     def("pilot.brief", { audience: ["pilot"], verbatim: true, render: (c) => c.pilot?.brief || "" });
@@ -9919,6 +9969,16 @@
         kind: "dispatch-changed", ref: expect.ref, runId: expect.runId || "",
       });
       return true;
+    }
+
+    // D-046: «pr:null» вместе с «merged:true» — противоречие в формате, а не
+    // отказ среды. Проверить мерж без PR нечем, верить слову «слит» нельзя, но
+    // и останавливать миссию из-за одной строки не за что: работа сделана.
+    // Просим поправить маркер обычной лестницей напоминаний; карточку и журнал
+    // не трогаем, ожидание остаётся живым. Аудитору и Reviewer PR не нужен по
+    // роли — их маркер про мерж не спрашивает.
+    if (role.fn !== "Auditor" && role.fn !== "Reviewer" && prMergeConflict(result)) {
+      return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "pr-claim");
     }
 
     const page = await notion("GET", `pages/${result.dispatch_id}`);
