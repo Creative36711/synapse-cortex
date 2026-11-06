@@ -32,9 +32,9 @@ const block = src.slice(from, to);
 
 function make({ store = new Map(), now = Date.parse('2026-10-24T16:12:51+03:00') } = {}) {
   const api = new Function(
-    'GM_getValue', 'GM_setValue', 'K', 'Date', 'isReturned', 'missionRemarks', 'textHash',
+    'GM_getValue', 'GM_setValue', 'K', 'Date', 'isReturned', 'missionRemarks', 'textHash', 'rt',
     `${block}
-     return { firstLine, remarkItems, returnFingerprint, returnEpoch, dropStalePlan, returnBlock, textHash };`,
+     return { firstLine, remarkItems, returnFingerprint, returnEpoch, dropStalePlan, returnBlock, returnAnswered, textHash };`,
   )(
     (k, d) => (store.has(k) ? store.get(k) : d),
     (k, v) => store.set(k, v),
@@ -55,11 +55,15 @@ function make({ store = new Map(), now = Date.parse('2026-10-24T16:12:51+03:00')
       for (let i = 0; i < value.length; i += 1) h = ((h << 5) + h + value.charCodeAt(i)) | 0;
       return String(h);
     },
+    // `rt` принимает свойство Notion, как боевая функция: в dropStalePlan и
+    // returnBlock он вызывается на `properties[...]`, а не на странице.
+    (prop) => (prop?.rich_text || []).map((x) => x.text?.content || '').join(''),
   );
   return { api, store };
 }
 
-const mission = ({ remarks = '1) раз 2) два 3) три', round = 1, at = '2026-10-24', editedAt = '' } = {}) => ({
+const mission = ({ remarks = '1) раз 2) два 3) три', round = 1, at = '2026-10-24', editedAt = '',
+  result = 'NAR-1 закрыта: 11 карточек…' } = {}) => ({
   id: 'mission-1',
   ...(editedAt ? { last_edited_time: editedAt } : {}),
   properties: {
@@ -68,7 +72,7 @@ const mission = ({ remarks = '1) раз 2) два 3) три', round = 1, at = '2
     'Возвращена': { date: { start: at } },
     'Круг': { number: round },
     'Замечания': { rich_text: [{ text: { content: remarks } }] },
-    'Итог': { rich_text: [{ text: { content: 'NAR-1 закрыта: 11 карточек…' } }] },
+    'Итог': { rich_text: [{ text: { content: result } }] },
   },
 });
 
@@ -149,7 +153,103 @@ const stale = (at) => ({ kind: 'plan', at, sentAt: at, ref: 'mission-1', turnId:
   const second = api.returnEpoch(mission({ round: 2 }));
   const seenSecond = `cfn-mission-return:${m.id}:${api.textHash(second.fp)}`;
   assert.notEqual(second.fp, epoch.fp, 'у нового возврата свой отпечаток');
-  assert.notEqual(store.get(seenSecond), true, 'новый возврат объявится своей строкой');
+  assert.ok(!store.get(seenSecond), 'новый возврат объявится своей строкой');
+}
+
+// 3c3. Главный случай 06.11: отсчёт возврата впервые считается уже ПОСЛЕ
+// правки карточки, и ожидание, отправленное между возвратом и правкой, нельзя
+// объявлять прошлым ходом.
+//
+// Возврат 17:07:32, план с замечаниями 17:07:57, Координатор к 17:18 создал
+// K-38…K-41 и дописал «Возврат» в «Итог» → «последняя правка» 17:18. Шаг
+// 17:19:30 снял живое ожидание, в 17:19:54 ушёл второй план подряд — агент
+// потратил на него ещё 11 минут, и только сверка с очередью спасла от дублей.
+{
+  // Часы — 17:19:30, тот самый шаг. Иначе «последняя правка» окажется в
+  // будущем, отсчёт возьмётся по часам, и проверка пройдёт случайно.
+  const { api, store } = make({ now: Date.parse('2026-11-06T17:19:30+03:00') });
+  // Правка «Итога» в 17:18: Координатор дописал раздел «Возврат» — тот самый,
+  // которого требует план с замечаниями.
+  const returned = mission({
+    editedAt: '2026-11-06T14:18:40Z',
+    result: 'Возврат: 1) --state → отпечаток K-39; 2) --lang → K-38; 3) render:font-sample → K-40.',
+  });
+  const epoch = api.returnEpoch(returned);
+  assert.equal(epoch.at, Date.parse('2026-11-06T17:18:40+03:00'), 'отсчёт по последней правке — 17:18');
+  const planAt = Date.parse('2026-11-06T17:07:57+03:00');
+  store.set('cfn-expect', { kind: 'plan', at: planAt, sentAt: planAt, turnId: 'turn-1' });
+  assert.equal(api.dropStalePlan(returned, store.get('cfn-expect'), epoch), false,
+    'ход, который нёс замечания, не снимается');
+  assert.equal(store.get('cfn-expect')?.turnId, 'turn-1', 'ожидание не тронуто');
+}
+
+// 3c3b. Тот же час, но «Итог» ещё не дописан: ожидание прошлого круга
+// по-прежнему снимается — исправление не отменяет исходную защиту 24.10.
+{
+  const { api, store } = make({ now: Date.parse('2026-11-06T17:19:30+03:00') });
+  const returned = mission({ editedAt: '2026-11-06T14:18:40Z' });
+  const epoch = api.returnEpoch(returned);
+  const oldAt = Date.parse('2026-11-06T15:47:00+03:00');
+  store.set('cfn-expect', { kind: 'plan', at: oldAt, sentAt: oldAt, turnId: 'turn-old' });
+  assert.equal(api.dropStalePlan(returned, store.get('cfn-expect'), epoch), true, 'план прошлого хода снят');
+  assert.equal(store.get('cfn-expect'), null, 'ожидание очищено');
+  assert.equal(store.get('cfn-plan-at'), 0, 'новый план разрешён сразу');
+}
+
+// 3c4. Тот же случай, но «Итога» в карточке ещё нет (агент пишет в него позже):
+// держит снимок «план отправлен уже с замечаниями». Снимок сильнее времени.
+{
+  const { api, store } = make({ now: Date.parse('2026-11-06T17:19:30+03:00') });
+  const m = mission({ editedAt: '2026-11-06T14:18:40Z' });
+  const epoch = api.returnEpoch(m);
+  store.set('cfn-expect', {
+    kind: 'plan', at: epoch.at - 30 * 60 * 1000, sentAt: epoch.at - 30 * 60 * 1000, planBeforeReturn: false,
+  });
+  assert.equal(api.dropStalePlan(m, store.get('cfn-expect'), epoch), false, 'план с замечаниями остаётся');
+
+  store.set('cfn-expect', {
+    kind: 'plan', at: epoch.at - 30 * 60 * 1000, sentAt: epoch.at - 30 * 60 * 1000, planBeforeReturn: true,
+  });
+  assert.equal(api.dropStalePlan(m, store.get('cfn-expect'), epoch), true, 'план прошлого круга снят');
+}
+
+// 3c5. Отметка «возврат объявили» не даёт снять ход, начатый после неё, даже
+// если время возврата уехало вперёд (остаток прошлой версии).
+{
+  const { api, store } = make({ now: Date.parse('2026-11-06T17:19:30+03:00') });
+  const m = mission({ editedAt: '2026-11-06T14:18:40Z' });
+  const markedAt = Date.parse('2026-11-06T17:07:40+03:00');
+  const sent = Date.parse('2026-11-06T17:08:05+03:00');
+  store.set('cfn-expect', { kind: 'plan', at: sent, sentAt: sent });
+  assert.equal(api.dropStalePlan(m, store.get('cfn-expect'), { at: Date.parse('2026-11-06T17:18:40+03:00'), fp: 'x', markedAt }), false,
+    'ход после объявления возврата не старый');
+  assert.equal(api.dropStalePlan(m, store.get('cfn-expect'), { at: Date.parse('2026-11-06T17:18:40+03:00'), fp: 'x' }), true,
+    'без снимка и раздела «Возврат» остаётся правило по времени');
+}
+
+// 3c6. «Раздел «Возврат» в «Итоге»» — тот же признак, которого требует план:
+// без замечаний или без раздела он ничего не доказывает.
+{
+  const { api } = make();
+  assert.equal(api.returnAnswered(mission()), false, 'раздела нет — ответа нет');
+  const answered = mission();
+  answered.properties['Итог'] = { rich_text: [{ text: { content: 'Возврат: 1) сделано; 2) поправлено' } }] };
+  assert.equal(api.returnAnswered(answered), true, 'раздел есть — ответ есть');
+  const noRemarks = { ...answered, properties: { ...answered.properties, 'Замечания': { rich_text: [] } } };
+  assert.equal(api.returnAnswered(noRemarks), false, 'без замечаний отвечать нечего');
+}
+
+// 3c7. Напоминание по тому же плану не теряет снимок «с замечаниями»: иначе
+// повтор промпта возвращает нас к сравнению по времени правки карточки.
+{
+  const srcPolls = readFileSync(new URL('../src/17-arena-polls.js', import.meta.url), 'utf8');
+  assert.match(srcPolls, /planCarry/, 'снимок переносится в новое ожидание');
+  assert.match(srcPolls, /"planBeforeReturn" in previousPlan/, 'перенос только для плана той же миссии');
+  assert.match(srcPolls, /previousPlan\.kind === "plan"/, 'чужое ожидание не переписывается');
+  assert.ok(
+    srcPolls.indexOf('planCarry') < srcPolls.indexOf('...payload,'),
+    'снимок кладётся в ожидание раньше полей выдачи',
+  );
 }
 
 // 3d. Замечания — по пунктам, даже если Мастер записал их одним абзацем.
@@ -186,14 +286,16 @@ const step = src.slice(src.indexOf('  async function coordinatorStep('), src.ind
 assert.ok(step.length > 1000, 'coordinatorStep на месте');
 const returned = step.slice(step.indexOf('    if (isReturned(mission)) {'), step.indexOf('    await releaseStalled(mission);'));
 assert.match(returned, /const epoch = returnEpoch\(mission\)/, 'отсчёт берётся до разбора маркера');
-assert.ok(
-  returned.indexOf('returnEpoch(mission)') < returned.indexOf('dropStalePlan(mission, expect, epoch)'),
-  'сначала отсчёт, потом проверка ожидания',
-);
+// Вызов снятия получает отсчёт вместе с отметкой «когда объявили возврат»;
+// важно не буквальное имя аргумента, а порядок: отсчёт считается раньше.
+const dropCall = returned.search(/dropStalePlan\(mission, expect,/);
+assert.ok(dropCall > 0, 'снятие ожидания вызывается из шага Координатора');
+assert.ok(returned.indexOf('returnEpoch(mission)') < dropCall, 'сначала отсчёт, потом проверка ожидания');
+assert.match(returned, /markedAt/, 'вместе с отсчётом передаётся момент объявления возврата');
 assert.match(returned, /expect = null/, 'старое ожидание не доходит до разбора маркера');
 assert.match(block, /GM_setValue\("cfn-plan-at", 0\)/, 'снятие старого хода разрешает новый план немедленно');
 assert.ok(
-  step.indexOf('dropStalePlan(mission, expect, epoch)') < step.indexOf('if (expect && (expect.kind === "plan"'),
+  step.search(/dropStalePlan\(mission, expect,/) < step.indexOf('if (expect && (expect.kind === "plan"'),
   'снятие идёт до ветки разбора ответа Координатора',
 );
 
@@ -201,6 +303,23 @@ const done = step.slice(step.indexOf('        const returned = isReturned(missio
 assert.match(done, /GM_setValue\("cfn-plan-at", 0\)/, 'после паузы «Продолжить» не ждёт минуту');
 assert.match(done, /уже после возврата/, 'пауза объясняет, что ответ был после возврата, а не вместо него');
 assert.match(done, /done-with-remarks/, 'пауза сохранила свой вид');
+
+// Снимок «с замечаниями» рождается в requestPlan из содержимого задачи — до
+// отправки — и уезжает в ожидание. Время правки карточки для этого не годится.
+const planFrom = src.indexOf('  async function requestPlan(');
+const plan = src.slice(planFrom, src.indexOf('\n  }\n', src.indexOf('if (sent) await markDelivered(briefing.fresh);', planFrom)));
+assert.match(plan, /const planBeforeReturn = !isReturned\(mission\)/, 'снимок считается в requestPlan');
+const snapshot = plan.slice(plan.indexOf('const planBeforeReturn'));
+assert.match(
+  snapshot.slice(0, snapshot.indexOf('Recovery')),
+  /returnBlock\(mission\)/,
+  'признак берётся из содержимого задачи (returnBlock), а не из времени',
+);
+assert.ok(
+  plan.indexOf('const planBeforeReturn') < plan.indexOf('sendToRole('),
+  'снимок готов до отправки плана',
+);
+assert.match(plan, /planBeforeReturn,/, 'снимок уходит в ожидание');
 
 assert.match(src, /const items = remarkItems\(remarks\)\.map/, 'returnBlock использует разбор замечаний по пунктам');
 assert.match(src, /cfn-mission-return-at:/, 'отсчёт возврата хранится по миссии');

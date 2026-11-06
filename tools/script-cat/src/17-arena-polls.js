@@ -1100,6 +1100,14 @@
     // выживала очередь без ожидания — она отправляла задание и оставляла
     // цикл без хозяина хода. Теперь усечение теряет очередь, а ожидание
     // остаётся: такой ход разбирается штатной уборкой фантомов.
+    // Снимок «план уже с замечаниями» переживает напоминание: иначе повтор
+    // промпта по тому же плану теряет признак, и следующий шаг снова смотрит
+    // на время правки карточки — ровно то, из-за чего 06.11 ушёл второй план.
+    const previousPlan = GM_getValue(K.expect, null);
+    const planCarry = kind === "plan" && previousPlan && previousPlan.kind === "plan" &&
+      norm(previousPlan.ref) === norm(ref) && "planBeforeReturn" in previousPlan
+      ? { planBeforeReturn: previousPlan.planBeforeReturn }
+      : {};
     GM_setValue(K.expect, {
       roleId: role.id,
       roleName: role.name,
@@ -1118,6 +1126,7 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       prompt: envelope || null,
+      ...planCarry,
       ...payload,
       sessionRepo,
       targetRepo,
