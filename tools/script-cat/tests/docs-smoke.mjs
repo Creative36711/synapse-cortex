@@ -26,6 +26,11 @@ assert.equal(contract.d047?.budgetsRaised, false, 'D-047 не поднимал �
 assert.match(contract.d047?.protocolNote || '', /остаётся 1\.11/, 'D-047 транспорт-внутренний');
 assert.match(contract.d047?.fix || '', /planBeforeReturn/, 'D-047: снимок плана решает снятие ожидания');
 assert.match(contract.d047?.safety || '', /снимается/, 'D-047: снятие прошлого хода не отменено');
+// D-048 поднимает бюджет осознанно: это единственная секция с budgetsRaised=true.
+assert.equal(contract.d048?.budgetsRaised, true, 'D-048 поднял бюджет явно');
+assert.match(contract.d048?.raisedBudget || '', /7500 → 8000/, 'D-048: назван подъём');
+assert.match(contract.d048?.safety || '', /verbatim|не режутся/, 'D-048: оракул не сокращён');
+assert.match(contract.d048?.fix || '', /missionBodyText|блоки страницы/, 'D-048: «Возврат» читается и из блоков');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',

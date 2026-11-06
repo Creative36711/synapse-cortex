@@ -310,7 +310,14 @@ const returnBlock = sliceBetween('  function returnBlock(mission) {', '  const t
 assert.match(src, /returnBlock\(mission\),/, 'блок попадает в план Координатора');
 
 // У возвращённой миссии «done» без раздела «Возврат» не принимается.
-assert.match(src, /returned && !\/возврат\/i\.test\(rt\(mission\.properties\["Итог"\]\)\)/, 'проверка раздела «Возврат»');
+// Раздел «Возврат» считается и по свойству «Итог», и по тексту страницы:
+// 06.11 Координатор дописал его блоками, свойство осталось прежним, и пауза
+// встала при живом ответе на замечания.
+assert.match(src, /returned && !\(await returnAnsweredWithBody\(mission\)\)/, 'проверка раздела «Возврат» ждёт ответа из Notion');
+assert.match(src, /async function returnAnsweredWithBody\(mission\)/, 'проверка умеет читать страницу миссии');
+assert.match(src, /blocks\/\$\{mission\.id\}\/children/, 'источник — блоки страницы миссии');
+assert.match(src, /\/возврат\/i\.test\(body\)/, 'текст страницы проверяется тем же словом');
+assert.match(src, /returnAnswered\(mission\)\) return true/, 'свойство «Итог» проверяется первым');
 assert.match(src, /done-with-remarks/, 'это пауза с понятной причиной');
 assert.match(src, /return-empty/, 'пустые замечания тоже пауза, а не молчаливый ход');
 

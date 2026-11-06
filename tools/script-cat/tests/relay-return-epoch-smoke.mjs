@@ -281,6 +281,67 @@ const stale = (at) => ({ kind: 'plan', at, sentAt: at, ref: 'mission-1', turnId:
   assert.equal(api.firstLine('коротко'), 'коротко', 'короткий текст не трогается');
 }
 
+// 3f. «Возврат» дописан блоками на странице миссии, а не в свойство «Итог».
+//
+// 06.11, 20:22: Координатор оформил «Итог хода 8d416cb1 … закрытие круга 1»
+// блоками страницы, свойство «Итог» осталось прежним. Скрипт видел только
+// свойство и поставил паузу «в «Итоге» нет раздела «Возврат»» при живом ответе.
+//
+// Проверяем боевые функции как есть: ответ в блоках — это ответ, обрыв чтения
+// блоков не превращает свойство «ответа нет», а само чтение идёт в блоки
+// страницы миссии и не уходит в дочерние страницы карточек.
+{
+  const cut = (head, tail) => {
+    const from = src.indexOf(head);
+    const to = src.indexOf(tail, from);
+    assert.ok(from > 0 && to > from, `срез ${head.trim().slice(0, 40)}`);
+    return src.slice(from, to);
+  };
+  const asked = [];
+  const build = (body) => {
+    const code = `${cut('  const returnAnswered = (mission) =>', '  function dropStalePlan(')}
+${cut('  async function missionBodyText(mission) {', '  function dropStalePlan(')}
+${cut('  async function returnAnsweredWithBody(mission) {', '  async function coordinatorStep(')}
+return { returnAnswered, missionBodyText, returnAnsweredWithBody };`;
+    return new Function('isReturned', 'missionRemarks', 'rt', 'notion', code)(
+      (page) => page?.properties?.['Состояние']?.select?.name === 'Возвращена',
+      (page) => (page?.properties?.['Замечания']?.rich_text || []).map((x) => x.text?.content || '').join(''),
+      (prop) => (prop?.rich_text || []).map((x) => x.text?.content || '').join(''),
+      body(asked),
+    );
+  };
+
+  const plain = build(() => ({}));
+  assert.equal(plain.returnAnswered(mission()), false, 'ни свойства, ни блоков — ответа нет');
+  const inBody = { ...mission(), bodyText: 'Итог хода … круг 1. Возврат: замечания закрыты K-38…K-43.' };
+  assert.equal(plain.returnAnswered(inBody), true, 'раздел в блоках страницы — это ответ');
+
+  // Блоки читаются у страницы миссии, дочерние страницы не запрашиваются.
+  const pages = build((seen) => async (method, path) => {
+    seen.push(path);
+    assert.equal(method, 'GET', 'блоки только читаются');
+    return { results: [
+      { type: 'heading_2', heading_2: { rich_text: [{ plain_text: 'Итог хода 8d416cb1' }] } },
+      { type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Возврат: 1) --state → K-39; 2) --lang → K-38.' }] } },
+    ], has_more: false };
+  });
+  const body = await pages.missionBodyText(mission());
+  assert.match(body, /Возврат: 1\) --state → K-39/, 'текст блоков собран');
+  assert.ok(asked.every((path) => path.startsWith('blocks/mission-1/children')), `читается только страница миссии: ${asked.join(', ')}`);
+
+  // Пауза done-with-remarks: сначала свойство, затем блоки; обрыв — не приговор.
+  const api = build(() => async () => ({ results: [
+    { type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Возврат: закрыто карточками.' }] } },
+  ], has_more: false }));
+  assert.equal(await api.returnAnsweredWithBody(mission()), true, 'ответ только блоками принимается');
+  const emptyBody = build(() => async () => ({ results: [], has_more: false }));
+  assert.equal(await emptyBody.returnAnsweredWithBody(mission()), false, 'нет ни свойства, ни блоков — пауза остаётся');
+  const broken = build(() => async () => { throw new Error('нет сети'); });
+  assert.equal(await broken.returnAnsweredWithBody(mission()), false, 'обрыв чтения блоков оставляет решать свойству');
+  const byProp = { ...mission(), properties: { ...mission().properties, 'Итог': { rich_text: [{ text: { content: 'Возврат: закрыто' } }] } } };
+  assert.equal(await broken.returnAnsweredWithBody(byProp), true, 'свойство читается первым и переживает обрыв');
+}
+
 // ── 4. Порядок в шаге Координатора ─────────────────────────────────────────
 const step = src.slice(src.indexOf('  async function coordinatorStep('), src.indexOf('  /**\n   * Запрос хода Координатора.'));
 assert.ok(step.length > 1000, 'coordinatorStep на месте');
@@ -323,5 +384,17 @@ assert.match(plan, /planBeforeReturn,/, 'снимок уходит в ожида
 
 assert.match(src, /const items = remarkItems\(remarks\)\.map/, 'returnBlock использует разбор замечаний по пунктам');
 assert.match(src, /cfn-mission-return-at:/, 'отсчёт возврата хранится по миссии');
+
+// Координатор должен понимать, что Rework — про ту же карточку, а не повод
+// завести новую дубликатом (боевое наблюдение Мастера 06.11).
+{
+  const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');
+  const plan = PromptCompiler.compile(planRequest());
+  const rule = /Rework — для той же карточки[^"]*новую не создавай/;
+  assert.match(plan.text, rule, 'правило Rework→та же карточка есть в плане Координатора');
+  assert.match(plan.text, /Новая карточка — только если находка шире старой/, 'граница для узкой находки названа');
+  assert.match(plan.text, /Check=fail НЕ ставь Rework\+Ready одним ответом/, 'ограничение #37 сохранено');
+  assert.ok(plan.metrics.chars <= 7500, `план ${plan.metrics.chars} в лимите`);
+}
 
 console.log('OK: relay 1.4.63 — возврат миссии снимает прошлый ход, старый done не считается ответом на замечания');

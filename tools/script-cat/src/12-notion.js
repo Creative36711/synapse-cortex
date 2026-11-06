@@ -511,7 +511,40 @@
    */
   const returnAnswered = (mission) =>
     isReturned(mission) && Boolean(missionRemarks(mission)) &&
-    /возврат/i.test(rt(mission?.properties?.["Итог"]));
+    /возврат/i.test(`${rt(mission?.properties?.["Итог"])} ${mission?.bodyText || ""}`);
+
+  /**
+   * Текст страницы миссии — блоками, а не только свойством «Итог».
+   *
+   * 06.11, 20:22. Координатор дописал «Итог хода … закрытие круга 1» блоками на
+   * странице, а свойство «Итог» оставил прежним. Скрипт видел только свойство и
+   * встал на паузу «в «Итоге» нет раздела «Возврат»», хотя раздел был — абзацем
+   * ниже. Ошибиться может каждый: в карточке миссии два места с одинаковым
+   * названием, и агент не обязан помнить, какое из них читает транспорт.
+   *
+   * Читаем только текстовые блоки, не заходя в дочерние страницы: карточки
+   * Запросов живут отдельными страницами и к «Итогу» отношения не имеют.
+   * Ошибка чтения не блокирует цикл: тогда решает свойство, как раньше.
+   */
+  async function missionBodyText(mission) {
+    if (!mission?.id) return "";
+    const rows = [];
+    let cursor = "";
+    for (let page = 0; page < 3; page += 1) {
+      const list = await notion(
+        "GET",
+        `blocks/${mission.id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`,
+      );
+      const results = Array.isArray(list?.results) ? list.results : [];
+      for (const block of results) {
+        const rich = block?.[block?.type]?.rich_text;
+        if (Array.isArray(rich)) rows.push(rich.map((part) => part?.plain_text || part?.text?.content || "").join(""));
+      }
+      if (!list?.has_more || !list?.next_cursor) break;
+      cursor = String(list.next_cursor);
+    }
+    return rows.join("\n").slice(0, 20000);
+  }
 
   /**
    * Ожидание Координатора началось до возврата — это прошлый ход, а не ответ

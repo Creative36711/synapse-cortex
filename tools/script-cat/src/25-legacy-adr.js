@@ -579,6 +579,19 @@
     );
   }
 
+  /**
+   * «Раздел «Возврат» есть» — с учётом текста страницы миссии.
+   *
+   * Координатор может дописать раздел блоками на странице, а не в свойство
+   * «Итог». Это тот же ответ на замечания, и пауза за него не ставится.
+   */
+  async function returnAnsweredWithBody(mission) {
+    if (!isReturned(mission)) return true;
+    if (returnAnswered(mission)) return true;
+    const body = await missionBodyText(mission).catch(() => "");
+    return /возврат/i.test(body);
+  }
+
   async function coordinatorStep(role, expect, manual = false) {
     const mission = await activeMission();
     if (!mission) {
@@ -923,7 +936,7 @@
           return true;
         }
         const returned = isReturned(mission);
-        if (returned && !/возврат/i.test(rt(mission.properties["Итог"]))) {
+        if (returned && !(await returnAnsweredWithBody(mission))) {
           // Сюда попадает только ответ на план, запрошенный уже после
           // возврата: старый маркер снят выше. Значит, замечания правда не
           // разобраны. Снимаем троттлинг, чтобы «Продолжить» сразу вернуло

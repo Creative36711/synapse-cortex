@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.12
+// @version      1.12.13
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -630,7 +630,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.12";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.13";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -3894,7 +3894,40 @@
    */
   const returnAnswered = (mission) =>
     isReturned(mission) && Boolean(missionRemarks(mission)) &&
-    /возврат/i.test(rt(mission?.properties?.["Итог"]));
+    /возврат/i.test(`${rt(mission?.properties?.["Итог"])} ${mission?.bodyText || ""}`);
+
+  /**
+   * Текст страницы миссии — блоками, а не только свойством «Итог».
+   *
+   * 06.11, 20:22. Координатор дописал «Итог хода … закрытие круга 1» блоками на
+   * странице, а свойство «Итог» оставил прежним. Скрипт видел только свойство и
+   * встал на паузу «в «Итоге» нет раздела «Возврат»», хотя раздел был — абзацем
+   * ниже. Ошибиться может каждый: в карточке миссии два места с одинаковым
+   * названием, и агент не обязан помнить, какое из них читает транспорт.
+   *
+   * Читаем только текстовые блоки, не заходя в дочерние страницы: карточки
+   * Запросов живут отдельными страницами и к «Итогу» отношения не имеют.
+   * Ошибка чтения не блокирует цикл: тогда решает свойство, как раньше.
+   */
+  async function missionBodyText(mission) {
+    if (!mission?.id) return "";
+    const rows = [];
+    let cursor = "";
+    for (let page = 0; page < 3; page += 1) {
+      const list = await notion(
+        "GET",
+        `blocks/${mission.id}/children?page_size=100${cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : ""}`,
+      );
+      const results = Array.isArray(list?.results) ? list.results : [];
+      for (const block of results) {
+        const rich = block?.[block?.type]?.rich_text;
+        if (Array.isArray(rich)) rows.push(rich.map((part) => part?.plain_text || part?.text?.content || "").join(""));
+      }
+      if (!list?.has_more || !list?.next_cursor) break;
+      cursor = String(list.next_cursor);
+    }
+    return rows.join("\n").slice(0, 20000);
+  }
 
   /**
    * Ожидание Координатора началось до возврата — это прошлый ход, а не ответ
@@ -8988,7 +9021,7 @@
     def("queue.drafts", { verbatim: true, render: (c) => c.queue?.draft || "" });
 
     def("queue.coordinator", { ruleIds: ["R-QUEUE", "R-NO-REVIEWER-DISPATCH"], audience: ["Coordinator"], render: () =>
-      "Очередь: Running ставит транспорт и сам вернёт в Ready без хода — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID той же миссии, Accepted, без Check=fail. Rework: переделка — в Ready отдельным шагом; Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи молча. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто после хода — незаконченный ход. Выполнено — «Итог» + next:\"done\" (передача приёмке). Running в очереди — это работа, которая идёт прямо сейчас. Движок ставит Running и Submitted; Accepted, Rework и Ready ставишь ты." });
+      "Очередь: Running ставит транспорт и сам вернёт в Ready без хода — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID той же миссии, Accepted, без Check=fail. Rework — для той же карточки: Rework + та же карточка в Ready (тот же Sequence), новую не создавай. Новая карточка — только если находка шире старой (новый оракул, другой Scope). Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи молча. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто после хода — незаконченный ход. Выполнено — «Итог» + next:\"done\" (передача приёмке). Running в очереди — это работа, которая идёт прямо сейчас. Движок ставит Running и Submitted; Accepted, Rework и Ready ставишь ты." });
 
     def("review.evidence", { verbatim: true, render: (c) => [
       c.queue?.acceptedCount != null ? `Принятых карточек: ${c.queue.acceptedCount}.` : "",
@@ -9671,9 +9704,14 @@
   // D-039: Executor поднят 6500 → 7500 (явное бюджетное решение). После диеты
   // D-036 и verbatim-зоны D-038 overhead стал lean (~2678, не зависит от зоны);
   // боевая K-21 (total 6642) упёрлась в total-лимит из-за подлинного контента
-  // задачи (оракул/инварианты), который не режется молча (D-034). 7500 — как у
-  // Координатора; карточки больше — через payload-канал или отдельное решение.
-  const DISPATCH_TOTAL = { Executor: 7500, Auditor: 5500, Reviewer: 7000 };
+  // задачи (оракул/инварианты), который не режется молча (D-034).
+  //
+  // D-048: 7500 → 8000 решением Мастера. 06.11 боевая K-43 встала на 7802 при
+  // одном лишь комментарии к примеру: оракул 2541, намерение 944, Scope 747,
+  // инварианты 642 — выдать было нечего, кроме как разбить карточку, которая и
+  // так делает правку в один абзац. Оракул по-прежнему verbatim: лимит поднят
+  // не ради сокращения проверок, а чтобы обычная карточка не рождала вторую.
+  const DISPATCH_TOTAL = { Executor: 8000, Auditor: 5500, Reviewer: 7000 };
 
   /** Выдача рабочей карточки (Executor/Auditor/историческая Reviewer). */
   function executorPrompt(task, role, payload, logId, runId, missionId = "", ctx = {}) {
@@ -12228,6 +12266,19 @@
     );
   }
 
+  /**
+   * «Раздел «Возврат» есть» — с учётом текста страницы миссии.
+   *
+   * Координатор может дописать раздел блоками на странице, а не в свойство
+   * «Итог». Это тот же ответ на замечания, и пауза за него не ставится.
+   */
+  async function returnAnsweredWithBody(mission) {
+    if (!isReturned(mission)) return true;
+    if (returnAnswered(mission)) return true;
+    const body = await missionBodyText(mission).catch(() => "");
+    return /возврат/i.test(body);
+  }
+
   async function coordinatorStep(role, expect, manual = false) {
     const mission = await activeMission();
     if (!mission) {
@@ -12572,7 +12623,7 @@
           return true;
         }
         const returned = isReturned(mission);
-        if (returned && !/возврат/i.test(rt(mission.properties["Итог"]))) {
+        if (returned && !(await returnAnsweredWithBody(mission))) {
           // Сюда попадает только ответ на план, запрошенный уже после
           // возврата: старый маркер снят выше. Значит, замечания правда не
           // разобраны. Снимаем троттлинг, чтобы «Продолжить» сразу вернуло
