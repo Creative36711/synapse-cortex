@@ -40,7 +40,13 @@ assert.ok(iMerged > -1 && iClosed > iMerged && iContinue > iClosed, 'поряд�
 // 4. Признак мержа берётся из маркера, а не из бейджа.
 assert.match(src, /result\.merged === true/, 'маркер может заявить merged: true');
 assert.match(src, /status.*=== "merged"/s, 'status: "merged" тоже принимается');
-assert.match(src, /"pr":"<URL\|null>","merged":true/, 'в шаблоне маркера требуются pr и merged');
+assert.match(src, /"pr":"<URL\|null>","merged":false/, 'в шаблоне маркера требуются pr и merged');
+// D-046: шаблон не должен подсказывать «PR нет, но слит» — эта пара увела
+// проверочные K-27 и K-34 в Blocked. Инвариант проверки PR при этом цел.
+assert.ok(
+  !/"pr":"<URL\|null>","merged":true/.test(src),
+  'шаблон не предлагает merged:true рядом с pr, который может быть null',
+);
 
 // 5. Закрытие без мержа: причина в лог, Rework с ответом, ход Координатору.
 const closedPath = src.slice(src.indexOf('merged === "unconfirmed") && !hasMergedClaim(result)'));

@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 83, 'the 82 prior suites plus the D-044 delivery-receipt suite remain in the suite');
+assert.equal(tests.length, 84, 'the 83 prior suites plus the D-046 pr-claim suite remain in the suite');
 for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
   assert.ok(tests.includes(added), `${added} suite present`);
 }

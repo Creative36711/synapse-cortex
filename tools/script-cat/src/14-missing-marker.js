@@ -22,6 +22,9 @@
    * why = "ids" — маркер есть, но без dispatch_id/run_id этой выдачи (D-040,
    * 05.11.2026: Executor прислал маркер с «task» вместо ID). Работа сделана —
    * просим повторить только маркер с ID из напоминания, не переделывать ход.
+   * why = "pr-claim" — маркер заявляет «pr:null» и «merged:true» сразу (D-046,
+   * 06.11.2026: проверочные K-27 и K-34 уходили в Blocked). Просим поправить
+   * одну строку: merged:false без изменений либо номер слитого PR.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
     const ctx = {
@@ -384,10 +387,12 @@
           ? `${role.name} прислал только маркер ${markerName}, без отчёта — напоминание ${sent + 1} из ${C.markerReminders}.`
           : why === "ids"
           ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
+          : why === "pr-claim"
+          ? `${role.name} прислал маркер ${markerName} с «pr:null» и «merged:true» одновременно — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : why === "pr-claim" ? "Relay: маркер противоречит себе" : "Relay: нет маркера" },
       );
       await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
         missionId: expect.missionId,
@@ -417,6 +422,9 @@
         : why === "ids"
         ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
+        : why === "pr-claim"
+        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },

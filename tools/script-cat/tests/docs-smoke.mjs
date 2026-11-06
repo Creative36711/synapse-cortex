@@ -11,13 +11,17 @@ const root = join(here, '..', '..', '..');
 const contract = JSON.parse(readFileSync(join(root, 'tools/script-cat/contracts/agent-protocol.json'), 'utf8'));
 
 // 1. Контракт: версия и sourceSha.
-assert.equal(contract.protocolVersion, '1.10');
+assert.equal(contract.protocolVersion, '1.11');
 assert.match(contract.sourceSha, /^[0-9a-f]{40}$/, 'sourceSha — 40-hex');
 assert.equal(contract.d043?.budgetsRaised, false, 'D-043 не поднимал бюджеты');
 assert.match(contract.d043?.protocolNote || '', /остаётся 1\.10/, 'D-043 транспорт-внутренний');
 assert.equal(contract.d044?.budgetsRaised, false, 'D-044 не поднимал бюджеты');
 assert.match(contract.d044?.protocolNote || '', /остаётся 1\.10/, 'D-044 транспорт-внутренний');
 assert.match(contract.d044?.fix || '', /квитанц/, 'D-044: квитанция доставки');
+assert.equal(contract.d046?.budgetsRaised, false, 'D-046 не поднимал бюджеты');
+assert.match(contract.d046?.protocolNote || '', /protocolVersion 1\.11/, 'D-046 поднял версию контракта аддитивно');
+assert.match(contract.d046?.fix || '', /pr-claim/, 'D-046: напоминание вместо Blocked');
+assert.match(contract.d046?.safety || '', /repo\/base|базовой ветки/, 'D-046: сверка repo/base не ослаблена');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',

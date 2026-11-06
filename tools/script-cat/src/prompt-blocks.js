@@ -134,9 +134,15 @@
       if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
       if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
       const auditor = c.role?.fn === "Auditor";
-      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":true}`);
+      // D-046: литерал `"merged":true` рядом с `"pr":"<URL|null>"` учил агента
+      // противоречию «PR нет, но слит» — проверочные K-27 и K-34 уходили в
+      // Blocked. Безопасное значение здесь — false: он не противоречит `pr:null`, а
+      // для настоящего PR ведёт к проверке по GitHub, а не вместо неё. Когда
+      // ставить true, говорит правило ниже. Шаблон обязан оставаться валидным
+      // JSON: `validateMarkerIds` разбирает его целиком.
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":false}`);
     };
-    def("marker.agent", { version: 2, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
+    def("marker.agent", { version: 3, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
         "Когда ход действительно завершён, сдай полный отчёт и последней строкой CF_AGENT_RESULT с этими IDs.",
         "Если продолжить нельзя — назови блокер, не выдумывай результат.",
@@ -146,7 +152,7 @@
       // у него нет, и экономим overhead под длинную зону роли (K-20).
       const fields = c.role?.fn === "Auditor"
         ? "check:0=pass."
-        : "check:0=pass; pr:null если не нужен; merged:true только после мержа.";
+        : "check:0=pass; без PR pr:null,merged:false; merged:true только после мержа.";
       return [
         `ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). ${fields} ID из промпта:`,
         markerJson(c, "CF_AGENT_RESULT"),
@@ -197,13 +203,18 @@
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
       const ids = c.reminder?.why === "ids";
+      const prClaim = c.reminder?.why === "pr-claim";
+      // Бюджет напоминания жёсткий (C.promptBudgets: reminder.marker + marker.agent
+      // ≤ 700, из них 426 — сам шаблон маркера). Поэтому ветка «pr-claim» говорит
+      // за себя и заменяет общую концовку: она уже просит поправить только маркер.
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
         ids ? `Маркер ${c.reminder?.markerName} есть, но в нём нет dispatch_id/run_id этой выдачи. Повтори маркер с ID из этого напоминания; работу не повторяй.`
+          : prClaim ? `В маркере ${c.reminder?.markerName} "pr":null и "merged":true разом — так нельзя. Изменений не было — "pr":null,"merged":false. Слил свой PR — номер PR и "merged":true. Поправь только маркер.`
           : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
           : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
-        "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
-      ].join("\n");
+        prClaim ? "" : "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
+      ].filter(Boolean).join("\n");
     } });
 
     def("pilot.brief", { audience: ["pilot"], verbatim: true, render: (c) => c.pilot?.brief || "" });
