@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.9
+// @version      1.12.10
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -9,6 +9,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM.setValue
 // @grant        GM_listValues
 // @connect      api.notion.com
 // @connect      script.google.com
@@ -387,6 +388,56 @@
     return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
+  /**
+   * Довести записи до хранилища расширения ПРЕЖДЕ, чем уйти со страницы.
+   *
+   * D-045 (06.11.2026): `GM_setValue` в ScriptCat синхронен только наполовину.
+   * Он кладёт значение в память вкладки и отправляет сообщение service worker'у,
+   * который пишет его в базу уже потом, — и ничего не ждёт. `location.assign`
+   * сразу за записью убивает канал, и хвост пачки теряется. На K-27 так пропали
+   * `K.expect`, журнал промптов и строка журнала, а `K.pending` остался: очередь
+   * без ожидания ушла в чат, и цикл встал на `delivery-state-lost` при живом
+   * ответе агента.
+   *
+   * `GM.setValue` — та же запись, но с обещанием, которое исполняется, когда
+   * хранилище подтвердило приём. Перезаписываем ключи им и ждём — но не дольше
+   * `ms`: подтверждение может не прийти вовсе (у вкладки нет слушателя
+   * значений), и зависнуть здесь хуже, чем уйти. Менеджер без `GM.setValue`
+   * получает короткую паузу: она даёт сообщению уйти до навигации.
+   *
+   * Отметку жизни шага ставит `sleep`: ожидание записи — честная работа, а не
+   * зависание, и сторож тишины не должен снимать блокировку посреди неё.
+   */
+  async function flushBeforeNavigate(keys, ms = 4000) {
+    const list = [...new Set((Array.isArray(keys) ? keys : [keys]).filter((key) => typeof key === "string" && key))];
+    if (!list.length) return true;
+    const setter = typeof GM !== "undefined" && GM && typeof GM.setValue === "function" ? GM.setValue.bind(GM) : null;
+    if (!setter) {
+      await sleep(150);
+      return false;
+    }
+    // Отсутствующий ключ не создаём: GM.setValue(key, null) записал бы null
+    // там, где значения не было вовсе. Метка — строка, а не объект: менеджер
+    // вправе вернуть клон значения, и сравнение по ссылке тогда соврёт.
+    const absent = "__cfn-absent-key__";
+    const payload = list
+      .map((key) => [key, GM_getValue(key, absent)])
+      .filter(([, value]) => value !== absent && value !== undefined);
+    if (!payload.length) return true;
+    let ok = true;
+    const writes = payload.map(([key, value]) =>
+      Promise.resolve().then(() => setter(key, value)).catch((e) => {
+        ok = false;
+        dbg("flush: запись не подтверждена", `${key}: ${String(e?.message || e)}`);
+      }));
+    await Promise.race([Promise.all(writes), sleep(ms).then(() => { ok = false; })]);
+    if (!ok) dbg("flush: ухожу без полного подтверждения", { keys: payload.map(([key]) => key), ms });
+    return ok;
+  }
+
+  /** Ключи, потеря которых при переходе ломает ход, а не только удобство. */
+  const handoffKeys = () => [K.expect, K.pending, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
+
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */
   const flat = (x) => String(x || "").replace(/[\s\u00a0]+/g, " ").trim().toLowerCase();
@@ -579,7 +630,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.9";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.10";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1319,9 +1370,16 @@
     }
     log(`Пауза снята Мастером (${reason}). Продолжаю.`, false, { ntfy: "quiet" });
     if (GM_getValue(K.pending, null)) {
-      log("Задание уже в очереди — отправляю его заново, новый ход Координатора не нужен.", false, {
-        ntfy: "quiet",
-      });
+      // D-045: при потерянном ожидании сообщение уже могло уйти. Обещать
+      // повторную отправку нельзя — сначала сверка карточки и чата. Так же и
+      // после обновления скрипта: очередь без ожидания разбирает сверка.
+      log(
+        (paused && paused.kind === "delivery-state-lost") || !expect
+          ? "Задание в очереди, но сообщение могло уже уйти: сначала сверю чат и карточку и только потом решу, нужна ли отправка."
+          : "Задание уже в очереди — отправляю его заново, новый ход Координатора не нужен.",
+        false,
+        { ntfy: "quiet" },
+      );
     }
   }
 
@@ -4829,6 +4887,9 @@
               true,
               { ntfy: "quiet" },
             );
+            // D-045: счётчик перезагрузок обязан пережить перезагрузку, иначе
+            // предел в три попытки никогда не наступает.
+            await flushBeforeNavigate([reloadKey, K.expect, K.pending, K.log]);
             location.reload();
             return true;
           }
@@ -6314,6 +6375,13 @@
     // Напоминание отличается от задания первой строкой «1 из 2», «2 из 2».
     const reminder = lines.find((l) => /НАПОМИНАНИЕ/.test(l));
     if (reminder) return flat(reminder).slice(0, 90);
+    // D-045: боевой промпт начинается строкой «Карточка «…» · dispatch … ·
+    // run …», а не «Задача … (dispatch …)». Без этой ветки ключа не было, и
+    // доставкой заведовали первые 60 знаков — они обрезаются внутри dispatch id
+    // и не доходят до номера выдачи: повторная выдача той же карточки получала
+    // тот же ключ, ровно как в случае 28.10 19:38.
+    const ids = promptDispatchIds(src);
+    if (ids) return flat(ids.raw);
     // Ход Координатора опознаётся по номеру хода: он свой у каждого запроса.
     const turn = src.match(/"turn_id"\s*:\s*"([^"]+)"/);
     if (turn) return flat(turn[1]);
@@ -6322,6 +6390,38 @@
     // технический блок.
     const plain = flat(src);
     return plain.length <= 120 ? plain : "";
+  }
+
+  /**
+   * Dispatch/run из текста задания — во всех формах, которые реально уходят.
+   *
+   * D-045: компилятор печатает «Карточка «…» · dispatch … · run …»
+   * (`identity.task`), минимальный повтор и продолжение — «IDs прежние:
+   * dispatch_id=…, run_id=…» (`identity.continue`), строка плана и пример
+   * маркера несут свои формы. Прежний разбор знал только скобочную
+   * «Задача … (dispatch …, run …)», которой в промпте выдачи нет вовсе:
+   * поиск своей реплики в чате не находил ничего, и восстановление по
+   * реплике (D-044) молча не работало на боевом формате.
+   *
+   * `raw` — дословный совпавший кусок: он годится ключом доставки, потому что
+   * действительно встречается в тексте сообщения.
+   */
+  function promptDispatchIds(text) {
+    const src = String(text || "");
+    const id = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
+    const shapes = [
+      // «… · dispatch <id> · run <id>» и «… (dispatch <id>, run <id>)».
+      new RegExp(`\\bdispatch\\s+${id}\\s*[·,]\\s*run\\s+${id}`, "i"),
+      // «IDs прежние: dispatch_id=<id>, run_id=<id>.»
+      new RegExp(`\\bdispatch_id\\s*=\\s*${id}\\s*,\\s*run_id\\s*=\\s*${id}`, "i"),
+      // Пример маркера внутри промпта: {"dispatch_id":"<id>","run_id":"<id>"…}
+      new RegExp(`"dispatch_id"\\s*:\\s*"${id}"\\s*,\\s*"run_id"\\s*:\\s*"${id}"`, "i"),
+    ];
+    for (const shape of shapes) {
+      const hit = src.match(shape);
+      if (hit) return { dispatch: hit[1], run: hit[2], raw: hit[0] };
+    }
+    return null;
   }
 
   /** Своё сообщение в транскрипте — независимо от того, как оно обёрнуто. */
@@ -6767,13 +6867,6 @@
     }
     GM_setValue(K.lastSend, { roleId: role.id, hash: textHash(text), at: Date.now() });
 
-    GM_setValue(K.pending, {
-      roleId: role.id,
-      roleName: role.name,
-      roleUrl: role.url,
-      text,
-      at: Date.now(),
-    });
     // Снимок цели выдачи: репозиторий сессии роли, целевой репозиторий работы
     // или проверки и его базовая ветка. По умолчанию цель — репозиторий сессии
     // роли (Executor работает в своём, аудитор может проверять чужой через
@@ -6782,6 +6875,11 @@
     const targetRepo = (payload && payload.targetRepo) || sessionRepo || C.repo;
     const targetBranch = (payload && payload.targetBranch) || profileRepoBranch(targetRepo);
 
+    // D-045: ожидание пишется ДО очереди. Записи GM уходят в хранилище
+    // асинхронно, и навигация обрезает хвост пачки. При прежнем порядке
+    // выживала очередь без ожидания — она отправляла задание и оставляла
+    // цикл без хозяина хода. Теперь усечение теряет очередь, а ожидание
+    // остаётся: такой ход разбирается штатной уборкой фантомов.
     GM_setValue(K.expect, {
       roleId: role.id,
       roleName: role.name,
@@ -6808,6 +6906,29 @@
     if (envelope) {
       recordPromptAttempt(envelope, { kind, ref, role: role.name, attempt: payload.attempt || 1, outcome: "queued" });
     }
+    // Очередь несёт опознавательные данные хода: если запись ожидания всё же
+    // потеряется, оно восстанавливается по ним со сверкой Notion, а не
+    // угадывается по тексту письма.
+    GM_setValue(K.pending, {
+      roleId: role.id,
+      roleName: role.name,
+      roleUrl: role.url,
+      roleFn: role.fn || "",
+      kind,
+      ref,
+      runId: payload.runId || "",
+      missionId: payload.missionId || "",
+      turnId: payload.turnId || "",
+      questionId: payload.questionId || "",
+      logId: payload.logId || "",
+      title: payload.title || "",
+      url: payload.url || "",
+      sessionRepo,
+      targetRepo,
+      targetBranch,
+      text,
+      at: Date.now(),
+    });
     dbg("sendToRole: задание в очереди", { role: role.name, kind, ref, длина: text.length });
     GM_setValue("cfn-me", role.name);
     setStatus();
@@ -6826,6 +6947,8 @@
       setTimeout(() => tick(false), 400);
     } else {
       log(`Перехожу к «${role.name}», чтобы отправить задание.`);
+      // Уход со страницы — только после подтверждения записи (D-045).
+      await flushBeforeNavigate(handoffKeys());
       location.assign(role.url);
     }
     return true;
@@ -6836,7 +6959,7 @@
     GM_setValue(K.pending, null);
     GM_setValue("cfn-me", role.name);
     setStatus();
-    navigateTo(role, "туда возвращается ход");
+    await navigateTo(role, "туда возвращается ход");
   }
 
   // Одно и то же ожидание не должно заливать журнал каждые пару секунд.
@@ -6913,8 +7036,12 @@
     const nodes = userMessages();
     for (let i = nodes.length - 1; i >= 0; i -= 1) {
       const raw = messageRaw(nodes[i]);
-      const ids = raw.match(/\(dispatch\s+([0-9a-f-]{36})\s*,\s*run\s+([0-9a-f-]{36})\s*\)/i);
-      if (!ids || norm(ids[1]) !== norm(expect.ref) || norm(ids[2]) !== norm(expect.runId)) continue;
+      // D-045: разбор общий с ключом доставки. Скобочная форма «Задача …
+      // (dispatch …, run …)» в промпте выдачи не встречается вовсе — прежний
+      // regexp не находил ни одной боевой реплики, и восстановление по чату
+      // было мертво именно там, где оно нужнее всего.
+      const ids = promptDispatchIds(raw);
+      if (!ids || norm(ids.dispatch) !== norm(expect.ref) || norm(ids.run) !== norm(expect.runId)) continue;
       const id = nodeId(nodes[i]);
       if (!id || (dead && id === dead)) continue;
       return { id, at: idTime(id) };
@@ -7010,6 +7137,141 @@
   }
 
   /**
+   * Очередь без ожидания — потерянный ход, а не новое задание.
+   *
+   * D-045 (06.11.2026): на K-27 запись `K.expect` не дожила до перехода на
+   * страницу Executor Core, а `K.pending` дожил. Очередь отправила задание,
+   * подтвердила его в чате — и обнаружила, что хозяина хода нет: пауза
+   * `delivery-state-lost` при уже готовом ответе агента. Отправлять в таком
+   * состоянии вслепую нельзя: это второй экземпляр той же работы.
+   *
+   * Порядок разбора: опознавательные данные очереди → карточка в Notion →
+   * квитанция доставки или сама реплика в чате. Карточка совпала и сообщение
+   * уже в чате — снимаем очередь и читаем ответ, ничего не отправляя. Карточка
+   * совпала, а сообщения нет — восстанавливаем ожидание и отправляем ровно один
+   * раз обычным путём. Не совпала или Notion недоступен — пауза без отправки.
+   *
+   * Разбираем только рабочие выдачи: план, приёмка и вопросы идут своим
+   * порядком и в сверке по карточке не нуждаются.
+   *
+   * Возвращает true, если ход разобран здесь; false — можно продолжать.
+   */
+  async function adoptOrphanDispatch(pending, me) {
+    if (GM_getValue(K.expect, null)) return false;
+    const text = String(pending.text || "");
+    const isWork = pending.kind === "dispatch" || (/CF_AGENT_RESULT/.test(text) && /dispatch_id/.test(text));
+    if (!isWork) return false;
+    const ids = promptDispatchIds(text);
+    const ref = String(pending.ref || ids?.dispatch || "");
+    const runId = String(pending.runId || ids?.run || "");
+    // Текст и поля очереди обязаны называть одну и ту же выдачу: расхождение
+    // означает, что очередь собрана из разных попыток, и верить ей нельзя.
+    if (!isUuid(ref) || !isUuid(runId) ||
+        (ids && (norm(ids.dispatch) !== norm(ref) || norm(ids.run) !== norm(runId)))) {
+      pause(
+        "В очереди осталось задание без ожидания, и номер выдачи из него не читается. " +
+          "Не отправляю и ничего не меняю: сверьте чат адресата, карточку и Run ID, затем продолжите вручную.",
+        { kind: "orphan-dispatch", ref, runId },
+      );
+      return true;
+    }
+    let page;
+    try {
+      page = await notion("GET", `pages/${ref}`);
+    } catch (e) {
+      pause(
+        `Не удалось прочитать карточку потерянного хода (${e.message}). Задание осталось в очереди, ` +
+          "отправку не повторяю: без сверки это был бы дубль.",
+        { kind: "orphan-dispatch", ref, runId },
+      );
+      return true;
+    }
+    const cardRun = rt(page.properties?.["Run ID"]);
+    const owner = rt(page.properties?.["Recipient Agent ID"]);
+    const cardMission = rt(page.properties?.["Mission ID"]).trim();
+    const missionId = String(pending.missionId || cardMission).trim();
+    const mismatch =
+      taskState(page) !== "Running" ? `карточка в состоянии «${taskState(page) || "без состояния"}», а не Running`
+        : !cardRun || norm(cardRun) !== norm(runId) ? "Run ID карточки не совпадает с очередью"
+          : owner && norm(owner) !== norm(pending.roleId) ? "карточка выдана другому агенту"
+            : !isUuid(cardMission) || !isUuid(missionId) ? "у хода нет корректного Mission ID"
+              : norm(cardMission) !== norm(missionId) ? "Mission ID карточки не совпадает с очередью"
+                : "";
+    if (mismatch) {
+      pause(
+        `Задание без ожидания не сходится с карточкой: ${mismatch}. Очередь и карточку сохраняю, ` +
+          "отправку не повторяю — нужна проверка Мастером.",
+        { kind: "orphan-dispatch", ref, runId },
+      );
+      return true;
+    }
+    const restored = {
+      roleId: pending.roleId,
+      roleName: pending.roleName || "",
+      roleUrl: pending.roleUrl || "",
+      roleFn: pending.roleFn || "",
+      kind: "dispatch",
+      ref,
+      runId,
+      missionId,
+      logId: String(pending.logId || rt(page.properties?.["Output Drive File ID"])),
+      title: pending.title || taskTitle(page),
+      url: pending.url || page.url || "",
+      sessionRepo: pending.sessionRepo || "",
+      targetRepo: pending.targetRepo || "",
+      targetBranch: pending.targetBranch || "",
+      watermark: "",
+      seen: [],
+      at: Number(pending.at) || Date.now(),
+      tries: 0,
+      lastReplySig: "",
+      lastReplyAt: 0,
+      text: pending.text,
+      prompt: null,
+      // Отметка нужна журналу: ход собран из очереди, а не выдан заново.
+      adoptedFromQueue: true,
+    };
+    // Квитанция доставки проверяется с любой страницы; реплика в чате — только
+    // на странице адресата. Порядок важен: доказанную выдачу нельзя потерять
+    // из-за того, что вкладка стоит не там.
+    if (restoreMissingSendMark(restored)) {
+      GM_setValue(K.pending, null);
+      pendingNoticeAt = 0;
+      log(
+        `Ход «${restored.title || ref}» восстановлен из очереди: доставка этой выдачи доказана. ` +
+          "Отправку не повторяю — читаю ответ.",
+        true,
+        { ntfy: "quiet", title: "Relay: ход восстановлен" },
+      );
+      return true;
+    }
+    // Без доказательства судить по чату можно только со страницы адресата.
+    // Очередь сохраняем: цикл сам откроет нужную страницу и вернётся к сверке.
+    if (!me || norm(me) !== norm(pending.roleId)) {
+      pendingSay(pending, `Ход «${restored.title || ref}» потерял ожидание: открываю страницу адресата, чтобы сверить чат. Задание пока не отправляю.`);
+      return true;
+    }
+    // Пустой транскрипт недорисованной страницы не доказывает, что реплики нет:
+    // вывод «отправляю» делается только на отрисованной странице.
+    const shell = appReady();
+    if (!shell.ok) {
+      pendingSay(pending, `Ход «${restored.title || ref}» потерял ожидание; страница ещё грузится (${shell.why}) — сверю чат, когда она откроется.`);
+      return true;
+    }
+    GM_setValue(K.expect, restored);
+    // Карточка только что сверена: это новая попытка отправки того же хода,
+    // а не залежавшийся остаток. Иначе разбор просрочки снял бы очередь сразу.
+    GM_setValue(K.pending, { ...pending, at: Date.now() });
+    log(
+      `Ожидание хода «${restored.title || ref}» было потеряно, но карточка Running и сообщения в чате нет. ` +
+        "Восстановил ожидание по карточке; отправляю задание один раз, без нового хода Координатора.",
+      true,
+      { ntfy: "quiet", title: "Relay: ход восстановлен" },
+    );
+    return false;
+  }
+
+  /**
    * Досылает задание, сохранённое перед переходом на страницу адресата.
    *
    * Возвращает true, если ход этим и занят: отправлено, ждём редактор или ждём
@@ -7017,7 +7279,7 @@
    * иначе нажатый «Шаг» выглядит как неработающая кнопка.
    */
   async function consumePending(manual = false) {
-    const pending = GM_getValue(K.pending, null);
+    let pending = GM_getValue(K.pending, null);
     if (!pending) return false;
     const me = roleFromPath();
     const waitingForPolicy = GM_getValue(K.expect, null);
@@ -7066,6 +7328,15 @@
         return true;
       }
     }
+
+    // D-045: очередь без ожидания сперва сверяется с карточкой и чатом — и
+    // ДО разбора просрочки. Потерянный ход K-27 пролежал бы в очереди часы:
+    // прежний порядок снял бы его как «остаток прошлой попытки», хотя сообщение
+    // было в чате и агент уже ответил. Отправка вслепую здесь означала бы
+    // второй экземпляр той же работы.
+    if (await adoptOrphanDispatch(pending, me)) return true;
+    // Сверка могла обновить очередь (тот же ход, новая попытка отправки).
+    pending = GM_getValue(K.pending, null) || pending;
 
     // Просроченная отправка — остаток прошлой попытки (в том числе от старой
     // версии скрипта). Задание до адресата не дошло, значит и ожидание маркера
@@ -7366,6 +7637,24 @@
       return true;
     }
     const expect = GM_getValue(K.expect, null);
+    // D-045: квитанция пишется и тогда, когда ожидание потеряно. Доставка
+    // состоялась и подтверждена id сообщения — этот факт не должен зависеть
+    // от того, дожила ли запись `K.expect` до перехода. Без квитанции пауза
+    // `delivery-state-lost` оставляла Мастеру вручную искать доказательство,
+    // которое скрипт только что держал в руках (K-27, 06.11).
+    if (delivery.msgId && (!expect || norm(expect.roleId) !== norm(me))) {
+      recordDeliveryReceipt(
+        expect && norm(expect.roleId) === norm(me) ? expect : {
+          kind: pending.kind || "dispatch",
+          ref: pending.ref || expect?.ref || "",
+          runId: pending.runId || expect?.runId || "",
+          turnId: pending.turnId || "",
+          questionId: pending.questionId || "",
+          roleId: pending.roleId,
+        },
+        { messageId: delivery.msgId, sentAt: Date.now(), watermark: delivery.msgId || watermark, seen },
+      );
+    }
     // D-044: сообщение в чате есть, а ожидание потеряно/подменено — это не
     // «отправлено и можно забыть». Не снимаем очередь молча и не пишем успех:
     // нужна сверка, иначе следующий шаг потеряет ход или продублирует его.
@@ -7373,7 +7662,8 @@
       pause(
         `Сообщение подтверждено в чате (${delivery.msgId || "id не получен"}), но ожидание выдачи ` +
           "потеряно или относится другому агенту. Очередь сохранена; автоматически не повторяю. " +
-          "Сверьте чат, карточку и Run ID, затем снимите ход кнопкой ↺ или продолжите вручную.",
+          "«Продолжить» сначала сверит чат и карточку и не отправит задание вторично; " +
+          "кнопка ↺ снимает ход.",
         { kind: "delivery-state-lost", ref: expect?.ref || "", runId: expect?.runId || "" },
       );
       return true;
@@ -13271,7 +13561,10 @@
     });
     savePilots(listPilots().map((p) => (p.id === id ? { ...p, status: "queued" } : p)));
     log(`Пилот ${pilot.variant} (${id.slice(0, 8)}) поставлен в очередь; перехожу на ${pilot.url}.`, true, { ntfy: "quiet", title: "Relay: пилот SYN-P1" });
-    location.assign(pilot.url);
+    // D-045: очередь пилота и его статус доводим до хранилища до ухода со
+    // страницы. Синхронный контракт сохраняем: вызывающий получает id сразу,
+    // а переход выполняется по подтверждении записи.
+    flushBeforeNavigate([K.pilotWait + id, K.pilots, K.log]).then(() => location.assign(pilot.url));
     return { ok: true, id };
   }
 
@@ -14583,7 +14876,7 @@
    * открылась или адрес в «Ролях» указывает не туда. Тогда пауза и понятная
    * причина, а не бесконечные прыжки.
    */
-  function navigateTo(role, why) {
+  async function navigateTo(role, why) {
     if (typeof projectRoleAllowed === "function" && !projectRoleAllowed(role)) return false;
     const from = location.pathname || "/";
     const last = GM_getValue("cfn-nav", null);
@@ -14602,6 +14895,10 @@
     }
     GM_setValue("cfn-nav", { roleId: role.id, from, at: Date.now() });
     log(`Сейчас ${from} — открываю страницу «${role.name}»: ${why}.`);
+    // D-045: отметку перехода и журнал надо довести до хранилища до ухода со
+    // страницы, иначе защита от петли прочитает прежнюю отметку и цикл прыгнет
+    // снова — уже без памяти о первом переходе.
+    await flushBeforeNavigate(handoffKeys());
     location.assign(role.url);
     return true;
   }
@@ -15119,6 +15416,9 @@
               `Страница «${me.name}» не отрисовалась за ${Math.round(watched / 1000)} с (${page.why}) — ` +
                 "перечитываю её. Ожидание не снимаю: ответ агента остаётся в чате.",
             );
+            // D-045: отметка `pageReloaded` должна пережить перезагрузку,
+            // иначе страница перечитывается бесконечно.
+            await flushBeforeNavigate([K.expect, K.log]);
             location.reload();
             return;
           }

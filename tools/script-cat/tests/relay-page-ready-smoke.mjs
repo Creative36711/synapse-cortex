@@ -117,12 +117,12 @@ assert.ok(
   'на неотрисованной странице очередь, ожидание и карточка остаются на месте',
 );
 
-const runGuard = ({
+const runGuard = async ({
   watched,
   pageReloaded = false,
   page = { ok: false, why: 'ни реплик, ни поля ввода — страница не отрисовалась' },
 }) => {
-  const out = { sets: [], logs: [], pauses: [], reloaded: 0 };
+  const out = { sets: [], logs: [], pauses: [], reloaded: 0, flushes: [] };
   const fn = new Function(
     'GM_setValue',
     'K',
@@ -135,11 +135,13 @@ const runGuard = ({
     'expect',
     'page',
     'watched',
-    `return (function () {\n${guard}\nreturn 'fell-through';\n})();`,
+    // D-045: перечитывание страницы ждёт подтверждения записей.
+    'flushBeforeNavigate',
+    `return (async function () {\n${guard}\nreturn 'fell-through';\n})();`,
   );
-  const result = fn(
+  const result = await fn(
     (key, v) => out.sets.push({ key, v }),
-    { expect: 'cfn-expect', pending: 'cfn-pending' },
+    { expect: 'cfn-expect', pending: 'cfn-pending', log: 'cfn-log' },
     { pageWaitMs: 90000, pageReloadMs: 20000, tickMs: 15000 },
     (text) => out.logs.push(text),
     (key, text) => out.logs.push(text),
@@ -153,13 +155,14 @@ const runGuard = ({
     { ref: 'c1', roleId: 'r1', roleName: 'Turn Runtime', runId: 'run-1', pageReloaded },
     page,
     watched,
+    async (keys) => { out.flushes.push([...keys]); },
   );
   return { result, ...out };
 };
 
 // 8 секунд после перехода: ровно тот случай из журнала.
 {
-  const h = runGuard({ watched: 8_000 });
+  const h = await runGuard({ watched: 8_000 });
   assert.equal(h.result, undefined, 'шаг завершается ожиданием, а не падением');
   assert.deepEqual(h.pauses, [], 'паузы нет: прошло слишком мало времени');
   assert.deepEqual(h.sets, [], 'ожидание не переписывается и не снимается');
@@ -170,24 +173,25 @@ const runGuard = ({
 
 // 40 секунд: страница всё ещё пуста — перечитываем её один раз.
 {
-  const h = runGuard({ watched: 40_000 });
+  const h = await runGuard({ watched: 40_000 });
   assert.equal(h.reloaded, 1, 'страница перечитывается');
   assert.deepEqual(h.pauses, [], 'и это всё ещё не повод останавливать цикл');
   assert.equal(h.sets.length, 1, 'отметка о перезагрузке сохранена');
   assert.equal(h.sets[0].key, 'cfn-expect', 'пишется в ожидание, а не в очередь');
   assert.equal(h.sets[0].v.pageReloaded, true);
+  assert.deepEqual(h.flushes, [['cfn-expect', 'cfn-log']], 'D-045: записи доведены до хранилища до перезагрузки');
 }
 
 // Перезагрузка одна: второй раз страницу не дёргаем.
 {
-  const h = runGuard({ watched: 40_000, pageReloaded: true });
+  const h = await runGuard({ watched: 40_000, pageReloaded: true });
   assert.equal(h.reloaded, 0, 'повторной перезагрузки нет');
   assert.deepEqual(h.pauses, []);
 }
 
 // 100 секунд: страница так и не открылась — пауза про связь, а не про агента.
 {
-  const h = runGuard({ watched: 100_000 });
+  const h = await runGuard({ watched: 100_000 });
   assert.equal(h.pauses.length, 1, 'пауза ставится');
   assert.equal(h.pauses[0].ctx.kind, 'offline', 'причина — связь, а не молчание исполнителя');
   assert.match(h.pauses[0].text, /не открылась/);

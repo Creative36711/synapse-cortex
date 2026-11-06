@@ -77,7 +77,10 @@
     });
     savePilots(listPilots().map((p) => (p.id === id ? { ...p, status: "queued" } : p)));
     log(`Пилот ${pilot.variant} (${id.slice(0, 8)}) поставлен в очередь; перехожу на ${pilot.url}.`, true, { ntfy: "quiet", title: "Relay: пилот SYN-P1" });
-    location.assign(pilot.url);
+    // D-045: очередь пилота и его статус доводим до хранилища до ухода со
+    // страницы. Синхронный контракт сохраняем: вызывающий получает id сразу,
+    // а переход выполняется по подтверждении записи.
+    flushBeforeNavigate([K.pilotWait + id, K.pilots, K.log]).then(() => location.assign(pilot.url));
     return { ok: true, id };
   }
 

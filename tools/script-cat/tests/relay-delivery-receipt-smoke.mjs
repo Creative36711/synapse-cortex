@@ -16,6 +16,12 @@ const from = src.indexOf('  const DELIVERY_RECEIPT_KEY');
 const to = src.indexOf('  /** Уведомление и время относятся только к той очереди');
 assert.ok(from > 0 && to > from, 'блок квитанций доставки на месте');
 const block = src.slice(from, to);
+// D-045: разбор опознавательных строк выдачи — настоящий блок исходника, а не
+// его пересказ. Именно он теперь обслуживает и ключ доставки, и поиск реплики.
+const idsFrom = src.indexOf('  function promptDispatchIds(text) {');
+const idsTo = src.indexOf('  /** Своё сообщение в транскрипте', idsFrom);
+assert.ok(idsFrom > 0 && idsTo > idsFrom, 'разбор dispatch/run на месте');
+const idsBlock = src.slice(idsFrom, idsTo);
 
 const DISPATCH = '40f6f0cf-5705-816d-8b13-ee1bb3f46841';
 const RUN = 'eeee0444-aaef-4a47-af9f-78d65150e53a';
@@ -43,7 +49,7 @@ function make({ expect = null, pending = null, receipts = [], nodes = [], curren
   const api = new Function(
     'GM_getValue', 'GM_setValue', 'K', 'norm', 'isUuid', 'idTime', 'roleFromPath',
     'userMessages', 'messageRaw', 'nodeId', 'log', 'releaseUndelivered',
-    `${block}\nreturn { recordDeliveryReceipt, forgetDeliveryReceipt, deliveryReceipt, restoreMissingSendMark, dropGhostHandoff, dispatchPromptInChat };`,
+    `${idsBlock}\n${block}\nreturn { recordDeliveryReceipt, forgetDeliveryReceipt, deliveryReceipt, restoreMissingSendMark, dropGhostHandoff, dispatchPromptInChat, promptDispatchIds };`,
   )(
     (key, fallback) => (store.has(key) ? store.get(key) : fallback),
     (key, value) => store.set(key, value),

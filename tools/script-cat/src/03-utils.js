@@ -32,6 +32,56 @@
     return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
   }
 
+  /**
+   * Довести записи до хранилища расширения ПРЕЖДЕ, чем уйти со страницы.
+   *
+   * D-045 (06.11.2026): `GM_setValue` в ScriptCat синхронен только наполовину.
+   * Он кладёт значение в память вкладки и отправляет сообщение service worker'у,
+   * который пишет его в базу уже потом, — и ничего не ждёт. `location.assign`
+   * сразу за записью убивает канал, и хвост пачки теряется. На K-27 так пропали
+   * `K.expect`, журнал промптов и строка журнала, а `K.pending` остался: очередь
+   * без ожидания ушла в чат, и цикл встал на `delivery-state-lost` при живом
+   * ответе агента.
+   *
+   * `GM.setValue` — та же запись, но с обещанием, которое исполняется, когда
+   * хранилище подтвердило приём. Перезаписываем ключи им и ждём — но не дольше
+   * `ms`: подтверждение может не прийти вовсе (у вкладки нет слушателя
+   * значений), и зависнуть здесь хуже, чем уйти. Менеджер без `GM.setValue`
+   * получает короткую паузу: она даёт сообщению уйти до навигации.
+   *
+   * Отметку жизни шага ставит `sleep`: ожидание записи — честная работа, а не
+   * зависание, и сторож тишины не должен снимать блокировку посреди неё.
+   */
+  async function flushBeforeNavigate(keys, ms = 4000) {
+    const list = [...new Set((Array.isArray(keys) ? keys : [keys]).filter((key) => typeof key === "string" && key))];
+    if (!list.length) return true;
+    const setter = typeof GM !== "undefined" && GM && typeof GM.setValue === "function" ? GM.setValue.bind(GM) : null;
+    if (!setter) {
+      await sleep(150);
+      return false;
+    }
+    // Отсутствующий ключ не создаём: GM.setValue(key, null) записал бы null
+    // там, где значения не было вовсе. Метка — строка, а не объект: менеджер
+    // вправе вернуть клон значения, и сравнение по ссылке тогда соврёт.
+    const absent = "__cfn-absent-key__";
+    const payload = list
+      .map((key) => [key, GM_getValue(key, absent)])
+      .filter(([, value]) => value !== absent && value !== undefined);
+    if (!payload.length) return true;
+    let ok = true;
+    const writes = payload.map(([key, value]) =>
+      Promise.resolve().then(() => setter(key, value)).catch((e) => {
+        ok = false;
+        dbg("flush: запись не подтверждена", `${key}: ${String(e?.message || e)}`);
+      }));
+    await Promise.race([Promise.all(writes), sleep(ms).then(() => { ok = false; })]);
+    if (!ok) dbg("flush: ухожу без полного подтверждения", { keys: payload.map(([key]) => key), ms });
+    return ok;
+  }
+
+  /** Ключи, потеря которых при переходе ломает ход, а не только удобство. */
+  const handoffKeys = () => [K.expect, K.pending, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
+
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */
   const flat = (x) => String(x || "").replace(/[\s\u00a0]+/g, " ").trim().toLowerCase();

@@ -18,7 +18,7 @@
    * открылась или адрес в «Ролях» указывает не туда. Тогда пауза и понятная
    * причина, а не бесконечные прыжки.
    */
-  function navigateTo(role, why) {
+  async function navigateTo(role, why) {
     if (typeof projectRoleAllowed === "function" && !projectRoleAllowed(role)) return false;
     const from = location.pathname || "/";
     const last = GM_getValue("cfn-nav", null);
@@ -37,6 +37,10 @@
     }
     GM_setValue("cfn-nav", { roleId: role.id, from, at: Date.now() });
     log(`Сейчас ${from} — открываю страницу «${role.name}»: ${why}.`);
+    // D-045: отметку перехода и журнал надо довести до хранилища до ухода со
+    // страницы, иначе защита от петли прочитает прежнюю отметку и цикл прыгнет
+    // снова — уже без памяти о первом переходе.
+    await flushBeforeNavigate(handoffKeys());
     location.assign(role.url);
     return true;
   }
@@ -554,6 +558,9 @@
               `Страница «${me.name}» не отрисовалась за ${Math.round(watched / 1000)} с (${page.why}) — ` +
                 "перечитываю её. Ожидание не снимаю: ответ агента остаётся в чате.",
             );
+            // D-045: отметка `pageReloaded` должна пережить перезагрузку,
+            // иначе страница перечитывается бесконечно.
+            await flushBeforeNavigate([K.expect, K.log]);
             location.reload();
             return;
           }
