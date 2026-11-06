@@ -13,16 +13,21 @@ const store = new Map();
 const GM_getValue = (k, d) => (store.has(k) ? store.get(k) : d);
 const GM_setValue = (k, v) => store.set(k, v);
 let seq = 0;
+const navigations = [];
+const flushes = [];
 const api = new Function('GM_getValue', 'GM_setValue', 'norm', 'uid', 'nowIso', 'PromptCompiler', 'K', 'log', 'location',
+  'flushBeforeNavigate',
   `${src.slice(from, to)}\nreturn { registerPilotAgent, listPilots, pilotBriefClean, pilotVariant, sendToEphemeralAgent };`)(
   GM_getValue, GM_setValue,
   (x) => String(x || '').replace(/-/g, '').toLowerCase(),
   () => `pilot-${++seq}`,
   () => '2026-11-04T00:00:00.000Z',
   PromptCompiler,
-  { pilots: 'cfn-pilots-v1', rolesCache: 'cfn-roles-cache', pilotWait: 'cfn-pilot-wait:' },
+  { pilots: 'cfn-pilots-v1', rolesCache: 'cfn-roles-cache', pilotWait: 'cfn-pilot-wait:', log: 'cfn-console-log' },
   () => {},
-  { assign() {} },
+  { assign(url) { navigations.push(String(url)); } },
+  // D-045: уход со страницы — только после подтверждения записей пилота.
+  async (keys) => { flushes.push({ keys: [...keys], pilot: store.get('cfn-pilots-v1')?.[0]?.status }); return true; },
 );
 
 const SHA = 'b'.repeat(40);
@@ -53,6 +58,12 @@ const sent = api.sendToEphemeralAgent(first.id);
 assert.ok(sent.ok);
 assert.ok(store.has('cfn-pilot-wait:' + first.id), 'ожидание пилота в своём ключе');
 assert.ok(!store.has('cfn-pending') && !store.has('cfn-expect'), 'командный транспорт не тронут');
+// D-045: сначала подтверждение записи, и только потом переход.
+await Promise.resolve();
+assert.deepEqual(navigations, [good.url], 'переход состоялся после подтверждения записи');
+assert.equal(flushes.length, 1, 'записи доведены до хранилища');
+assert.deepEqual(flushes[0].keys, ['cfn-pilot-wait:' + first.id, 'cfn-pilots-v1', 'cfn-console-log']);
+assert.equal(flushes[0].pilot, 'queued', 'к моменту подтверждения статус уже записан');
 const wait = store.get('cfn-pilot-wait:' + first.id);
 assert.ok(wait.text.includes(SHA), 'бриф несёт startSha');
 assert.ok(!/CF_[A-Z]+_RESULT/.test(wait.text), 'пилот без командных маркеров');

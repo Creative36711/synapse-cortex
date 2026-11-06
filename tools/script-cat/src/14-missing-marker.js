@@ -316,6 +316,9 @@
               true,
               { ntfy: "quiet" },
             );
+            // D-045: счётчик перезагрузок обязан пережить перезагрузку, иначе
+            // предел в три попытки никогда не наступает.
+            await flushBeforeNavigate([reloadKey, K.expect, K.pending, K.log]);
             location.reload();
             return true;
           }

@@ -89,7 +89,7 @@ assert.match(src, /kind: "done-with-open"/, 'есть защита от преж
 assert.match(src, /Миссию не закрываю: сначала закройте карточки/, 'причина понятна человеку');
 
 // ── 7. Переход не зацикливается на битом Agent URL ────────────────────────
-const navFrom = src.indexOf('  function navigateTo(role, why) {');
+const navFrom = src.indexOf('  async function navigateTo(role, why) {');
 const navTo = src.indexOf('  /**\n   * Отправка без подтверждения', navFrom);
 assert.ok(navFrom > 0 && navTo > navFrom, 'navigateTo на месте');
 const navSrc = src.slice(navFrom, navTo);
@@ -100,10 +100,13 @@ const makeNav = ({ store, path = '/', now = Date.now() }) => {
   const pauses = [];
   const logs = [];
   const assigned = [];
+  const flushes = [];
   const location = { pathname: path, assign: (u) => assigned.push(String(u)) };
   const clock = { now: () => now };
   const fn = new Function(
     'GM_getValue', 'GM_setValue', 'norm', 'pause', 'log', 'location', 'Date',
+    // D-045: переход ждёт подтверждения записей; проверяем и порядок.
+    'flushBeforeNavigate', 'handoffKeys',
     `${navSrc}; return navigateTo;`,
   );
   const navigateTo = fn(
@@ -114,8 +117,10 @@ const makeNav = ({ store, path = '/', now = Date.now() }) => {
     (text) => logs.push(text),
     location,
     clock,
+    async (keys) => { flushes.push({ keys: [...keys], assigned: assigned.length, nav: store.get('cfn-nav') }); return true; },
+    () => ['cfn-expect', 'cfn-pending', 'cfn-nav'],
   );
-  return { navigateTo, pauses, logs, assigned };
+  return { navigateTo, pauses, logs, assigned, flushes };
 };
 
 const role = { id: 'architect', name: 'Architect', url: 'https://arena.ai/agent/architect' };
@@ -123,24 +128,30 @@ const role = { id: 'architect', name: 'Architect', url: 'https://arena.ai/agent/
 // 7.1. Первый переход — обычный.
 {
   const h = makeNav({ store: new Map(), path: '/' });
-  assert.equal(h.navigateTo(role, 'ждём ответа'), true, 'переход выполнен');
+  assert.equal(await h.navigateTo(role, 'ждём ответа'), true, 'переход выполнен');
   assert.deepEqual(h.assigned, ['https://arena.ai/agent/architect'], 'открыт адрес роли');
   assert.match(h.logs.join(' '), /открываю страницу «Architect»: ждём ответа/, 'причина в журнале');
   assert.equal(h.pauses.length, 0, 'паузы нет');
+  // D-045: отметка перехода записана и подтверждена ДО ухода со страницы.
+  assert.equal(h.flushes.length, 1, 'записи доведены до хранилища');
+  assert.equal(h.flushes[0].assigned, 0, 'подтверждение раньше перехода');
+  assert.equal(h.flushes[0].nav.roleId, 'architect', 'отметка перехода уже в хранилище');
+  assert.deepEqual(h.flushes[0].keys, ['cfn-expect', 'cfn-pending', 'cfn-nav']);
 }
 
 // 7.2. Тот же переход до 30 секунд — пауза; на самой границе — разрешён.
 {
   const store = new Map();
-  makeNav({ store, path: '/', now: 1_000 }).navigateTo(role, 'ждём ответа');
+  await makeNav({ store, path: '/', now: 1_000 }).navigateTo(role, 'ждём ответа');
   const beforeLimit = makeNav({ store, path: '/', now: 30_999 });
-  assert.equal(beforeLimit.navigateTo(role, 'ждём ответа'), true, 'повтор обработан');
+  assert.equal(await beforeLimit.navigateTo(role, 'ждём ответа'), true, 'повтор обработан');
   assert.equal(beforeLimit.assigned.length, 0, 'до лимита второго перехода нет');
   assert.equal(beforeLimit.pauses.length, 1, 'цикл поставлен на паузу');
+  assert.equal(beforeLimit.flushes.length, 0, 'петля не доходит до перехода');
   assert.match(beforeLimit.pauses[0].text, /Не удалось открыть страницу «Architect»/, 'человек видит причину');
 
   const atLimit = makeNav({ store, path: '/', now: 31_000 });
-  assert.equal(atLimit.navigateTo(role, 'ждём ответа'), true, 'переход после полного окна разрешён');
+  assert.equal(await atLimit.navigateTo(role, 'ждём ответа'), true, 'переход после полного окна разрешён');
   assert.deepEqual(atLimit.assigned, [role.url], 'новый переход действительно открыт');
   assert.equal(atLimit.pauses.length, 0, 'на границе цикла нет ложной паузы');
 }
@@ -148,9 +159,9 @@ const role = { id: 'architect', name: 'Architect', url: 'https://arena.ai/agent/
 // 7.3. Со другой страницы тот же адрес — это не петля.
 {
   const store = new Map();
-  makeNav({ store, path: '/' }).navigateTo(role, 'ждём ответа');
+  await makeNav({ store, path: '/' }).navigateTo(role, 'ждём ответа');
   const h = makeNav({ store, path: '/agent/coordinator' });
-  assert.equal(h.navigateTo(role, 'ждём ответа'), true, 'переход с другой страницы разрешён');
+  assert.equal(await h.navigateTo(role, 'ждём ответа'), true, 'переход с другой страницы разрешён');
   assert.equal(h.pauses.length, 0, 'паузы нет');
 }
 

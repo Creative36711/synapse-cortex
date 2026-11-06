@@ -16,6 +16,10 @@ const routing = cut('  function decisionRoute(next,', '  // ──────�
 const dispatch = cut('  async function dispatchTask(', '  // ───────────────────────────── цикл ───');
 const send = cut('  async function sendToRole(', '  /** Перейти на страницу роли без задания');
 const consume = cut('  async function consumePending(', '  // ───────────────────── следы прошлых попыток');
+// D-045: разбор очереди без ожидания и опознавательные данные выдачи — тоже
+// настоящие блоки, а не пересказ.
+const orphanAdopt = cut('  async function adoptOrphanDispatch(', '  /**\n   * Досылает задание, сохранённое перед переходом');
+const promptIds = cut('  function promptDispatchIds(', '  /** Своё сообщение в транскрипте');
 const migrate = cut('  function migrateState() {', '  /**\n   * Кнопка ↺:');
 const revive = cut('  function reviveUnverifiedHandoff() {', '  /**\n   * Один отложенный повтор');
 const norm = (x) => String(x || '').replace(/-/g, '').toLowerCase();
@@ -65,7 +69,7 @@ function fixture(who = 'Kernel') {
 
 function makeDispatch({ active = all, directory = all, freshCard = fixture(), directoryError = null, failCreateLog = false } = {}) {
   const storage = new Map();
-  const calls = { patches: [], gateway: [], reads: [], sends: [], navigations: [], roleReads: [], logs: [], pauses: [] };
+  const calls = { patches: [], gateway: [], reads: [], sends: [], navigations: [], roleReads: [], logs: [], pauses: [], flushes: [] };
   const env = {
     roles: async () => clone(active),
     roleRows: async (opts) => {
@@ -103,6 +107,10 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
     releaseUndelivered: async () => { throw new Error('unexpected rollback'); },
     taskPreflight: async () => '', textHash: (text) => String(text), lastMessageId: () => '', messages: () => [], nodeId: (node) => node.id,
     dbg: () => {}, setStatus: () => {}, setTimeout: () => {}, tick: () => {},
+    // D-045: транспорт ждёт подтверждения записей перед уходом со страницы.
+    flushBeforeNavigate: async (keys) => { calls.flushes.push(clone(keys)); return true; },
+    handoffKeys: () => ['expect', 'pending', 'lastSend'],
+    recordPromptAttempt: () => {},
     location: { href: 'https://arena.ai/agent/coord-1', pathname: '/agent/coord-1', assign: (url) => calls.navigations.push(url) },
   };
   const make = new Function('env', `
@@ -110,7 +118,8 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
       taskTitle, taskState, taskRole, taskTargetRepository, reworkSeen, profileSessionRepo, canonicalTargetRepository, profileRepoBranch,
       redispatchClearProps, redispatchWhy, noteRedispatch, REDISPATCH_LIMIT,
       answerStampKey, reworkKey, pause, log, uid, nowIso, taskLogEntry, executorPrompt,
-      releaseUndelivered, taskPreflight, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location} = env;
+      releaseUndelivered, taskPreflight, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location,
+      flushBeforeNavigate, handoffKeys, recordPromptAttempt} = env;
     ${send}\n${dispatch}\nreturn { sendToRole, dispatchTask };`);
   return { ...make(env), storage, calls, freshCard };
 }
@@ -246,15 +255,20 @@ function makeConsumer(expect, pending, owners = [warden]) {
     deliver: async (_editor, text) => { calls.delivered.push(text); return { ok: true, msgId: 'sent-message' }; },
     isDispatchAssignment: () => false, dispatchDeliveryNtfy: () => ({ ntfy: false }), dbg: () => {},
     setTimeout: () => {}, tick: () => {},
+    // D-045: сверка потерянного хода с карточкой. Доказательство доставки
+    // проверяет отдельная проба D-045 на настоящем блоке квитанций.
+    isUuid: (x) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(x || '')),
+    rt, taskTitle: (p) => rt(p?.properties?.['Запрос']), restoreMissingSendMark: () => null,
   };
   const make = new Function('env', `
     const {K, norm, C, GM_getValue, GM_setValue, roleFromPath, roleRows, pause, appReady, pendingSay, autoOn,
       dropGhostHandoff, notion, patch, taskState, nowIso, log, sendKey, flat, composerHolds, userSaysSince,
       lastUserSays, captchaDialog, busySettled, busyLabel, ensureFreshBranch, ensureComposer, composerText,
       clearComposer, sleep, writePrompt, lastMessageId, messages, nodeId, deliver, isDispatchAssignment,
-      dispatchDeliveryNtfy, dbg, setTimeout, tick} = env;
+      dispatchDeliveryNtfy, dbg, setTimeout, tick,
+      isUuid, rt, taskTitle, restoreMissingSendMark} = env;
     let pendingNoticeAt = 0, insertFail = {at: 0, count: 0};
-    ${promptShim}\n${consume}\nreturn consumePending;`);
+    ${promptShim}\n${promptIds}\n${orphanAdopt}\n${consume}\nreturn consumePending;`);
   return { consumePending: make(env), storage, calls };
 }
 const pending = { roleId: warden.id, roleName: warden.name, text: 'текст карточки', at: Date.now() };
