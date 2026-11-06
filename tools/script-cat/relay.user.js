@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.11
+// @version      1.12.12
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -630,7 +630,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.11";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.12";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -3887,16 +3887,49 @@
   }
 
   /**
+   * Ответ на замечания уже есть: в «Итоге» раздел «Возврат».
+   *
+   * Того же раздела требует returnBlock, поэтому «есть раздел» и «этот ход
+   * получил замечания» — одно и то же утверждение, а не догадка по времени.
+   */
+  const returnAnswered = (mission) =>
+    isReturned(mission) && Boolean(missionRemarks(mission)) &&
+    /возврат/i.test(rt(mission?.properties?.["Итог"]));
+
+  /**
    * Ожидание Координатора началось до возврата — это прошлый ход, а не ответ
    * на замечания. Снимаем его и разрешаем новый план немедленно: иначе
    * `done` из прошлого хода выглядит как отказ работать, и цикл встаёт на
    * паузу, которой не за что стоять.
+   *
+   * Признаков «этот ход уже с замечаниями» три, и первый сильнее остальных:
+   * снимок `planBeforeReturn` (делается до отправки плана), раздел «Возврат» в
+   * «Итоге» (его требует returnBlock того же возврата) и отметка `markedAt` —
+   * когда возврат объявили строкой в журнале. Все они не зависят от того, когда
+   * в последний раз правили карточку миссии.
    */
   function dropStalePlan(mission, expect, epoch) {
     if (!isReturned(mission) || !expect) return false;
     const at = Number(expect.at) || Number(expect.sentAt) || 0;
     const since = Number(epoch && epoch.at) || returnEpoch(mission).at;
-    if (at && at >= since) return false;
+    const marked = Number(epoch && epoch.markedAt) || 0;
+    // 06.11, SYN-1. Возврат в 17:07:32, план с замечаниями в 17:07:57.
+    // Координатор к 17:18 создал K-38…K-41 и дописал раздел «Возврат» в
+    // «Итог» — «последняя правка» карточки уехала на 17:18, и отсчёт вместе с
+    // ней. Ожидание 17:07:57 стало «начатым до возврата»: шаг в 17:19:30 снял
+    // живой ход, в 17:19:54 ушёл второй план подряд — ещё 11 минут работы
+    // агента и лишний расход лимитов.
+    //
+    // Время правки карточки для этого вопроса вообще не годится: Координатор
+    // пишет в «Итог» в том же ходе. Поэтому сначала снимок плана, затем
+    // карточка — раздел «Возврат» означает, что замечания уже разобраны этим
+    // ходом. И только если ни того, ни другого нет, решает время.
+    const stale = expect.planBeforeReturn === true
+      ? true
+      : expect.planBeforeReturn === false
+        ? false
+        : !returnAnswered(mission) && !(marked && at && at >= marked) && !(at && at >= since);
+    if (!stale) return false;
     GM_setValue(K.expect, null);
     GM_setValue("cfn-plan-at", 0);
     return true;
@@ -6888,6 +6921,14 @@
     // выживала очередь без ожидания — она отправляла задание и оставляла
     // цикл без хозяина хода. Теперь усечение теряет очередь, а ожидание
     // остаётся: такой ход разбирается штатной уборкой фантомов.
+    // Снимок «план уже с замечаниями» переживает напоминание: иначе повтор
+    // промпта по тому же плану теряет признак, и следующий шаг снова смотрит
+    // на время правки карточки — ровно то, из-за чего 06.11 ушёл второй план.
+    const previousPlan = GM_getValue(K.expect, null);
+    const planCarry = kind === "plan" && previousPlan && previousPlan.kind === "plan" &&
+      norm(previousPlan.ref) === norm(ref) && "planBeforeReturn" in previousPlan
+      ? { planBeforeReturn: previousPlan.planBeforeReturn }
+      : {};
     GM_setValue(K.expect, {
       roleId: role.id,
       roleName: role.name,
@@ -6906,6 +6947,7 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       prompt: envelope || null,
+      ...planCarry,
       ...payload,
       sessionRepo,
       targetRepo,
@@ -12217,8 +12259,17 @@
       // выглядит как отказ отвечать на замечания (24.10, 16:12).
       const epoch = returnEpoch(mission);
       const seen = `cfn-mission-return:${mission.id}:${textHash(epoch.fp)}`;
-      if (!GM_getValue(seen, false)) {
-        GM_setValue(seen, true);
+      // Когда возврат объявили — второй ориентир рядом с датой возврата: от
+      // него видно, что ход начался уже после замечаний, даже если отметка
+      // времени возврата уехала вперёд из-за правки карточки.
+      // Метка прошлой версии — `true` без времени: объявление уже было, и
+      // повторять его при обновлении незачем. Своя метка несёт момент.
+      const rawMark = GM_getValue(seen, 0);
+      const stamp = Number(rawMark);
+      let markedAt = Number.isFinite(stamp) && stamp > Date.parse("2020-01-01") ? stamp : 0;
+      if (!rawMark) {
+        markedAt = Date.now();
+        GM_setValue(seen, markedAt);
         log(
           `Миссия возвращена Мастером: ${firstLine(remarks)}. Координатор получит замечания в плане хода.`,
           false,
@@ -12226,7 +12277,7 @@
           { tone: "warn", ntfy: "quiet", title: "Relay: миссия возвращена" },
         );
       }
-      if (dropStalePlan(mission, expect, epoch)) {
+      if (dropStalePlan(mission, expect, { ...epoch, markedAt })) {
         expect = null;
         log(
           "Ожидание Координатора началось до возврата миссии — это прошлый ход, а не ответ на замечания. " +
@@ -12651,6 +12702,23 @@
     // Вопросы к Мастеру и его ответы: ответы доставляются ровно один раз —
     // отметка ставится после того, как промпт действительно ушёл.
     const briefing = await questionBriefing(mission);
+    // План запрошен до возврата или уже после него? Решается один раз, здесь,
+    // и кладётся в ожидание снимком. Спрашивать об этом карточку позже нельзя:
+    // Координатор допишет «Итог», «последняя правка» уедет вперёд, и уже
+    // отправленный план с замечаниями будет выглядеть как план без них. 06.11:
+    // так в 17:19 сняли живой ход и переспросили план через 11 минут после
+    // ответа.
+    //
+    // Признак «после возврата» — не отметка времени, а содержимое задачи:
+    // returnBlock непустой, если миссия возвращена и в карточке есть
+    // «Замечания». Значит, этот план замечания несёт. Время возврата — только
+    // страховка для случая без «Замечаний» (там returnBlock пуст, и возврат
+    // разбирается отдельной паузой return-empty).
+    const planBeforeReturn = !isReturned(mission)
+      ? false
+      : returnBlock(mission)
+        ? false
+        : Date.now() < (Number(returnEpoch(mission).at) || 0);
     // Recovery — скомпилированный профиль coordinator.recovery с теми же ID и
     // снимком очереди; ручной склейки промпта здесь больше нет.
     const recoveryEnvelope = PromptCompiler.compile({
@@ -12684,6 +12752,9 @@
         title: "план Координатора",
         fallbackText,
         planContext: summary,
+        // Снимок «с замечаниями или без»: по нему снятие устаревшего
+        // ожидания не переспрашивает план, ответ на который уже пришёл.
+        planBeforeReturn,
         // Снимок очереди на момент вопроса: по нему видно, устарел ли ответ.
         readyKey: readyKeyOf(queue.ready),
         runningIds: (queue.running || []).map((card) => card.id),

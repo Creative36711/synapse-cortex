@@ -22,6 +22,10 @@ assert.equal(contract.d046?.budgetsRaised, false, 'D-046 не поднимал �
 assert.match(contract.d046?.protocolNote || '', /protocolVersion 1\.11/, 'D-046 поднял версию контракта аддитивно');
 assert.match(contract.d046?.fix || '', /pr-claim/, 'D-046: напоминание вместо Blocked');
 assert.match(contract.d046?.safety || '', /repo\/base|базовой ветки/, 'D-046: сверка repo/base не ослаблена');
+assert.equal(contract.d047?.budgetsRaised, false, 'D-047 не поднимал бюджеты');
+assert.match(contract.d047?.protocolNote || '', /остаётся 1\.11/, 'D-047 транспорт-внутренний');
+assert.match(contract.d047?.fix || '', /planBeforeReturn/, 'D-047: снимок плана решает снятие ожидания');
+assert.match(contract.d047?.safety || '', /снимается/, 'D-047: снятие прошлого хода не отменено');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',
