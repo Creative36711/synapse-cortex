@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.14
+// @version      1.12.15
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -636,7 +636,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.14";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.15";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9109,8 +9109,13 @@
       const fields = c.role?.fn === "Auditor"
         ? "check:0=pass."
         : "check:0=pass; без PR pr:null,merged:false; merged:true только после мержа.";
+      // D-054: 07.11 агент трижды подряд прислал run_id с одной заменой знака —
+      // он собирал UUID по памяти, а не копировал строку ниже. Просьба «ID из
+      // промпта» такого не запрещает, и одна буква стоила паузы всему циклу.
+      // Текст самый короткий из работающих: повтор ограничен 900 знаками
+      // (relay-arena-swallow-smoke), а бюджет reminder.marker — 700.
       return [
-        `ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). ${fields} ID из промпта:`,
+        `ОТВЕТ: полный отчёт, затем последней строкой один маркер текстом (не HTML-комментарий, не вместо отчёта). ${fields} ID целиком из строки ниже:`,
         markerJson(c, "CF_AGENT_RESULT"),
       ].join("\n");
     } });
@@ -9182,7 +9187,7 @@
       // за себя и заменяет общую концовку: она уже просит поправить только маркер.
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
-        ids ? `Маркер ${c.reminder?.markerName} есть, но в нём нет dispatch_id/run_id этой выдачи. Повтори маркер с ID из этого напоминания; работу не повторяй.`
+        ids ? `В маркере ${c.reminder?.markerName} нет dispatch_id/run_id этой выдачи либо они иные. Скопируй ID из строки ниже; работу не повторяй.`
           : prClaim ? `В маркере ${c.reminder?.markerName} "pr":null и "merged":true разом — так нельзя. Изменений не было — "pr":null,"merged":false. Слил свой PR — номер PR и "merged":true. Поправь только маркер.`
           : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
           : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
@@ -10024,6 +10029,72 @@
     return "match";
   }
 
+  /**
+   * D-054: Run ID, отличающийся от выдачи ОДНИМ знаком, — опечатка копирования.
+   *
+   * 07.11 (17:04) Executor Platform сдал карточку S-4 маркером, где run_id
+   * отличался от выдачи ровно одним символом: a437578a-e5d6-… против
+   * a437578a-e5db-…. Работа была сделана (тот же dispatch в первой строке
+   * карточки, тот же отчёт, PR #26 в тексте, верный dispatch_id), но транспорт
+   * отнёс ответ к «чужим ID» и встал на паузу marker-mismatch. Мастеру пришлось
+   * разбираться из-за одного знака.
+   *
+   * `uid()` — это crypto.randomUUID(), случайный v4: узнавать «ту же машину» по
+   * общему началу нельзя. Строгость даёт не похожесть строк, а число отличий:
+   * у двух независимых выдач UUID совпадёт во всех знаках, кроме одного, с
+   * вероятностью 2^-123. Поэтому правило узкое — ровно одна замена. Формат
+   * (длина, дефисы, hex) уже проверяет isUuid, он же отсекает сдвиги строки.
+   *
+   * Само по себе это ещё не приёмка: рядом обязательна карточка Notion с
+   * ОЖИДАЕМЫМ run (его ставил сам скрипт) и верный dispatch_id. Иначе — пауза.
+   */
+  function looksLikeTypo(value, expected) {
+    const a = String(value || "").trim().toLowerCase();
+    const b = String(expected || "").trim().toLowerCase();
+    if (!isUuid(a) || !isUuid(b) || a === b) return false;
+    let diff = 0;
+    for (let i = 0; i < b.length; i += 1) if (a[i] !== b[i]) diff += 1;
+    return diff === 1;
+  }
+
+  /**
+   * Значения run в маркере: короткие синонимы равноправны длинному, поэтому
+   * опечатку ищем во всех, а не только в `run_id`.
+   */
+  const runValues = (result) => ["run_id", "run", "runId"]
+    .map((name) => result?.[name])
+    .filter((value) => value !== undefined && value !== null && String(value).trim())
+    .map((value) => String(value).trim());
+
+  /**
+   * Карточка подтверждает, что опечатка — именно про эту выдачу.
+   * `checked: false` означает «спросить не удалось», и тогда решение остаётся
+   * прежним: чужой ответ не принимаем.
+   */
+  async function typoTiedToCard(role, expect, result) {
+    try {
+      const page = await notion("GET", `pages/${expect.ref}`);
+      const run = rt(page?.properties?.["Run ID"]).trim();
+      const owner = rt(page?.properties?.["Recipient Agent ID"]).trim();
+      if (!run || norm(run) !== norm(expect.runId)) return { checked: true, ok: false };
+      if (role?.id && owner && norm(owner) !== norm(role.id)) return { checked: true, ok: false };
+      const values = runValues(result);
+      if (!values.length || !values.every((value) => looksLikeTypo(value, expect.runId))) {
+        return { checked: true, ok: false };
+      }
+      return { checked: true, ok: true };
+    } catch {
+      return { checked: false, ok: false };
+    }
+  }
+
+  /** Все синонимы run приводятся к выдаче: иначе они противоречат друг другу. */
+  const alignRunValues = (result, expect) => {
+    const fixed = { ...result, run_id: expect.runId };
+    for (const name of ["run", "runId"]) if (fixed[name] !== undefined) fixed[name] = expect.runId;
+    return fixed;
+  };
+
   async function submitExecutor(role, expect, manual = false) {
     const receivedAt = Date.now();
     if (!expect || expect.kind !== "dispatch") {
@@ -10090,14 +10161,43 @@
       return markerMissing(role, expect, "CF_AGENT_RESULT", manual);
     }
 
+    let retained = false;
     if (!matchesDispatch(hit.result)) {
-      const retained = retainRejectedResult(expect, "dispatch-identity", replies);
+      retained = retainRejectedResult(expect, "dispatch-identity", replies);
       // D-040: маркер есть, но ID выдачи не указаны — это формат-дефект, а не
       // чужой ответ. Напоминаем с точными ID (лестница markerReminders), работу
       // не повторяем. Чужие/битые ID — по-прежнему сразу пауза для разбора.
       if (dispatchIdState(hit.result, expect) === "missing") {
         return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "ids");
       }
+      // D-054: единственная опечатка в Run ID при верном dispatch_id и карточке,
+      // которая всё ещё несёт ожидаемый run, — формат-дефект, а не чужой ответ.
+      // Работа сделана; повторять её из-за одного знака нельзя. ID не подменяем:
+      // запись идёт по выдаче, а в журнал попадает и то, что прислал агент.
+      if (dispatchIdState(hit.result, expect) === "conflict") {
+        const tied = await typoTiedToCard(role, expect, hit.result);
+        if (tied.ok) {
+          log(
+            `${role.name} прислал Run ID с опечаткой (${runValues(hit.result)[0]} вместо ${expect.runId}) — ` +
+              "карточка и dispatch_id этой выдачи совпали, принимаю ответ без повтора работы.",
+            true,
+            { ntfy: "quiet", title: "Relay: опечатка в Run ID" },
+          );
+          // Копия присланного сохраняется: в журнал попадёт и опечатка, и то,
+          // что приняли. ID выдачи не подменяется — запись идёт по ожиданию.
+          retainRejectedResult(expect, "dispatch-typo", replies);
+          hit = { ...hit, result: { ...alignRunValues(hit.result, expect), run_id_typo: runValues(hit.result)[0] } };
+        } else if (tied.checked) {
+          log(
+            `${role.name} прислал Run ID не этой выдачи (${runValues(hit.result)[0]} вместо ${expect.runId}) — ` +
+              "это не опечатка: карточка несёт другие данные. Ответ не принимаю.",
+            true,
+            { ntfy: "quiet" },
+          );
+        }
+      }
+    }
+    if (!matchesDispatch(hit.result)) {
       pause("Ответ не подтверждён для текущей карточки и попытки (dispatch_id / run_id). " +
         (retained ? "Карточка, ожидание и копия ответа сохранены локально; " : "Карточка и ожидание сохранены, локальная копия не записалась — сохраните ответ из чата вручную; ") +
         "попросите агента повторить маркер с ID этой выдачи.", {

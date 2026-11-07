@@ -74,7 +74,8 @@ const reminder = PromptCompiler.compile(reminderRequest('Executor', 'CF_AGENT_RE
   reminder: { markerName: 'CF_AGENT_RESULT', attempt: 1, max: 2, why: 'ids' },
 }));
 assert.equal(reminder.ok, true, `reminder why=ids компилируется: ${reminder.error?.detail || ''}`);
-assert.match(reminder.text, /Повтори маркер с ID из этого напоминания; работу не повторяй/, 'напоминание просит повторить маркер, не переделывать ход');
+assert.match(reminder.text, /Скопируй ID из строки ниже; работу не повторяй/, 'напоминание просит повторить маркер, не переделывать ход');
+assert.match(reminder.text, /нет dispatch_id\/run_id этой выдачи либо они иные/, 'D-054: why=ids покрывает и отсутствие ID, и опечатку в них');
 assert.ok(reminder.text.includes(UUID.dispatch), 'в напоминании есть точный dispatch_id');
 assert.ok(reminder.text.includes(UUID.run), 'в напоминании есть точный run_id');
 assert.ok(reminder.text.length <= 900, `reminder why=ids в тотал-бюджете 900 (${reminder.text.length})`);
