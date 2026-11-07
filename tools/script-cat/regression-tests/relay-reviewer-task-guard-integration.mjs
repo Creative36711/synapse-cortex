@@ -18,7 +18,7 @@ const send = cut('  async function sendToRole(', '  /** Перейти на ст
 const consume = cut('  async function consumePending(', '  // ───────────────────── следы прошлых попыток');
 // D-045: разбор очереди без ожидания и опознавательные данные выдачи — тоже
 // настоящие блоки, а не пересказ.
-const orphanAdopt = cut('  async function adoptOrphanDispatch(', '  /**\n   * Досылает задание, сохранённое перед переходом');
+const orphanAdopt = cut('  async function adoptOrphanReview(', '  /**\n   * Досылает задание, сохранённое перед переходом');
 const promptIds = cut('  function promptDispatchIds(', '  /** Своё сообщение в транскрипте');
 const migrate = cut('  function migrateState() {', '  /**\n   * Кнопка ↺:');
 const revive = cut('  function reviveUnverifiedHandoff() {', '  /**\n   * Один отложенный повтор');

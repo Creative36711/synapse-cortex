@@ -644,6 +644,19 @@
     return null;
   }
 
+  /**
+   * Ход приёмки, ответа на вопрос или арбитража — законная адресация роли с
+   * функцией Reviewer, а не рабочая карточка.
+   *
+   * Вид хода ставит `sendToRole` в ожидание (`kind`), и пока ожидание живо,
+   * верить надо ему: роль могли перевести из Executor в Reviewer уже после
+   * постановки в очередь, а `roleFn` в записи остался прежним. 07.11 в 22:05
+   * именно так ход приёмки, у которого не было только `sentAt`, попал в
+   * проверку «адресат — Reviewer» и цикл встал до Мастера.
+   */
+  const REVIEW_TURN_KINDS = ["review", "answer", "arbiter"];
+  const isReviewTurnKind = (kind) => REVIEW_TURN_KINDS.includes(String(kind || ""));
+
   /** Своё сообщение в транскрипте — независимо от того, как оно обёрнуто. */
   function userMessages() {
     const found = new Set();
@@ -1283,6 +1296,35 @@
   }
 
   /**
+   * Своя реплика хода приёмки в чате адресата.
+   *
+   * Приёмка миссии, ответ на вопрос и арбитраж не несут `dispatch_id`/`run_id` —
+   * у них свой номер хода (`turn_id`), и именно он напечатан в тексте задания.
+   * Без этой проверки `restoreMissingSendMark` умел доказывать доставку только
+   * рабочей карточки: у хода приёмки доказательство не находилось никогда, и
+   * `dropGhostHandoff` снимал живой ход как фантом. 07.11 в 22:05 цикл из-за
+   * этого открыл страницу Warden и встал на «Очередь адресована Reviewer».
+   */
+  function reviewTurnInChat(expect) {
+    const turnId = String(expect?.turnId || "");
+    if (!isReviewTurnKind(expect?.kind) || !isUuid(turnId)) return null;
+    if (!expect.roleId || norm(roleFromPath()) !== norm(expect.roleId)) return null;
+    if (expect.captcha === true || GM_getValue(K.pending, null)?.captcha === true) return null;
+    const dead = GM_getValue(K.deadSend, "");
+    const nodes = userMessages();
+    // Номер хода печатается двояко: строкой задания `turn_id: <id>` и внутри
+    // примера маркера `"turn_id":"<id>"`. Оба вида — одна и та же выдача.
+    const shape = new RegExp(`turn_id"?\\s*[:=]\\s*"?${turnId}\\b`, "i");
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      if (!shape.test(messageRaw(nodes[i]))) continue;
+      const id = nodeId(nodes[i]);
+      if (!id || (dead && id === dead)) continue;
+      return { id, at: idTime(id) };
+    }
+    return null;
+  }
+
+  /**
    * Восстановить отметку отправки по квитанции или по самой реплике в чате.
    * Возвращает восстановленное ожидание либо null, если доказательств нет.
    */
@@ -1292,7 +1334,7 @@
     const proof = receipt
       ? { messageId: receipt.messageId, sentAt: Number(receipt.sentAt), watermark: receipt.watermark, seen: receipt.seen, source: "квитанция доставки" }
       : (() => {
-          const node = dispatchPromptInChat(expect);
+          const node = dispatchPromptInChat(expect) || reviewTurnInChat(expect);
           if (!node) return null;
           return {
             messageId: node.id, sentAt: node.at || Number(expect.at) || Date.now(),
@@ -1389,6 +1431,93 @@
    *
    * Возвращает true, если ход разобран здесь; false — можно продолжать.
    */
+  /**
+   * Очередь хода приёмки без ожидания — восстанавливается по номеру хода.
+   *
+   * D-045 научил сверять с карточкой рабочую выдачу, но приёмка миссии, ответ
+   * на вопрос и арбитраж карточки не имеют: их опознавательный знак — `turn_id`,
+   * который напечатан в самом задании. Без этой ветки потерянное ожидание
+   * такого хода уходило в общую паузу «очередь без ожидания» с советом сверять
+   * Run ID, которого не существует (07.11, 22:05).
+   *
+   * Порядок тот же, что у карточки: опознавательные данные очереди → страница
+   * адресата → доказательство доставки по `turn_id` в чате. Доказано — очередь
+   * снимаем и читаем ответ, ничего не отправляя. Не доказано — восстанавливаем
+   * ожидание и отправляем ровно один раз обычным путём. Номер не читается —
+   * пауза: угадывать здесь значит отправить ход второй раз.
+   *
+   * Возвращает true, если ход разобран здесь; false — можно продолжать.
+   */
+  async function adoptOrphanReview(pending, me) {
+    if (GM_getValue(K.expect, null)) return false;
+    const kind = String(pending.kind || "");
+    if (!isReviewTurnKind(kind)) return false;
+    const turnId = String(pending.turnId || "");
+    const ref = String(pending.ref || "");
+    if (!isUuid(turnId) || !isUuid(ref) || !pending.roleId) {
+      pause(
+        "В очереди остался ход приёмки без ожидания, и номер хода из него не читается. " +
+          "Не отправляю и ничего не меняю: сверьте чат адресата и номер хода, затем продолжите вручную.",
+        { kind: "orphan-review", ref, runId: "" },
+      );
+      return true;
+    }
+    // Сверять чат можно только на странице адресата: цикл сам откроет её и
+    // вернётся к этому же шагу.
+    if (!me || norm(me) !== norm(pending.roleId)) {
+      pendingSay(pending, "Ход приёмки остался без ожидания: открываю страницу адресата, чтобы сверить чат по номеру хода.");
+      return true;
+    }
+    const shell = appReady();
+    if (!shell.ok) {
+      pendingSay(pending, `Ход приёмки остался без ожидания; страница ещё грузится (${shell.why}) — сверю чат, когда она откроется.`);
+      return true;
+    }
+    const restored = {
+      roleId: pending.roleId,
+      roleName: pending.roleName || "",
+      roleUrl: pending.roleUrl || "",
+      roleFn: pending.roleFn || "",
+      kind,
+      ref,
+      runId: "",
+      missionId: String(pending.missionId || ""),
+      turnId,
+      questionId: String(pending.questionId || ""),
+      logId: String(pending.logId || ""),
+      title: pending.title || "",
+      url: pending.url || "",
+      watermark: "",
+      seen: [],
+      at: Number(pending.at) || Date.now(),
+      tries: 0,
+      lastReplySig: "",
+      lastReplyAt: 0,
+      text: pending.text,
+      prompt: null,
+      adoptedFromQueue: true,
+    };
+    if (restoreMissingSendMark(restored)) {
+      GM_setValue(K.pending, null);
+      pendingNoticeAt = 0;
+      log(
+        `Ход приёмки «${restored.title || ref}» восстановлен из очереди: доставка доказана номером хода. ` +
+          "Отправку не повторяю — читаю ответ.",
+        true,
+        { ntfy: "quiet", title: "Relay: ход восстановлен" },
+      );
+      return true;
+    }
+    GM_setValue(K.expect, restored);
+    log(
+      `Ход приёмки «${restored.title || ref}» остался без ожидания, а сообщения в чате нет: ` +
+        "ожидание восстановлено по очереди, отправляю его один раз обычным путём.",
+      true,
+      { ntfy: "quiet", title: "Relay: ход восстановлен" },
+    );
+    return false;
+  }
+
   async function adoptOrphanDispatch(pending, me) {
     if (GM_getValue(K.expect, null)) return false;
     const text = String(pending.text || "");
@@ -1526,6 +1655,16 @@
     const orphanPending = !waitingForPolicy;
     const orphanWork = orphanPending && /CF_AGENT_RESULT/.test(String(pending.text || "")) &&
       /dispatch_id/.test(String(pending.text || ""));
+    // Рабочая карточка адресована роли с функцией Reviewer — отправку не
+    // повторяем и карточку не трогаем. Это ровно про карточку: приёмка,
+    // ответ на вопрос и арбитраж приходят тому же адресату по закону, и
+    // путать их с рабочей выдачей нельзя (07.11, 22:05).
+    // Вид хода известен из живого ожидания; если ожидание уже снято, остаётся
+    // маркер, который ход просит вернуть. Нераспознанная очередь сохраняет
+    // прежнее осторожное поведение — её не отправляем.
+    const queueText = String(pending.text || "");
+    const reviewQueue = isReviewTurnKind(waitingForPolicy?.kind) ||
+      (!waitingForPolicy && /\bCF_(REVIEW|ANSWER|ARBITER)_RESULT\b/.test(queueText));
     if (workPending && (waitingForPolicy.roleFn === "Reviewer" ||
         norm(waitingForPolicy.roleName) === norm("Warden"))) {
       pause("В очереди осталась рабочая карточка Reviewer от прежней версии. Не отправляю её и не меняю карточку, очередь или ожидание: проверьте чат и Run ID.",
@@ -1548,19 +1687,30 @@
           { kind: "reviewer-task-check", ref: pending.roleId || "" });
         return true;
       }
-      if (owners.some((r) => r.fn === "Reviewer" || norm(r.name) === norm("Warden"))) {
+      // Здесь стояло безусловное «Очередь адресована Reviewer» — и ход
+      // приёмки, у которого потерялось ожидание, стоял до Мастера с советом
+      // «проверьте чат», хотя ни карточки, ни Run ID у такого хода нет.
+      if (!reviewQueue && owners.some((r) => r.fn === "Reviewer" || norm(r.name) === norm("Warden"))) {
         pause("Очередь адресована Reviewer. Проверьте чат и карточку: отправку не повторяю, очередь сохранена.",
           { kind: "reviewer-task-pending", ref: waitingForPolicy?.ref || "", runId: waitingForPolicy?.runId || "" });
         return true;
       }
       const valid = owners.some((r) => r.status === "Активна" && ["Executor", "Auditor"].includes(r.fn) &&
         (!waitingForPolicy?.roleFn || waitingForPolicy.roleFn === r.fn));
-      if (!owners.length || ((workPending || orphanWork) && !valid)) {
+      // Ход приёмки не отправляем молча и не откатываем: карточки работы он
+      // не несёт, а повтор выдал бы её второй раз. Дальше по шагу такой ход
+      // разбирается своим порядком — сверка по карточке и чату, напоминание,
+      // затем срок очереди; пауза Мастера здесь ничего не добавляет.
+      if (!reviewQueue && (!owners.length || ((workPending || orphanWork) && !valid))) {
         pause("Адресат рабочей очереди не найден среди активных Executor/Auditor или его функция изменилась. Очередь сохранена.",
           { kind: "reviewer-task-check", ref: waitingForPolicy?.ref || "" });
         return true;
       }
     }
+
+    // Ход приёмки без ожидания сверяется по номеру хода, а не по карточке:
+    // карточки у него нет (D-055).
+    if (await adoptOrphanReview(pending, me)) return true;
 
     // D-045: очередь без ожидания сперва сверяется с карточкой и чатом — и
     // ДО разбора просрочки. Потерянный ход K-27 пролежал бы в очереди часы:
