@@ -25,7 +25,7 @@ const idsBlock = cut('  function promptDispatchIds(text) {', '  /** Своё с�
 const sendKeyBlock = cut('  function sendKey(text) {', '  /** Своё сообщение в транскрипте');
 const flushBlock = cut('  async function flushBeforeNavigate(', '  const norm = (x) =>');
 const receiptsBlock = cut('  const DELIVERY_RECEIPT_KEY', '  /** Уведомление и время относятся только к той очереди');
-const adoptBlock = cut('  async function adoptOrphanDispatch(', '  /**\n   * Досылает задание, сохранённое перед переходом');
+const adoptBlock = cut('  async function adoptOrphanReview(', '  /**\n   * Досылает задание, сохранённое перед переходом');
 const sendBlock = cut('  async function sendToRole(', '  /** Перейти на страницу роли без задания');
 const consumeBlock = cut('  async function consumePending(', '  // ───────────────────── следы прошлых попыток');
 
