@@ -146,7 +146,7 @@
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_ARBITER_RESULT") {
-        // D-049: вердикт арбитра относится к конкретной карточке и ходу.
+        // D-053: вердикт арбитра относится к конкретной карточке и ходу.
         if (c.arbiter?.cardId && !eq(obj.dispatch_id, c.arbiter.cardId)) return "dispatch_id маркера не совпадает с карточкой арбитража";
         if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_AGENT_PROVISION_RESULT") {

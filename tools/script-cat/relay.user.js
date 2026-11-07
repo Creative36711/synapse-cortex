@@ -103,7 +103,7 @@
     longWaitNoticeMs: 600000, // раз в 10 минут напоминаем, что долгое ожидание — норма
     pollPauseCount: 3, // столько опросов подряд — уже поломка промпта, а не случайность
     reworkLimit: 3, // доработок миссии больше этого — стоп и вызов Мастера
-    // D-049: повторяющаяся петля — не повод будить Мастера первым. Столько раз
+    // D-053: повторяющаяся петля — не повод будить Мастера первым. Столько раз
     // одну карточку можно отдать арбитру (Warden); исчерпали — пауза
     // `arbiter-limit`, дальше решает человек.
     arbiterLimit: 2,
@@ -4682,7 +4682,7 @@
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
     if (expect.kind === "plan" || expect.kind === "review") ctx.mission = { id: expect.missionId || expect.ref };
     if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId };
-    // D-049: арбитраж — тот же ход, напоминание несёт карточку и turn_id.
+    // D-053: арбитраж — тот же ход, напоминание несёт карточку и turn_id.
     if (expect.kind === "arbiter") ctx.arbiter = { cardId: expect.ref, ...(expect.arbiter || {}) };
     return compileOrPause(ctx, `reminder ${expect.kind}`);
   }
@@ -6967,7 +6967,7 @@
     // Снимок «план уже с замечаниями» переживает напоминание: иначе повтор
     // промпта по тому же плану теряет признак, и следующий шаг снова смотрит
     // на время правки карточки — ровно то, из-за чего 06.11 ушёл второй план.
-    // D-049: дело арбитража переживает напоминание и продолжение — арбитр
+    // D-053: дело арбитража переживает напоминание и продолжение — арбитр
     // должен видеть те же факты, что и в первом промпте, а не пустую карточку.
     const arbiterCarry = kind === "arbiter" && extra.arbiter ? { arbiter: extra.arbiter } : {};
     const previousPlan = GM_getValue(K.expect, null);
@@ -8911,7 +8911,7 @@
       CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
       CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
       CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
-      // D-049: разбор повторяющейся петли. Карточка и ход названы явно: вердикт
+      // D-053: разбор повторяющейся петли. Карточка и ход названы явно: вердикт
       // арбитра обязан относиться именно к этой выдаче, а не к похожей.
       CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer" },
       CF_AGENT_PROVISION_RESULT: { kind: "provision", ids: ["request_id"], role: "Coordinator|Reviewer" },
@@ -9064,7 +9064,7 @@
     def("answer.resume", { audience: ["Reviewer"], render: () =>
       "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
 
-    // ── D-049: арбитраж повторяющейся петли ────────────────────────────────
+    // ── D-053: арбитраж повторяющейся петли ────────────────────────────────
     // Пауза «карточку перевыдали N раз» перестала быть первой реакцией: сначала
     // разбор у Warden (Reviewer), и только его решение master останавливает цикл.
     def("arbiter.case", { verbatim: true, render: (c) => {
@@ -9319,7 +9319,7 @@
       budget: { overhead: 1800 },
       conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
     });
-    // D-049: разбор повторяющейся петли. Это не приёмка миссии: оракула
+    // D-053: разбор повторяющейся петли. Это не приёмка миссии: оракула
     // миссии здесь нет, зато есть факты одной карточки и её журнал попыток.
     // Полного задания и git-записи у арбитра нет — он ничего не делает руками.
     def("reviewer.arbiter", {
@@ -9599,7 +9599,7 @@
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_ARBITER_RESULT") {
-        // D-049: вердикт арбитра относится к конкретной карточке и ходу.
+        // D-053: вердикт арбитра относится к конкретной карточке и ходу.
         if (c.arbiter?.cardId && !eq(obj.dispatch_id, c.arbiter.cardId)) return "dispatch_id маркера не совпадает с карточкой арбитража";
         if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_AGENT_PROVISION_RESULT") {
@@ -13176,7 +13176,7 @@
 
   // ───────────────────────── арбитраж повторяющейся петли ─────────────────────────
   /**
-   * D-049: карточку перевыдали N раз за окно — это ещё не повод будить Мастера.
+   * D-053: карточку перевыдали N раз за окно — это ещё не повод будить Мастера.
    *
    * Раньше третья перевыдача одной карточки сразу ставила паузу: цикл замирал,
    * звонил телефон, и человек шёл разбираться, почему Координатор и исполнитель
@@ -13987,7 +13987,7 @@
       });
       const times = noteRedispatch(fresh.id);
       if (times >= REDISPATCH_LIMIT) {
-        // D-049: повторяющаяся петля — сначала арбитраж, а не пауза. Warden
+        // D-053: повторяющаяся петля — сначала арбитраж, а не пауза. Warden
         // видит «Ответ», состояние карточки, PR и журнал попыток и решает, что
         // делать с карточкой; остановить цикл он тоже может — своим решением.
         // Пауза остаётся запасным путём: нет активного Warden, дело не читается
@@ -16140,7 +16140,7 @@
       } else if (me.fn === "Reviewer" && expect) {
         if (expect.kind === "answer") await answerStep(me, expect, fromToggle);
         else if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
-        // D-049: арбитраж петли — отдельный ход приёмки со своим маркером.
+        // D-053: арбитраж петли — отдельный ход приёмки со своим маркером.
         else if (expect.kind === "arbiter") await arbiterStep(me, expect, fromToggle);
         else pause(`Неизвестный вид хода приёмки «${expect.kind || "пусто"}»: ничего не меняю.`, {
           kind: "handoff-kind", ref: expect.ref || "",

@@ -31,14 +31,14 @@ assert.equal(contract.d048?.budgetsRaised, true, 'D-048 поднял бюдже�
 assert.match(contract.d048?.raisedBudget || '', /7500 → 8000/, 'D-048: назван подъём');
 assert.match(contract.d048?.safety || '', /verbatim|не режутся/, 'D-048: оракул не сокращён');
 assert.match(contract.d048?.fix || '', /missionBodyText|блоки страницы/, 'D-048: «Возврат» читается и из блоков');
-// D-049 аддитивен: форма существующих маркеров не менялась, бюджеты не поднимались.
-assert.equal(contract.d049?.budgetsRaised, false, 'D-049 не поднимал бюджеты');
-assert.match(contract.d049?.protocolNote || '', /остаётся 1\.11/, 'D-049: версия контракта не менялась');
-assert.match(contract.d049?.fix || '', /escalateToWarden/, 'D-049: петля уходит арбитру');
-assert.match(contract.d049?.safety || '', /снимается только человеком/, 'D-049: паузу снимает только человек');
-assert.equal(contract.markers?.CF_ARBITER_RESULT?.role, 'Reviewer', 'D-049: арбитр — роль приёмки');
+// D-053 аддитивен: форма существующих маркеров не менялась, бюджеты не поднимались.
+assert.equal(contract.d053?.budgetsRaised, false, 'D-053 не поднимал бюджеты');
+assert.match(contract.d053?.protocolNote || '', /остаётся 1\.11/, 'D-053: версия контракта не менялась');
+assert.match(contract.d053?.fix || '', /escalateToWarden/, 'D-053: петля уходит арбитру');
+assert.match(contract.d053?.safety || '', /снимается только человеком/, 'D-053: паузу снимает только человек');
+assert.equal(contract.markers?.CF_ARBITER_RESULT?.role, 'Reviewer', 'D-053: арбитр — роль приёмки');
 assert.deepEqual(contract.markers?.CF_ARBITER_RESULT?.required, ['dispatch_id', 'turn_id', 'verdict'],
-  'D-049: маркер арбитра несёт ID этой карточки и решения');
+  'D-053: маркер арбитра несёт ID этой карточки и решения');
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',

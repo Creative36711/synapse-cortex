@@ -12,7 +12,7 @@
 | проверка карточки | Auditor | CF_AGENT_RESULT | dispatch_id, run_id |
 | приёмка миссии | Warden/Reviewer | CF_REVIEW_RESULT | mission_id, turn_id |
 | ответ на вопрос | Warden/Reviewer | CF_ANSWER_RESULT | question_id, turn_id |
-| арбитраж петли (D-049) | Warden/Reviewer | CF_ARBITER_RESULT | dispatch_id, turn_id |
+| арбитраж петли (D-053) | Warden/Reviewer | CF_ARBITER_RESULT | dispatch_id, turn_id |
 | историческая карточка Reviewer | Reviewer | CF_AGENT_RESULT (+CF_REVIEW_RESULT по оракулу) | dispatch_id, run_id |
 | provisioning агентов | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | request_id |
 

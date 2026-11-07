@@ -37,7 +37,7 @@
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
     if (expect.kind === "plan" || expect.kind === "review") ctx.mission = { id: expect.missionId || expect.ref };
     if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId };
-    // D-049: арбитраж — тот же ход, напоминание несёт карточку и turn_id.
+    // D-053: арбитраж — тот же ход, напоминание несёт карточку и turn_id.
     if (expect.kind === "arbiter") ctx.arbiter = { cardId: expect.ref, ...(expect.arbiter || {}) };
     return compileOrPause(ctx, `reminder ${expect.kind}`);
   }

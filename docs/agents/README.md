@@ -12,6 +12,8 @@
 - [drive.md](drive.md) — раскладка `Arena/<project>/{logs,payloads,artifacts}`.
 - [roles/coordinator.md](roles/coordinator.md), [roles/warden.md](roles/warden.md),
   [roles/executor.md](roles/executor.md), [roles/auditor.md](roles/auditor.md).
+- Пилотные роли (D-052): [roles/pilot-author.md](roles/pilot-author.md) — одноразовый внешний
+  автор прогона SYN-P1; [roles/pilot-host.md](roles/pilot-host.md) — ведущий прогона (Reviewer).
 - [troubleshooting.md](troubleshooting.md) — классы отказов доставки и что делать.
 - [onboarding.md](onboarding.md) — как подключить роль и запустить первый ход.
 - [acceptance-report.md](acceptance-report.md) — отчёт Warden о приёмке пакета 1.9.0.
