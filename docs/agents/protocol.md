@@ -5,7 +5,8 @@
 миссии), `answer` (ответ на вопрос), `reminder` (напоминание о маркере),
 `retry` (компактный повтор), `pilot` (эфемерный прогон SYN-P1),
 `provision` (административный запрос создания/замены Arena-агентов, не миссия и
-не рабочая карточка). Контракт: `protocolVersion 1.11` (1.1 — provisioning,
+не рабочая карточка), `arbiter` (D-053 — разбор повторяющейся петли перевыдачи:
+не приёмка миссии и не новая карточка). Контракт: `protocolVersion 1.11` (1.1 — provisioning,
 1.2 — drive-контракт Gateway 1.8.0/D-033, 1.3 — бюджет overhead и payload-канал
 D-034, 1.4 — прайм маркера Координатора и адрес артефактов D-035, 1.5 — хотфикс
 длинной зоны роли D-036, 1.6 — мультирепо-сторож ADR D-037, 1.7 — зона роли
@@ -26,6 +27,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 | reviewer.mission | Reviewer | CF_REVIEW_RESULT | ≤2400 |
 | reviewer.answer | Reviewer | CF_ANSWER_RESULT | ≤1800 |
 | reviewer.card | Reviewer | CF_AGENT_RESULT | ≤2000 |
+| reviewer.arbiter | Reviewer | CF_ARBITER_RESULT | ≤2400 |
 | reminder.marker | любая | по виду хода | ≤700 |
 | delivery.compact | Executor/Auditor | CF_AGENT_RESULT | ≤1500 |
 | pilot.synapse | pilot | нет | ≤250 сверх брифа |
@@ -33,6 +35,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 | continuation.plan | Coordinator | CF_COORDINATOR_RESULT | ≤700 |
 | continuation.review | Reviewer | CF_REVIEW_RESULT | ≤700 |
 | continuation.answer | Reviewer | CF_ANSWER_RESULT | ≤700 |
+| continuation.arbiter | Reviewer | CF_ARBITER_RESULT | ≤700 |
 | continuation.pilot | pilot | нет | ≤250 |
 | admin.provision | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | ≤1800 |
 
@@ -58,6 +61,41 @@ Scope 747, инварианты 642. Разбивать такую карточ�
 нельзя. Overhead-бюджет 2800 и остальные роли **не менялись**; Auditor по-прежнему
 ≤5500. Регрессии — `prompts-smoke` §17–18 (пауза при 7500, доставка при 8000,
 оракул/инварианты verbatim) и `relay-dispatch-budget-preflight-integration`.
+
+## Арбитраж повторяющейся петли (D-053)
+Раньше третья перевыдача одной карточки за шесть часов сразу ставила паузу
+`redispatch` и звала Мастера. 07.11 на SYN-2 · S-4 это повторилось трижды:
+исполнитель отдал draft-PR с прямым описанием блокера по Scope, транспорт верно
+увидел «нет заявки о мерже» и вернул карточку в Rework — правила сработали, а
+разбирать петлю было некому, кроме человека.
+
+Теперь порог перевыдач (`REDISPATCH_LIMIT`) уходит арбитру — роли с функцией
+`Reviewer` (в проекте Warden), вид хода `arbiter`, профиль `reviewer.arbiter`,
+маркер `CF_ARBITER_RESULT` с `dispatch_id` карточки и `turn_id` разбора.
+Дело арбитра собирается заново и только из фактов: поле «Ответ», состояние и
+`Check` карточки, состояние PR по GitHub (`merged` / `closed` / `open` / draft),
+журнал попыток выдачи, снимок очереди. Отчёт агента в чате доказательством не
+считается.
+
+Решения арбитра:
+
+| Вердикт | Что происходит |
+|---|---|
+| `resolve` + `action:ready` | та же карточка снова в работе; причина и `fix` записаны в «Ответ» |
+| `resolve` + `action:rework` | карточка возвращена автору постановки |
+| `resolve` + `action:accepted` | работа признана выполненной |
+| `resolve` + `action:blocked` | карточка в Blocked, цикл идёт дальше без неё |
+| `master` | **цикл остановлен** паузой `arbiter-master` |
+
+После любого `resolve` ход возвращается Координатору с причиной: работу выбирает
+он, арбитр лишь снимает петлю. Инварианты: пауза снимается только человеком;
+маркер принимается лишь при совпадении карточки и `turn_id` (чужой ответ
+сохраняется локально, ожидание не снимается); решение без `reason` не
+применяется; арбитр не правит код, карточки и постановку. Пауза `redispatch`
+остаётся запасным путём: нет активного Reviewer, дело не читается или исчерпан
+`C.arbiterLimit = 2` разбора на карточку — тогда, как и раньше, нужен Мастер
+(пауза `arbiter-limit`). Профиль арбитра не несёт блоков записи в git и полного
+задания — это проверяет coverage-oracle.
 
 ## Маркер без ID выдачи — напоминание, а не пауза (D-040)
 Боевой K-21: Executor слил PR, но прислал маркер с `task` вместо

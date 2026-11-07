@@ -199,7 +199,7 @@
       return false; // Notion не ответил — не выдумываем событие
     }
     if (!closed) return false;
-    if (expect?.kind === "dispatch" || expect?.kind === "answer" || expect?.kind === "review" || (expect?.kind === "reminder" && expect.runId)) {
+    if (expect?.kind === "dispatch" || expect?.kind === "answer" || expect?.kind === "review" || expect?.kind === "arbiter" || (expect?.kind === "reminder" && expect.runId)) {
       // Закрытие извне не доказывает, что ответ карточки или вопроса записан.
       // Не теряем его идентификаторы и не принимаем остальные ходы «за компанию».
       autoSet(false);
@@ -339,7 +339,7 @@
     const probe = await missionProbe();
     const live = GM_getValue(K.expect, null);
     const liveDispatch = live?.kind === "dispatch" || (live?.kind === "reminder" && !!live.runId);
-    const liveAnswer = live?.kind === "answer" || live?.kind === "review";
+    const liveAnswer = live?.kind === "answer" || live?.kind === "review" || live?.kind === "arbiter";
     if (!probe.mission) {
       const missionId = (liveDispatch || liveAnswer) && (live.missionId || probe.known);
       if (missionId) {
@@ -411,7 +411,7 @@
       const probe = await missionProbe();
       if (!probe.changed) return false;
       const live = GM_getValue(K.expect, null);
-      if (live?.kind === "dispatch" || live?.kind === "answer" || live?.kind === "review" || (live?.kind === "reminder" && live.runId)) {
+      if (live?.kind === "dispatch" || live?.kind === "answer" || live?.kind === "review" || live?.kind === "arbiter" || (live?.kind === "reminder" && live.runId)) {
         // И эта ранняя ветка не должна закрепить новую миссию до сверки
         // старой выдачи, иначе syncMissionState уже не увидит смену.
         const context = GM_getValue(K.pause, null);

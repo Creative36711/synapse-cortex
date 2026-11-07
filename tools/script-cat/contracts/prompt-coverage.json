@@ -11,6 +11,7 @@
       "card.fields"
     ],
     "R-D028": [
+      "arbiter.protocol",
       "authority.coordinator",
       "authority.reviewer"
     ],
@@ -32,12 +33,14 @@
       "coordinator.prime",
       "marker.agent",
       "marker.answer",
+      "marker.arbiter",
       "marker.coordinator",
       "marker.provision",
       "marker.review",
       "reminder.marker"
     ],
     "R-MASTER-ONLY": [
+      "arbiter.protocol",
       "authority.coordinator",
       "authority.provision",
       "authority.reviewer"
@@ -72,6 +75,7 @@
       "authority.core"
     ],
     "R-VERIFY-GITHUB": [
+      "arbiter.protocol",
       "authority.auditor",
       "authority.reviewer",
       "git.auditor",
@@ -100,6 +104,9 @@
       "R-ZONES"
     ],
     "continuation.answer": [
+      "R-MARKER"
+    ],
+    "continuation.arbiter": [
       "R-MARKER"
     ],
     "continuation.dispatch": [
@@ -163,6 +170,13 @@
       "R-ROLES",
       "R-VERIFY-GITHUB"
     ],
+    "reviewer.arbiter": [
+      "R-D028",
+      "R-MARKER",
+      "R-MASTER-ONLY",
+      "R-ROLES",
+      "R-VERIFY-GITHUB"
+    ],
     "reviewer.card": [
       "R-D028",
       "R-EVIDENCE",
@@ -193,6 +207,9 @@
       "Auditor"
     ],
     "continuation.answer": [
+      "Reviewer"
+    ],
+    "continuation.arbiter": [
       "Reviewer"
     ],
     "continuation.dispatch": [
@@ -229,6 +246,9 @@
     "reviewer.answer": [
       "Reviewer"
     ],
+    "reviewer.arbiter": [
+      "Reviewer"
+    ],
     "reviewer.card": [
       "Reviewer"
     ],
@@ -240,6 +260,7 @@
     "admin.provision": [],
     "auditor.card": [],
     "continuation.answer": [],
+    "continuation.arbiter": [],
     "continuation.dispatch": [],
     "continuation.pilot": [],
     "continuation.plan": [],
@@ -253,6 +274,7 @@
     "pilot.synapse": [],
     "reminder.marker": [],
     "reviewer.answer": [],
+    "reviewer.arbiter": [],
     "reviewer.card": [],
     "reviewer.mission": []
   }

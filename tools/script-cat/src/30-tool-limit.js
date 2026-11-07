@@ -19,11 +19,12 @@
     e.kind === "plan" ? "CF_COORDINATOR_RESULT"
       : e.kind === "review" ? "CF_REVIEW_RESULT"
         : e.kind === "answer" ? "CF_ANSWER_RESULT"
+        : e.kind === "arbiter" ? "CF_ARBITER_RESULT"
           : "CF_AGENT_RESULT";
 
   const toolLimitRoleFn = (e) =>
     e.kind === "plan" ? "Coordinator"
-      : (e.kind === "review" || e.kind === "answer") ? "Reviewer"
+      : (e.kind === "review" || e.kind === "answer" || e.kind === "arbiter") ? "Reviewer"
         : (e.roleFn || "Executor");
 
   /** Запись исхода tool-limit в журнал попытки. Без секретов и полных текстов. */
@@ -63,7 +64,7 @@
     // Страница должна быть того агента, которого ждём.
     const me = roleFromPath();
     if (!me || norm(me) !== norm(expect.roleId)) return false;
-    if (!["dispatch", "plan", "review", "answer"].includes(expect.kind)) return false;
+    if (!["dispatch", "plan", "review", "answer", "arbiter"].includes(expect.kind)) return false;
     // Одно и то же статусное сообщение не порождает два продолжения.
     if (expect.lastToolLimitMessageId === status.messageId) return false;
     // Агент ещё генерирует / виден Stop — ждём, не вмешиваемся.
@@ -121,6 +122,7 @@
     };
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId };
     else if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId, masterEscalated: expect.masterEscalated === true };
+    else if (expect.kind === "arbiter") ctx.arbiter = { cardId: expect.ref, ...(expect.arbiter || {}) };
     else ctx.mission = { id: expect.missionId || expect.ref };
     const envelope = compileOrPause(ctx, `tool-limit continuation ${expect.kind}`);
     if (!envelope) { journalToolLimit(expect, status, "tool_limit_paused"); return true; } // пауза уже поставлена

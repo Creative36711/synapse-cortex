@@ -619,6 +619,8 @@
       } else if (me.fn === "Reviewer" && expect) {
         if (expect.kind === "answer") await answerStep(me, expect, fromToggle);
         else if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
+        // D-053: арбитраж петли — отдельный ход приёмки со своим маркером.
+        else if (expect.kind === "arbiter") await arbiterStep(me, expect, fromToggle);
         else pause(`Неизвестный вид хода приёмки «${expect.kind || "пусто"}»: ничего не меняю.`, {
           kind: "handoff-kind", ref: expect.ref || "",
         });

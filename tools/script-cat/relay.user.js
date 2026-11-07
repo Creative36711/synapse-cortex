@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.13
+// @version      1.12.14
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -103,6 +103,12 @@
     longWaitNoticeMs: 600000, // раз в 10 минут напоминаем, что долгое ожидание — норма
     pollPauseCount: 3, // столько опросов подряд — уже поломка промпта, а не случайность
     reworkLimit: 3, // доработок миссии больше этого — стоп и вызов Мастера
+    // D-053: повторяющаяся петля — не повод будить Мастера первым. Столько раз
+    // одну карточку можно отдать арбитру (Warden); исчерпали — пауза
+    // `arbiter-limit`, дальше решает человек.
+    arbiterLimit: 2,
+    arbiterWindowHours: 6, // окно, в котором считаются перевыдачи карточки
+    arbiterAttempts: 6, // сколько последних попыток выдачи показывать арбитру
     retryWaits: [800, 2500, 6000], // выдержки перед повторами: 4 попытки, ~9 с
     linkProbeWaits: [5000, 15000], // зонды связи после обрыва: 5 и 15 с
     rolesCacheMs: 600000, // база «Роли» — настройка: кеш на 10 минут
@@ -630,7 +636,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.13";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.14";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -899,7 +905,8 @@
         length: m.raw.length,
         tail: tail(m.text, 220),
         marker:
-          parseMarker(m.raw, "CF_COORDINATOR_RESULT") || parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_REVIEW_RESULT") || null,
+          parseMarker(m.raw, "CF_COORDINATOR_RESULT") || parseMarker(m.raw, "CF_AGENT_RESULT") ||
+          parseMarker(m.raw, "CF_REVIEW_RESULT") || parseMarker(m.raw, "CF_ARBITER_RESULT") || null,
       }));
     },
     resend: () => {
@@ -908,7 +915,7 @@
       if (waiting.kind === "dispatch" && (waiting.roleFn === "Reviewer" || !waiting.roleFn ||
           String(waiting.roleName || "").toLowerCase() === "warden"))
         return "Старую или нераспознанную карточку Reviewer не переотправляю: ожидание сохранено, проверьте чат и Run ID.";
-      if (["review", "answer"].includes(waiting.kind)) {
+      if (["review", "answer", "arbiter"].includes(waiting.kind)) {
         // Приёмка и ответы сохраняют связь с исходной миссией/вопросом.
         forgetDeliveryReceipt(waiting);
         GM_setValue(K.expect, { ...waiting, sentAt: null, verified: false });
@@ -3582,7 +3589,7 @@
       return false; // Notion не ответил — не выдумываем событие
     }
     if (!closed) return false;
-    if (expect?.kind === "dispatch" || expect?.kind === "answer" || expect?.kind === "review" || (expect?.kind === "reminder" && expect.runId)) {
+    if (expect?.kind === "dispatch" || expect?.kind === "answer" || expect?.kind === "review" || expect?.kind === "arbiter" || (expect?.kind === "reminder" && expect.runId)) {
       // Закрытие извне не доказывает, что ответ карточки или вопроса записан.
       // Не теряем его идентификаторы и не принимаем остальные ходы «за компанию».
       autoSet(false);
@@ -3722,7 +3729,7 @@
     const probe = await missionProbe();
     const live = GM_getValue(K.expect, null);
     const liveDispatch = live?.kind === "dispatch" || (live?.kind === "reminder" && !!live.runId);
-    const liveAnswer = live?.kind === "answer" || live?.kind === "review";
+    const liveAnswer = live?.kind === "answer" || live?.kind === "review" || live?.kind === "arbiter";
     if (!probe.mission) {
       const missionId = (liveDispatch || liveAnswer) && (live.missionId || probe.known);
       if (missionId) {
@@ -3794,7 +3801,7 @@
       const probe = await missionProbe();
       if (!probe.changed) return false;
       const live = GM_getValue(K.expect, null);
-      if (live?.kind === "dispatch" || live?.kind === "answer" || live?.kind === "review" || (live?.kind === "reminder" && live.runId)) {
+      if (live?.kind === "dispatch" || live?.kind === "answer" || live?.kind === "review" || live?.kind === "arbiter" || (live?.kind === "reminder" && live.runId)) {
         // И эта ранняя ветка не должна закрепить новую миссию до сверки
         // старой выдачи, иначе syncMissionState уже не увидит смену.
         const context = GM_getValue(K.pause, null);
@@ -4310,7 +4317,8 @@
       }
     }
     const mine = (m) => {
-        const result = parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_COORDINATOR_RESULT") || parseMarker(m.raw, "CF_REVIEW_RESULT");
+        const result = parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_COORDINATOR_RESULT") ||
+          parseMarker(m.raw, "CF_REVIEW_RESULT") || parseMarker(m.raw, "CF_ARBITER_RESULT");
       if (!result) return false;
       const ids = [result.dispatch_id, result.turn_id, result.mission_id].map(norm);
       if (!ids.includes(ref)) return false;
@@ -4674,6 +4682,8 @@
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
     if (expect.kind === "plan" || expect.kind === "review") ctx.mission = { id: expect.missionId || expect.ref };
     if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId };
+    // D-053: арбитраж — тот же ход, напоминание несёт карточку и turn_id.
+    if (expect.kind === "arbiter") ctx.arbiter = { cardId: expect.ref, ...(expect.arbiter || {}) };
     return compileOrPause(ctx, `reminder ${expect.kind}`);
   }
 
@@ -6957,6 +6967,9 @@
     // Снимок «план уже с замечаниями» переживает напоминание: иначе повтор
     // промпта по тому же плану теряет признак, и следующий шаг снова смотрит
     // на время правки карточки — ровно то, из-за чего 06.11 ушёл второй план.
+    // D-053: дело арбитража переживает напоминание и продолжение — арбитр
+    // должен видеть те же факты, что и в первом промпте, а не пустую карточку.
+    const arbiterCarry = kind === "arbiter" && extra.arbiter ? { arbiter: extra.arbiter } : {};
     const previousPlan = GM_getValue(K.expect, null);
     const planCarry = kind === "plan" && previousPlan && previousPlan.kind === "plan" &&
       norm(previousPlan.ref) === norm(ref) && "planBeforeReturn" in previousPlan
@@ -6980,6 +6993,7 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       prompt: envelope || null,
+      ...arbiterCarry,
       ...planCarry,
       ...payload,
       sessionRepo,
@@ -8897,12 +8911,16 @@
       CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
       CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
       CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
+      // D-053: разбор повторяющейся петли. Карточка и ход названы явно: вердикт
+      // арбитра обязан относиться именно к этой выдаче, а не к похожей.
+      CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer" },
       CF_AGENT_PROVISION_RESULT: { kind: "provision", ids: ["request_id"], role: "Coordinator|Reviewer" },
     };
     const forKind = (kind, roleFn) => {
       if (kind === "plan") return "CF_COORDINATOR_RESULT";
       if (kind === "review") return "CF_REVIEW_RESULT";
       if (kind === "answer") return "CF_ANSWER_RESULT";
+      if (kind === "arbiter") return "CF_ARBITER_RESULT";
       if (kind === "dispatch") return "CF_AGENT_RESULT";
       if (kind === "provision") return "CF_AGENT_PROVISION_RESULT";
       if (kind === "reminder") return null; // reminder наследует маркер исходного хода
@@ -8964,8 +8982,10 @@
     def("authority.coordinator", { ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
       "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
 
-    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
-      "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
+    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: (c) =>
+      c.kind === "arbiter"
+        ? "Ты приёмка (Reviewer) и сейчас арбитр: ничего не правь — ни код, ни карточки, ни документы, ни постановку. Твой выход — решение по карточке или остановка цикла. Проверяй по GitHub, Notion и фактам, а не по словам агента; Мастера зовёшь только там, где без него физически нельзя."
+        : "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
 
     def("git.executor", { version: 2, ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
@@ -9044,6 +9064,27 @@
     def("answer.resume", { audience: ["Reviewer"], render: () =>
       "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
 
+    // ── D-053: арбитраж повторяющейся петли ────────────────────────────────
+    // Пауза «карточку перевыдали N раз» перестала быть первой реакцией: сначала
+    // разбор у Warden (Reviewer), и только его решение master останавливает цикл.
+    def("arbiter.case", { verbatim: true, render: (c) => {
+      const a = c.arbiter || {};
+      return [
+        `Карточка «${a.cardTitle || a.cardId}» · dispatch ${a.cardId} · mission_id ${a.missionId}`,
+        a.role ? `Адресат: ${a.role}.` : "",
+        `Перевыдач за ${a.windowHours ?? 6} ч: ${a.redispatchCount ?? 0} (порог ${a.redispatchLimit ?? 3}).`,
+        a.reason ? `Почему снова в работе: ${a.reason}.` : "",
+        a.state ? `Сейчас: «${a.state}»` + (a.check ? ` · Check=${a.check}` : "") + "." : "",
+        a.answer ? `ОТВЕТ ИСПОЛНИТЕЛЯ (поле «Ответ», последнее):\n${a.answer}` : "ОТВЕТА ИСПОЛНИТЕЛЯ НЕТ: по карточке не записано ни одного результата.",
+        a.pr ? `PR: ${a.pr}${a.prState ? ` (${a.prState})` : ""}` : "PR: нет.",
+        a.attempts ? `ЖУРНАЛ ПОПЫТОК (свежие сверху):\n${a.attempts}` : "",
+        a.queue ? `Очередь миссии: ${a.queue}` : "",
+        "Факты выше — из Notion и GitHub. Отчёт агента в чате доказательством не считается.",
+      ].filter(Boolean).join("\n");
+    } });
+    def("arbiter.protocol", { ruleIds: ["R-D028", "R-VERIFY-GITHUB", "R-MASTER-ONLY"], audience: ["Reviewer"], render: () =>
+      "Ты арбитр петли, а не исполнитель: ничего не правь — ни код, ни карточки, ни документы. Ответь, почему одна и та же карточка возвращается в работу, и назови решение по карточке: verdict:resolve — поле action: ready (та же карточка заново, только с исправленной постановкой), rework (вернуть автору с причиной), accepted (работа на самом деле выполнена) или blocked (нужен человек); поле reason — проверяемая причина, по которой петля шла; поле fix — что именно исправить в постановке (или пусто). verdict:master — только когда без Мастера физически нельзя; это останавливает цикл. Повторять карточку без причины нельзя." });
+
     const markerJson = (c, name) => {
       if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
       if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
@@ -9101,6 +9142,23 @@
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
       ].filter(Boolean).join("\n");
+    } });
+    def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
+      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Решение по карточке обязательно: resolve с action или master.",
+        resolve,
+      ].join("\n");
+      // Последняя строка — шаблон resolve, а не master: скопированная без правки
+      // строка продолжает работу по решению арбитра, но не останавливает цикл
+      // молча. Остановка — осознанный выбор, а не значение по умолчанию.
+      return [
+        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл.",
+        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>"}`,
+        resolve,
+      ].join("\n");
     } });
     def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
@@ -9174,11 +9232,13 @@
       if (c.kind === "plan") return "Продолжи текущий ход Координатора после лимита инструментов. Это не новый ход и не новая миссия.\nНе трогай git. Разбери очередь с текущего места и продолжи план.";
       if (c.kind === "review") return "Продолжи приёмку миссии после лимита инструментов. Это не новая приёмка и не новый ход.\nНе правь код и карточки. Дочитай доказательства и вынеси вердикт.";
       if (c.kind === "answer") return "Продолжи ответ на вопрос после лимита инструментов. Это не новый вопрос и не новый ход.";
+      if (c.kind === "arbiter") return "Продолжи разбор петли после лимита инструментов. Это не новая карточка и не новая выдача.\nНе правь код и карточки. Дочитай факты и вынеси решение по этой же карточке.";
       return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
     } });
     def("identity.continue", { render: (c) => {
       if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
       if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
+      if (c.kind === "arbiter") return `IDs прежние: dispatch_id=${c.arbiter?.cardId}, turn_id=${c.turnId}.`;
       return `IDs прежние: dispatch_id=${c.task?.id}, run_id=${c.task?.runId}.`;
     } });
     def("role.boundary.continue", { ruleIds: ["R-ZONES", "R-GIT"], audience: ["Executor", "Auditor"], render: (c) =>
@@ -9259,6 +9319,19 @@
       budget: { overhead: 1800 },
       conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
     });
+    // D-053: разбор повторяющейся петли. Это не приёмка миссии: оракула
+    // миссии здесь нет, зато есть факты одной карточки и её журнал попыток.
+    // Полного задания и git-записи у арбитра нет — он ничего не делает руками.
+    def("reviewer.arbiter", {
+      audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
+      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "marker.arbiter"],
+      requiredFacts: ["arbiter.cardId", "turnId"],
+      forbidden: ["git.executor", "git.auditor", "marker.agent", "marker.review", "marker.answer",
+        "task.assignment", "task.acceptance", "task.scope", "task.intent", "task.invariants", "task.freedom",
+        "queue.coordinator", "review.evidence", "review.protocol", "answer.question", "answer.protocol",
+        "questions.protocol", "adr.protocol", "marker.coordinator", "marker.provision"],
+      budget: { overhead: 2400 },
+    });
     def("reviewer.card", {
       audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
       blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
@@ -9322,6 +9395,12 @@
       requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
       budget: { overhead: 700 },
     });
+    def("continuation.arbiter", {
+      audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.arbiter"],
+      requiredFacts: ["arbiter.cardId", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
     def("continuation.pilot", {
       audience: ["pilot"], marker: null,
       blocks: ["pilot.continue"], requiredFacts: [],
@@ -9352,6 +9431,7 @@
         if (kind === "plan") return "continuation.plan";
         if (kind === "review") return "continuation.review";
         if (kind === "answer") return "continuation.answer";
+        if (kind === "arbiter") return "continuation.arbiter";
         return "continuation.dispatch";
       }
       if (kind === "pilot") return "pilot.synapse";
@@ -9359,6 +9439,7 @@
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
       if (kind === "review") return "reviewer.mission";
       if (kind === "answer") return "reviewer.answer";
+      if (kind === "arbiter") return "reviewer.arbiter";
       if (kind === "dispatch" || kind === "retry") {
         if (fn === "Auditor") return "auditor.card";
         if (fn === "Reviewer") return "reviewer.card";
@@ -9388,6 +9469,7 @@
     const reminderMarkerBlock = (name) => ({
       CF_AGENT_RESULT: "marker.agent", CF_COORDINATOR_RESULT: "marker.coordinator",
       CF_REVIEW_RESULT: "marker.review", CF_ANSWER_RESULT: "marker.answer",
+      CF_ARBITER_RESULT: "marker.arbiter",
     }[name] || null);
 
     function metrics(text, parts) {
@@ -9516,6 +9598,10 @@
         const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_ARBITER_RESULT") {
+        // D-053: вердикт арбитра относится к конкретной карточке и ходу.
+        if (c.arbiter?.cardId && !eq(obj.dispatch_id, c.arbiter.cardId)) return "dispatch_id маркера не совпадает с карточкой арбитража";
+        if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_AGENT_PROVISION_RESULT") {
         if (c.provision?.requestId && !eq(obj.request_id, c.provision.requestId)) return "request_id маркера не совпадает с ctx";
       }
@@ -13088,6 +13174,392 @@
     return true;
   }
 
+  // ───────────────────────── арбитраж повторяющейся петли ─────────────────────────
+  /**
+   * D-053: карточку перевыдали N раз за окно — это ещё не повод будить Мастера.
+   *
+   * Раньше третья перевыдача одной карточки сразу ставила паузу: цикл замирал,
+   * звонил телефон, и человек шёл разбираться, почему Координатор и исполнитель
+   * гоняют одну работу. 07.11 на SYN-2 · S-4 так вышло трижды: исполнитель
+   * честно отдал draft-PR с описанием блокера по Scope, транспорт увидел «нет
+   * заявки о мерже» и вернул карточку в Rework — правила сработали, а разбирать
+   * петлю было некому, кроме Мастера.
+   *
+   * Теперь цикл останавливается не сразу: та же карточка уходит арбитру —
+   * роли с функцией Reviewer (в проекте это Warden). Арбитр видит факты (поле
+   * «Ответ», состояние карточки, PR по GitHub, журнал попыток, очередь) и
+   * выносит решение по карточке. Остановить цикл он тоже может — но это его
+   * решение (`verdict:master`), а не первая реакция транспорта.
+   *
+   * Инварианты сохранены:
+   *   • пауза снимается только человеком — арбитраж ничего не «продолжает» сам;
+   *   • маркер арбитра несёт dispatch_id этой карточки и turn_id этого разбора;
+   *   • нет активного Warden — прежняя пауза Мастера, без выдуманных решений;
+   *   • Мастер остаётся последней инстанцией: и через арбитра, и через границу
+   *     числа арбитражей (`arbiterLimit`);
+   *   • арбитр ничего не правит руками: его выход — решение или остановка.
+   */
+
+  /** Сколько раз эту карточку отдавали арбитру в окне (ключ — сама карточка). */
+  const arbiterKey = (id) => `cfn-arbiter:${id}`;
+  const ARBITER_WINDOW = 3600 * 1000 * Number(C.arbiterWindowHours || 6);
+
+  function noteArbitration(id) {
+    const now = Date.now();
+    const kept = (GM_getValue(arbiterKey(id), []) || []).map(Number).filter((at) => now - at < ARBITER_WINDOW);
+    kept.push(now);
+    GM_setValue(arbiterKey(id), kept);
+    return kept.length;
+  }
+
+  function arbitrationCount(id) {
+    const now = Date.now();
+    return (GM_getValue(arbiterKey(id), []) || []).map(Number).filter((at) => now - at < ARBITER_WINDOW).length;
+  }
+
+  /**
+   * Роль-арбитр: функция Reviewer (в проекте — Warden) с заполненным Agent URL.
+   *
+   * Отдельной «роли арбитра» в Notion нет намеренно: арбитраж — это работа
+   * приёмки, и заводить вторую строку ради неё значило бы дать одной и той же
+   * функции два разных права.
+   */
+  async function arbiterRole() {
+    const list = await roles().catch(() => []);
+    return list.find((r) => r.fn === "Reviewer" && r.url && r.status === "Активна") ||
+      list.find((r) => r.fn === "Reviewer" && r.url) || null;
+  }
+
+  /** Короткая строка ответа для промпта: без разметки и лишних переводов. */
+  const arbiterLine = (text, n = 400) => {
+    const flat = String(text || "").replace(/\s+/g, " ").trim();
+    return flat.length <= n ? flat : `${flat.slice(0, n)}…`;
+  };
+
+  /**
+   * Журнал попыток этой карточки: что транспорт уже видел.
+   *
+   * Источник — журнал профилей промптов (`recordPromptAttempt`): время, профиль,
+   * исход, класс ошибки. Без секретов и без полных текстов задания — арбитру
+   * нужен ход событий, а не переписка.
+   */
+  function arbiterAttempts(cardId, limit = Number(C.arbiterAttempts || 6)) {
+    const list = GM_getValue("cfn-prompt-journal-v1", []);
+    if (!Array.isArray(list)) return "";
+    return list
+      .filter((row) => row && norm(row.ref) === norm(cardId))
+      .slice(-limit)
+      .reverse()
+      .map((row) => {
+        const at = String(row.at || "").replace("T", " ").slice(0, 16);
+        return [`${at} · ${row.kind || "?"}`, row.profileId, `overhead ${row.overhead ?? "?"}`,
+          row.outcome, row.errorClass].filter(Boolean).join(" · ");
+      })
+      .join("\n");
+  }
+
+  /** Состояние PR по GitHub — без догадок из чата. Ошибка не отменяет разбор. */
+  async function arbiterPrState(prUrl) {
+    const raw = String(prUrl || "").trim();
+    const ref = raw.match(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i);
+    if (!ref) return { pr: raw, prState: "" };
+    try {
+      const pr = await githubPr(`${ref[1]}/${ref[2]}`, Number(ref[3]), ghToken());
+      const prState = pr?.merged || pr?.merged_at
+        ? "слит"
+        : String(pr?.state || "").toLowerCase() === "closed"
+          ? "закрыт без мержа"
+          : pr?.draft ? "draft, открыт" : "открыт";
+      return { pr: raw, prState };
+    } catch (e) {
+      return { pr: raw, prState: `состояние не прочитано (${firstLine(e?.message || String(e), 80)})` };
+    }
+  }
+
+  /**
+   * Собрать дело для арбитра. Все факты читаются заново: карточка могла
+   * измениться между выдачей и этим шагом. Ошибка Notion не превращается в
+   * «петли нет» — просто фактов меньше, и это видно в промпте.
+   */
+  async function arbiterCase(card, why = "") {
+    const fresh = await notion("GET", `pages/${card.id}`);
+    const mission = await activeMission().catch(() => null);
+    const pr = await arbiterPrState(fresh.properties?.["PR"]?.url || "");
+    let queue = "";
+    if (mission) {
+      try { queue = (await queueOf(mission)).summary; } catch { queue = ""; }
+    }
+    const now = Date.now();
+    const redispatch = (GM_getValue(redispatchKey(card.id), []) || []).map(Number)
+      .filter((at) => now - at < REDISPATCH_WINDOW);
+    return {
+      cardId: card.id,
+      cardTitle: taskTitle(fresh) || card.title || card.id,
+      missionId: rt(fresh.properties?.["Mission ID"]).trim() || mission?.id || "",
+      role: taskRole(fresh),
+      redispatchCount: redispatch.length,
+      redispatchLimit: REDISPATCH_LIMIT,
+      windowHours: Math.round(REDISPATCH_WINDOW / 3600000),
+      reason: why || redispatchWhy(fresh),
+      state: taskState(fresh),
+      check: fresh.properties?.["Check"]?.select?.name || "",
+      answer: arbiterLine(rt(fresh.properties?.["Ответ"])),
+      pr: pr.pr,
+      prState: pr.prState,
+      attempts: arbiterAttempts(card.id),
+      queue,
+      missionName: mission ? rt(mission.properties?.["Миссия"]) || mission.id : "",
+    };
+  }
+
+  /** Промпт арбитра. Пустой envelope — пауза уже поставлена компилятором. */
+  function arbiterPrompt(role, kase, turnId, attempt = 1) {
+    return compileOrPause({
+      kind: "arbiter",
+      role: promptRole(role),
+      mission: { id: kase.missionId, name: kase.missionName },
+      turnId,
+      arbiter: kase,
+      delivery: { tier: "full", attempt },
+    }, `arbiter ${kase.cardId}`);
+  }
+
+  /**
+   * Отдать карточку арбитру вместо паузы.
+   *
+   * true  — ход ушёл арбитру либо цикл остановлен по лимиту арбитражей:
+   *         продолжать прежний шаг нельзя;
+   * false — арбитра нет (или дело не прочитать); вызывающий ставит прежнюю
+   *         паузу Мастера. Порог `arbiterLimit` не даёт звать арбитра по кругу:
+   *         арбитр — не бесконечный цикл, а последняя попытка разобраться.
+   */
+  async function escalateToWarden(card, why = "") {
+    const role = await arbiterRole();
+    if (!role) return false;
+    const times = noteArbitration(card.id);
+    if (times > Number(C.arbiterLimit || 2)) {
+      pause(
+        `«${taskTitle(card) || card.id}» уже ${times} раз уходила арбитру, и петля не разобрана. ` +
+          "Дальше решает Мастер: посмотрите «Ответ», журнал попыток и постановку карточки. " +
+          "Цикл остановлен, карточка и очередь на месте.",
+        { kind: "arbiter-limit", ref: card.id, notifyTitle: "Relay: петля не разобрана" },
+      );
+      return true;
+    }
+    let kase;
+    try {
+      kase = await arbiterCase(card, why);
+    } catch (e) {
+      // Дело арбитра не прочитать — выдумывать его нельзя. Прежняя пауза
+      // честнее: она называет причину, а не показывает арбитру пустоту.
+      log(`Карточку «${card.id}» не прочитать для арбитража: ${e.message}`, true);
+      return false;
+    }
+    const turnId = uid();
+    log(
+      `«${kase.cardTitle}» перевыдали ${kase.redispatchCount} раз за ${kase.windowHours} ч — ` +
+        `передаю арбитру «${role.name}» (разбор ${times} из ${C.arbiterLimit}).`,
+      true,
+      { ntfy: "quiet", title: "Relay: петля у арбитра" },
+    );
+    await sendToRole(role, arbiterPrompt(role, kase, turnId), "arbiter", kase.cardId, {
+      missionId: kase.missionId || "",
+      turnId,
+      title: `арбитраж «${kase.cardTitle}»`,
+      arbiter: kase,
+    });
+    return true;
+  }
+
+  /** Ожидание арбитража всё ещё наше: карточка и ход те же. */
+  function currentArbitration(expect) {
+    const live = GM_getValue(K.expect, null);
+    return Boolean(live && live.kind === "arbiter" && norm(live.ref) === norm(expect.ref) &&
+      norm(live.turnId) === norm(expect.turnId));
+  }
+
+  /** Записать разбор в карточку: человек должен видеть причину без журнала. */
+  async function recordArbitration(cardId, decision) {
+    const line = [
+      `Арбитраж Warden (${nowIso().slice(0, 16).replace("T", " ")}): ${decision.action}.`,
+      `Причина: ${arbiterLine(decision.reason, 600)}.`,
+      decision.fix ? `Правка постановки: ${arbiterLine(decision.fix, 600)}.` : "",
+    ].filter(Boolean).join(" ");
+    try {
+      await patch(cardId, { "Ответ": { rich_text: richText(line) } });
+      return true;
+    } catch (e) {
+      // Решение всё равно применяется: потерять разбор петли хуже, чем строку
+      // в поле, но Мастер об этом узнаёт из журнала.
+      log(`Разбор арбитра не записался в карточку «${cardId}»: ${e.message}`, true);
+      return false;
+    }
+  }
+
+  /**
+   * Ход арбитра: решение по карточке или остановка цикла.
+   *
+   * Решения (`verdict:resolve`):
+   *   ready    — та же карточка уходит в Ready заново; причина и правка
+   *              постановки остаются в поле «Ответ», чтобы их увидели
+   *              исполнитель и Координатор;
+   *   rework   — карточка возвращается автору постановки;
+   *   accepted — работа на самом деле выполнена;
+   *   blocked  — карточка в Blocked, цикл идёт дальше без неё;
+   * `verdict:master` — остановка цикла; дальше только человек.
+   *
+   * В любом решении ход возвращается Координатору: работу по-прежнему выбирает
+   * он, а арбитр лишь снимает петлю и называет причину.
+   */
+  async function arbiterStep(role, expect, manual = false) {
+    if (!expect || expect.kind !== "arbiter") {
+      pause("Это не ход арбитража: решение не применяю.", { kind: "handoff-kind", ref: expect?.ref || "" });
+      return true;
+    }
+    if (!currentArbitration(expect)) {
+      pause("Ожидание арбитража изменилось: чужой ход не перезаписываю.", {
+        kind: "marker-mismatch", ref: expect.ref || "",
+      });
+      return true;
+    }
+    const cardId = String(expect.ref || "").trim();
+    if (!isUuid(cardId)) {
+      pause("Арбитраж ссылается на несуществующую карточку: решение не применяю.", {
+        kind: "marker-mismatch", ref: cardId,
+      });
+      return true;
+    }
+    const replies = messagesAfter(expect.watermark);
+    const decision = replies.map((m) => parseMarker(m.raw, "CF_ARBITER_RESULT")).filter(Boolean).at(-1);
+    if (!decision) return markerMissing(role, expect, "CF_ARBITER_RESULT", manual);
+
+    const turn = String(decision.turn_id || "").trim();
+    const dispatch = String(decision.dispatch_id || "").trim();
+    const matches = isUuid(expect.turnId) && isUuid(turn) && isUuid(dispatch) &&
+      norm(turn) === norm(expect.turnId) && norm(dispatch) === norm(cardId) &&
+      (!expect.roleId || (role?.id && norm(role.id) === norm(expect.roleId)));
+    if (!matches) {
+      const retained = retainRejectedResult(expect, "arbiter-identity", replies);
+      pause("Маркер арбитража не относится к этой карточке и этому разбору (dispatch_id / turn_id / адресат). " +
+        (retained ? "Копия ответа сохранена локально; " : "Локальная копия не записалась — сохраните ответ из чата вручную; ") +
+        "попросите арбитра повторить маркер с ID из этого промпта.", {
+        kind: "marker-mismatch", ref: cardId, turnId: expect.turnId || "",
+      });
+      return true;
+    }
+
+    const verdict = String(decision.verdict || "").trim().toLowerCase();
+    if (verdict === "master") {
+      // Остановка цикла — право арбитра, но снимает её по-прежнему человек.
+      GM_setValue(K.expect, null);
+      GM_setValue(arbiterKey(cardId), []);
+      pause(
+        `Арбитр «${role.name}» не смог разобрать петлю по «${expect.title || cardId}»: ` +
+          `${firstLine(decision.reason || decision.fix || "причина не указана")}. ` +
+          "Цикл остановлен решением арбитра; карточка, очередь и «Ответ» на месте — " +
+          "посмотрите их и нажмите «Продолжить».",
+        { kind: "arbiter-master", ref: cardId, turnId: expect.turnId || "", notifyTitle: "Relay: арбитр остановил цикл" },
+      );
+      return true;
+    }
+    if (verdict !== "resolve") {
+      pause(
+        `В маркере арбитража нет verdict resolve или master (пришло «${verdict || "пусто"}»): карточку не трогаю. ` +
+          "Поправьте маркер в ответе арбитра и нажмите «Продолжить».",
+        { kind: "arbiter-marker", ref: cardId, turnId: expect.turnId || "" },
+      );
+      return true;
+    }
+
+    const action = String(decision.action || "").trim().toLowerCase();
+    if (!["ready", "rework", "accepted", "blocked"].includes(action)) {
+      pause(
+        `Арбитр вынес решение без понятного действия по карточке (action «${action || "пусто"}»). ` +
+          "Нужно ready / rework / accepted / blocked: карточку не трогаю, чтобы не запустить петлю заново.",
+        { kind: "arbiter-marker", ref: cardId, turnId: expect.turnId || "" },
+      );
+      return true;
+    }
+    // Решение без причины — это не разбор петли, а её продолжение.
+    const reason = String(decision.reason || "").trim();
+    if (!reason) {
+      pause(
+        "Арбитр не назвал причину петли: решение без причины повторяет ту же работу и возвращает ту же беду. " +
+          "Допишите reason и нажмите «Продолжить».",
+        { kind: "arbiter-marker", ref: cardId, turnId: expect.turnId || "" },
+      );
+      return true;
+    }
+
+    // Дальше карточка читается заново: между разбором и решением её могли
+    // тронуть. Чужое решение вслепую не применяется.
+    const card = await notion("GET", `pages/${cardId}`);
+    const mission = await activeMission().catch(() => null);
+    const cardMission = rt(card.properties?.["Mission ID"]).trim();
+    if (mission && cardMission && norm(cardMission) !== norm(mission.id)) {
+      pause("Карточка арбитража относится к другой миссии: решение не применяю.", {
+        kind: "marker-mismatch", ref: cardId,
+      });
+      return true;
+    }
+
+    await recordArbitration(cardId, { ...decision, action, reason });
+    // Решение применяется одной записью состояния. Следы прошлого ответа
+    // (Submitted At, PR, Run ID, Check) снимает выдача: арбитр их не трогает,
+    // иначе «Ответ» исчезнет раньше, чем его прочитают.
+    if (action === "accepted") {
+      await patch(cardId, { "Dispatch State": { select: { name: "Accepted" } } });
+    } else if (action === "rework") {
+      await patch(cardId, { "Dispatch State": { select: { name: "Rework" } } });
+    } else if (action === "blocked") {
+      await patch(cardId, { "Dispatch State": { select: { name: "Blocked" } } });
+    } else {
+      // ready: карточка возвращается в работу. Check описывает прошлый ответ,
+      // который арбитр как раз и не признал, поэтому он снимается вместе с
+      // решением, а не остаётся молчаливым запретом на выдачу.
+      await patch(cardId, {
+        "Dispatch State": { select: { name: "Ready" } },
+        Check: { select: null },
+      });
+    }
+    GM_setValue(K.expect, null);
+    // Порог перевыдач обнуляется: петля разобрана и названа. Если та же карточка
+    // закрутится снова, счёт начнётся заново, а не с порога.
+    GM_setValue(redispatchKey(cardId), []);
+    log(
+      `Арбитраж по «${taskTitle(card) || cardId}»: action=${action}, причина — ${firstLine(reason)}` +
+        (decision.fix ? `; правка постановки: ${firstLine(decision.fix, 160)}` : "") +
+        ". Ход возвращается Координатору.",
+      false,
+      { tone: "ok" },
+    );
+
+    const coord = (await roles().catch(() => [])).find((r) => r.fn === "Coordinator");
+    if (!coord) {
+      pause("Петля разобрана, но активного Coordinator нет: ход возвращать некому.", {
+        kind: "arbiter-nocoord", ref: cardId,
+      });
+      return true;
+    }
+    if (!mission) {
+      pause("Петля разобрана, но активной миссии нет: ход возвращать некому.", {
+        kind: "arbiter-nomission", ref: cardId,
+      });
+      return true;
+    }
+    const fresh = await notion("GET", `pages/${mission.id}`).catch(() => mission);
+    await requestPlan(
+      fresh,
+      coord,
+      await queueOf(fresh),
+      `Warden разобрал петлю по «${taskTitle(card) || cardId}»: ${action} — ${firstLine(reason, 200)}. ` +
+        (decision.fix ? `Правка постановки: ${firstLine(decision.fix, 200)}. ` : "") +
+        "Учти это в следующем ходе и не выдавай карточку тем же порядком.",
+      { force: true },
+    );
+    return true;
+  }
+
   // ─────────────────────── вопросы: отвечает приёмка ───────────────────────
   /**
    * Вопрос агента больше не ждёт Мастера.
@@ -13515,11 +13987,18 @@
       });
       const times = noteRedispatch(fresh.id);
       if (times >= REDISPATCH_LIMIT) {
+        // D-053: повторяющаяся петля — сначала арбитраж, а не пауза. Warden
+        // видит «Ответ», состояние карточки, PR и журнал попыток и решает, что
+        // делать с карточкой; остановить цикл он тоже может — своим решением.
+        // Пауза остаётся запасным путём: нет активного Warden, дело не читается
+        // или исчерпан предел арбитражей — тогда, как и раньше, нужен Мастер.
+        if (await escalateToWarden(fresh, why)) return true;
         GM_setValue(redispatchKey(fresh.id), []);
         pause(
           `«${taskTitle(fresh)}» перевыдали ${times} раз за шесть часов — похоже, Координатор и исполнитель ` +
-            "гоняют одну и ту же карточку и не замечают этого. Очередь и карточка на месте: посмотрите «Ответ» " +
-            "и журнал, поправьте постановку и нажмите «Продолжить».",
+            "гоняют одну и ту же карточку и не замечают этого. Разобрать петлю арбитру некому " +
+            "(нет активной роли с функцией Reviewer), поэтому решает Мастер: посмотрите «Ответ» и журнал, " +
+            "поправьте постановку и нажмите «Продолжить».",
           { kind: "redispatch", ref: fresh.id },
         );
         return true;
@@ -13838,11 +14317,12 @@
     e.kind === "plan" ? "CF_COORDINATOR_RESULT"
       : e.kind === "review" ? "CF_REVIEW_RESULT"
         : e.kind === "answer" ? "CF_ANSWER_RESULT"
+        : e.kind === "arbiter" ? "CF_ARBITER_RESULT"
           : "CF_AGENT_RESULT";
 
   const toolLimitRoleFn = (e) =>
     e.kind === "plan" ? "Coordinator"
-      : (e.kind === "review" || e.kind === "answer") ? "Reviewer"
+      : (e.kind === "review" || e.kind === "answer" || e.kind === "arbiter") ? "Reviewer"
         : (e.roleFn || "Executor");
 
   /** Запись исхода tool-limit в журнал попытки. Без секретов и полных текстов. */
@@ -13882,7 +14362,7 @@
     // Страница должна быть того агента, которого ждём.
     const me = roleFromPath();
     if (!me || norm(me) !== norm(expect.roleId)) return false;
-    if (!["dispatch", "plan", "review", "answer"].includes(expect.kind)) return false;
+    if (!["dispatch", "plan", "review", "answer", "arbiter"].includes(expect.kind)) return false;
     // Одно и то же статусное сообщение не порождает два продолжения.
     if (expect.lastToolLimitMessageId === status.messageId) return false;
     // Агент ещё генерирует / виден Stop — ждём, не вмешиваемся.
@@ -13940,6 +14420,7 @@
     };
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId };
     else if (expect.kind === "answer") ctx.question = { id: expect.ref, turnId: expect.turnId, masterEscalated: expect.masterEscalated === true };
+    else if (expect.kind === "arbiter") ctx.arbiter = { cardId: expect.ref, ...(expect.arbiter || {}) };
     else ctx.mission = { id: expect.missionId || expect.ref };
     const envelope = compileOrPause(ctx, `tool-limit continuation ${expect.kind}`);
     if (!envelope) { journalToolLimit(expect, status, "tool_limit_paused"); return true; } // пауза уже поставлена
@@ -15659,6 +16140,8 @@
       } else if (me.fn === "Reviewer" && expect) {
         if (expect.kind === "answer") await answerStep(me, expect, fromToggle);
         else if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
+        // D-053: арбитраж петли — отдельный ход приёмки со своим маркером.
+        else if (expect.kind === "arbiter") await arbiterStep(me, expect, fromToggle);
         else pause(`Неизвестный вид хода приёмки «${expect.kind || "пусто"}»: ничего не меняю.`, {
           kind: "handoff-kind", ref: expect.ref || "",
         });

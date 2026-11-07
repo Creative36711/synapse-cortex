@@ -50,6 +50,19 @@
       budget: { overhead: 1800 },
       conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
     });
+    // D-053: разбор повторяющейся петли. Это не приёмка миссии: оракула
+    // миссии здесь нет, зато есть факты одной карточки и её журнал попыток.
+    // Полного задания и git-записи у арбитра нет — он ничего не делает руками.
+    def("reviewer.arbiter", {
+      audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
+      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "marker.arbiter"],
+      requiredFacts: ["arbiter.cardId", "turnId"],
+      forbidden: ["git.executor", "git.auditor", "marker.agent", "marker.review", "marker.answer",
+        "task.assignment", "task.acceptance", "task.scope", "task.intent", "task.invariants", "task.freedom",
+        "queue.coordinator", "review.evidence", "review.protocol", "answer.question", "answer.protocol",
+        "questions.protocol", "adr.protocol", "marker.coordinator", "marker.provision"],
+      budget: { overhead: 2400 },
+    });
     def("reviewer.card", {
       audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
       blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
@@ -113,6 +126,12 @@
       requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
       budget: { overhead: 700 },
     });
+    def("continuation.arbiter", {
+      audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.arbiter"],
+      requiredFacts: ["arbiter.cardId", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
     def("continuation.pilot", {
       audience: ["pilot"], marker: null,
       blocks: ["pilot.continue"], requiredFacts: [],
@@ -143,6 +162,7 @@
         if (kind === "plan") return "continuation.plan";
         if (kind === "review") return "continuation.review";
         if (kind === "answer") return "continuation.answer";
+        if (kind === "arbiter") return "continuation.arbiter";
         return "continuation.dispatch";
       }
       if (kind === "pilot") return "pilot.synapse";
@@ -150,6 +170,7 @@
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
       if (kind === "review") return "reviewer.mission";
       if (kind === "answer") return "reviewer.answer";
+      if (kind === "arbiter") return "reviewer.arbiter";
       if (kind === "dispatch" || kind === "retry") {
         if (fn === "Auditor") return "auditor.card";
         if (fn === "Reviewer") return "reviewer.card";
