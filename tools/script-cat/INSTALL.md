@@ -1,4 +1,4 @@
-# Установка и перенос Relay 1.12.14
+# Установка и перенос Relay 1.12.15
 
 [Главная](./README.md) · [Пошаговое подключение Notion, GitHub, Drive и Gateway](./README-авторизация.md) · [Регламент команды](./TEAM-PLAYBOOK.md) · [Инструкция ИИ-агенту](./AGENT-SETUP.md)
 
