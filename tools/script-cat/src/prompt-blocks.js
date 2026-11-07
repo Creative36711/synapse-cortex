@@ -49,8 +49,10 @@
     def("authority.coordinator", { ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
       "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
 
-    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: () =>
-      "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
+    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: (c) =>
+      c.kind === "arbiter"
+        ? "Ты приёмка (Reviewer) и сейчас арбитр: ничего не правь — ни код, ни карточки, ни документы, ни постановку. Твой выход — решение по карточке или остановка цикла. Проверяй по GitHub, Notion и фактам, а не по словам агента; Мастера зовёшь только там, где без него физически нельзя."
+        : "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
 
     def("git.executor", { version: 2, ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
@@ -129,6 +131,27 @@
     def("answer.resume", { audience: ["Reviewer"], render: () =>
       "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
 
+    // ── D-049: арбитраж повторяющейся петли ────────────────────────────────
+    // Пауза «карточку перевыдали N раз» перестала быть первой реакцией: сначала
+    // разбор у Warden (Reviewer), и только его решение master останавливает цикл.
+    def("arbiter.case", { verbatim: true, render: (c) => {
+      const a = c.arbiter || {};
+      return [
+        `Карточка «${a.cardTitle || a.cardId}» · dispatch ${a.cardId} · mission_id ${a.missionId}`,
+        a.role ? `Адресат: ${a.role}.` : "",
+        `Перевыдач за ${a.windowHours ?? 6} ч: ${a.redispatchCount ?? 0} (порог ${a.redispatchLimit ?? 3}).`,
+        a.reason ? `Почему снова в работе: ${a.reason}.` : "",
+        a.state ? `Сейчас: «${a.state}»` + (a.check ? ` · Check=${a.check}` : "") + "." : "",
+        a.answer ? `ОТВЕТ ИСПОЛНИТЕЛЯ (поле «Ответ», последнее):\n${a.answer}` : "ОТВЕТА ИСПОЛНИТЕЛЯ НЕТ: по карточке не записано ни одного результата.",
+        a.pr ? `PR: ${a.pr}${a.prState ? ` (${a.prState})` : ""}` : "PR: нет.",
+        a.attempts ? `ЖУРНАЛ ПОПЫТОК (свежие сверху):\n${a.attempts}` : "",
+        a.queue ? `Очередь миссии: ${a.queue}` : "",
+        "Факты выше — из Notion и GitHub. Отчёт агента в чате доказательством не считается.",
+      ].filter(Boolean).join("\n");
+    } });
+    def("arbiter.protocol", { ruleIds: ["R-D028", "R-VERIFY-GITHUB", "R-MASTER-ONLY"], audience: ["Reviewer"], render: () =>
+      "Ты арбитр петли, а не исполнитель: ничего не правь — ни код, ни карточки, ни документы. Ответь, почему одна и та же карточка возвращается в работу, и назови решение по карточке: verdict:resolve — поле action: ready (та же карточка заново, только с исправленной постановкой), rework (вернуть автору с причиной), accepted (работа на самом деле выполнена) или blocked (нужен человек); поле reason — проверяемая причина, по которой петля шла; поле fix — что именно исправить в постановке (или пусто). verdict:master — только когда без Мастера физически нельзя; это останавливает цикл. Повторять карточку без причины нельзя." });
+
     const markerJson = (c, name) => {
       if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
       if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
@@ -186,6 +209,23 @@
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
       ].filter(Boolean).join("\n");
+    } });
+    def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+      const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
+      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
+      if (c.delivery?.tier === "tool_limit") return [
+        "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Решение по карточке обязательно: resolve с action или master.",
+        resolve,
+      ].join("\n");
+      // Последняя строка — шаблон resolve, а не master: скопированная без правки
+      // строка продолжает работу по решению арбитра, но не останавливает цикл
+      // молча. Остановка — осознанный выбор, а не значение по умолчанию.
+      return [
+        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл.",
+        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>"}`,
+        resolve,
+      ].join("\n");
     } });
     def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
@@ -259,11 +299,13 @@
       if (c.kind === "plan") return "Продолжи текущий ход Координатора после лимита инструментов. Это не новый ход и не новая миссия.\nНе трогай git. Разбери очередь с текущего места и продолжи план.";
       if (c.kind === "review") return "Продолжи приёмку миссии после лимита инструментов. Это не новая приёмка и не новый ход.\nНе правь код и карточки. Дочитай доказательства и вынеси вердикт.";
       if (c.kind === "answer") return "Продолжи ответ на вопрос после лимита инструментов. Это не новый вопрос и не новый ход.";
+      if (c.kind === "arbiter") return "Продолжи разбор петли после лимита инструментов. Это не новая карточка и не новая выдача.\nНе правь код и карточки. Дочитай факты и вынеси решение по этой же карточке.";
       return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
     } });
     def("identity.continue", { render: (c) => {
       if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
       if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
+      if (c.kind === "arbiter") return `IDs прежние: dispatch_id=${c.arbiter?.cardId}, turn_id=${c.turnId}.`;
       return `IDs прежние: dispatch_id=${c.task?.id}, run_id=${c.task?.runId}.`;
     } });
     def("role.boundary.continue", { ruleIds: ["R-ZONES", "R-GIT"], audience: ["Executor", "Auditor"], render: (c) =>

@@ -1103,6 +1103,9 @@
     // Снимок «план уже с замечаниями» переживает напоминание: иначе повтор
     // промпта по тому же плану теряет признак, и следующий шаг снова смотрит
     // на время правки карточки — ровно то, из-за чего 06.11 ушёл второй план.
+    // D-049: дело арбитража переживает напоминание и продолжение — арбитр
+    // должен видеть те же факты, что и в первом промпте, а не пустую карточку.
+    const arbiterCarry = kind === "arbiter" && extra.arbiter ? { arbiter: extra.arbiter } : {};
     const previousPlan = GM_getValue(K.expect, null);
     const planCarry = kind === "plan" && previousPlan && previousPlan.kind === "plan" &&
       norm(previousPlan.ref) === norm(ref) && "planBeforeReturn" in previousPlan
@@ -1126,6 +1129,7 @@
       // Текст нужен, чтобы повторить отправку, если клик по Send не дошёл.
       text,
       prompt: envelope || null,
+      ...arbiterCarry,
       ...planCarry,
       ...payload,
       sessionRepo,

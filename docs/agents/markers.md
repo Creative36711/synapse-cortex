@@ -12,6 +12,7 @@
 | проверка карточки | Auditor | CF_AGENT_RESULT | dispatch_id, run_id |
 | приёмка миссии | Warden/Reviewer | CF_REVIEW_RESULT | mission_id, turn_id |
 | ответ на вопрос | Warden/Reviewer | CF_ANSWER_RESULT | question_id, turn_id |
+| арбитраж петли (D-049) | Warden/Reviewer | CF_ARBITER_RESULT | dispatch_id, turn_id |
 | историческая карточка Reviewer | Reviewer | CF_AGENT_RESULT (+CF_REVIEW_RESULT по оракулу) | dispatch_id, run_id |
 | provisioning агентов | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | request_id |
 
@@ -21,6 +22,7 @@ CF_COORDINATOR_RESULT {"mission_id":"40c6f0cf-5705-81ae-ab6c-efac6bad62f0","turn
 CF_AGENT_RESULT {"dispatch_id":"a709d6df-4698-4a98-b111-90d22de42894","run_id":"8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d","status":"submitted","check":0,"report":"docs/reports/syn-1.md","pr":"https://github.com/Creative36711/synapse/pull/41","merged":true}
 CF_REVIEW_RESULT {"mission_id":"40c6f0cf-5705-81ae-ab6c-efac6bad62f0","turn_id":"7f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f","verdict":"rework","remarks":"1) оракул не закрыт: npm run verify даёт fail 2"}
 CF_ANSWER_RESULT {"question_id":"46208c7d-7c36-41df-ac99-2a38d79dbcf2","turn_id":"7f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f","verdict":"answer","answer":"Оставить контракт как есть."}
+CF_ARBITER_RESULT {"dispatch_id":"a709d6df-4698-4a98-b111-90d22de42894","turn_id":"7f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f","verdict":"resolve","action":"ready","reason":"постановка требовала работу вне зоны карточки","fix":"убрать --input из оракула"}
 CF_AGENT_PROVISION_RESULT {"request_id":"8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d","jobs":[],"reason":"кандидатов нет"}
 ```
 
@@ -30,6 +32,10 @@ CF_AGENT_PROVISION_RESULT {"request_id":"8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d","
 - CF_COORDINATOR_RESULT: `question`, `need`.
 - CF_REVIEW_RESULT: `summary`, `remarks`, `reason`, `dispatch_id`, `run_id`.
 - CF_ANSWER_RESULT: `answer`, `reason`.
+- CF_ARBITER_RESULT: `action` (`ready`/`rework`/`accepted`/`blocked`), `reason`, `fix`, `summary`.
+  `verdict:master` (обязателен `reason`) останавливает цикл — это право арбитра, но
+  паузу снимает только человек. Для `verdict:resolve` обязательны `action` и
+  `reason`: решение без причины не применяется.
 - CF_AGENT_PROVISION_RESULT: `reason`. Обязательные: `request_id`, `jobs`.
   Каждый job: `role_page_id`, `role_name`, `repo`, `action` (`create|replace`).
   `role_page_id` — только из кандидатов, отправленных в запросе; `role_name` и

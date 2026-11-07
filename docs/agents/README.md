@@ -7,7 +7,7 @@
 
 ## Состав
 - [protocol.md](protocol.md) — виды ходов, профили промптов, бюджеты, доставка.
-- [markers.md](markers.md) — четыре маркера, матрица «ход → роль → маркер», примеры.
+- [markers.md](markers.md) — маркеры (план, карточка, приёмка, вопрос, арбитраж петли, provisioning), матрица «ход → роль → маркер», примеры.
 - [notion.md](notion.md) — владение полями баз и статусы.
 - [drive.md](drive.md) — раскладка `Arena/<project>/{logs,payloads,artifacts}`.
 - [roles/coordinator.md](roles/coordinator.md), [roles/warden.md](roles/warden.md),

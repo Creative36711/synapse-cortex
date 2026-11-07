@@ -146,6 +146,46 @@
         }
       ]
     },
+    "CF_ARBITER_RESULT": {
+      "role": "Reviewer",
+      "turn": "arbiter",
+      "required": [
+        "dispatch_id",
+        "turn_id",
+        "verdict"
+      ],
+      "optional": [
+        "action",
+        "reason",
+        "fix",
+        "summary"
+      ],
+      "idSource": "dispatch_id — карточка, из-за которой собрался арбитраж; turn_id — из промпта арбитража (тот же при verdict:master и при продолжении после лимита инструментов)",
+      "example": {
+        "dispatch_id": "a709d6df-4698-4a98-b111-90d22de42894",
+        "turn_id": "7f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
+        "verdict": "resolve",
+        "action": "ready",
+        "reason": "Задача требовала публичного run --input вне зоны карточки: постановка неверна, а не работа",
+        "fix": "Убрать --input из оракула или расширить Scope карточки"
+      },
+      "invalid": [
+        {
+          "dispatch_id": "<карточка>",
+          "turn_id": "<ход>",
+          "verdict": "resolve",
+          "action": "ready",
+          "reason": "<почему петля>"
+        },
+        {
+          "dispatch_id": "00000000-0000-0000-0000-000000000000",
+          "turn_id": "11111111-1111-1111-1111-111111111111",
+          "verdict": "resolve",
+          "action": "ready",
+          "reason": "чужой ход"
+        }
+      ]
+    },
     "CF_AGENT_PROVISION_RESULT": {
       "role": "Coordinator|Reviewer",
       "turn": "provision",
@@ -219,6 +259,15 @@
       "marker": "CF_ANSWER_RESULT",
       "ids": [
         "question_id",
+        "turn_id"
+      ]
+    },
+    {
+      "turn": "арбитраж петли",
+      "role": "Warden/Reviewer",
+      "marker": "CF_ARBITER_RESULT",
+      "ids": [
+        "dispatch_id",
         "turn_id"
       ]
     },
@@ -847,5 +896,16 @@
     "protocolNote": "protocolVersion остаётся 1.11: форма маркеров, профили и обязательные поля не менялись; ScriptCat 1.12.13; Gateway 1.8.0 и digest 1.5 не менялись",
     "safety": "Оракул, Scope и инварианты по-прежнему verbatim и не режутся: подъём лимита не сокращает проверки, а убирает дробление карточек. Auditor ≤5500, Coordinator ≤7500, Reviewer ≤7000 не тронуты. Пауза done-with-remarks сохранена: без раздела «Возврат» ни в свойстве, ни в блоках миссия не закрывается. Раздел ищется только на странице миссии — карточки Запросов дочерними страницами не читаются",
     "regression": "prompts-smoke §18 на боевых размерах K-43: при 7500 — пауза, при 8000 — доставка, оракул и инварианты целиком; пин DISPATCH_TOTAL.Executor=8000. relay-return-epoch-smoke §3f: missionBodyText, чтение блоков, returnAnswered с bodyText, асинхронная проверка в паузе. relay-rework-smoke и relay-mission-done-smoke обновлены под новое правило и новую проверку; relay-dispatch-budget-preflight-integration ждёт лимит 8000"
+  },
+  "d049": {
+    "decision": "D-049",
+    "summary": "Повторяющаяся петля перевыдачи карточки уходит арбитру (Reviewer/Warden), а не в паузу; остановить цикл арбитр может своим решением master",
+    "incident": "SYN-2 · S-4, 07.11.2026. Карточку перевыдали трижды за шесть часов: PR #26 «SYN-2 S-4: deterministic arena mini-game» существует и открыт, isDraft=true, в теле прямо назван scope blocker (публичный run --input <abs.json> требует game/cli/main.gd вне зоны S-4). Исполнитель честно отдал draft-PR, транспорт увидел «нет заявки о мерже» → Rework ×3 → пауза redispatch и вызов Мастера",
+    "cause": "Третья перевыдача одной карточки была первой реакцией паузы: разбираться, почему карточка возвращается, мог только человек. Правило «нет мержа → Rework» при этом верное — петлю порождала неверная постановка, а не сбой транспорта",
+    "fix": "escalateToWarden(card, why): при пороге REDISPATCH_LIMIT карточка уходит роли с функцией Reviewer (Warden) с новым видом хода kind=arbiter, профилем reviewer.arbiter и маркером CF_ARBITER_RESULT (dispatch_id карточки + turn_id разбора). Дело арбитра собирается заново: поле «Ответ», состояние и Check карточки, состояние PR по GitHub (draft/open/closed/merged), журнал попыток из cfn-prompt-journal-v1, снимок очереди. Решения: resolve + action ready|rework|accepted|blocked (+ reason, fix) применяются к этой же карточке, разбор пишется в поле «Ответ», ход возвращается Координатору с причиной; verdict:master останавливает цикл паузой arbiter-master. Пауза redispatch остаётся запасным путём: нет активного Reviewer, дело не читается или исчерпан C.arbiterLimit=2 — тогда Мастер",
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.11: аддитивная секция d049, новый маркер CF_ARBITER_RESULT и новый вид хода arbiter; обязательные поля существующих маркеров не менялись, профили не пересобирались. ScriptCat 1.12.14; Gateway 1.8.0 и digest 1.5 не менялись",
+    "safety": "Пауза по-прежнему снимается только человеком: арбитраж ничего не продолжает сам после остановки. Арбитр не правит код, карточки и постановку — его выход только решение по карточке или остановка цикла. Маркер арбитра принимается лишь при совпадении dispatch_id карточки и turn_id разбора; чужой ответ сохраняется локально, ожидание не снимается. Решение без причины не применяется. Арбитр не зовёт арбитра по кругу: C.arbiterLimit=2 разбора на карточку, дальше пауза arbiter-limit. Блоков записи в git и полного задания в профиле арбитра нет (coverage-oracle)",
+    "regression": "arbiter-escalation-smoke: профиль reviewer.arbiter и continuation.arbiter в бюджетах, ID и оба вердикта в промпте; эскалация вместо паузы; без Reviewer и при нечитаемом деле — пауза; предел арбитражей; master останавливает цикл; ready/rework/accepted/blocked применяются и ход возвращается Координатору; чужие ID, неизвестный action и решение без причины не применяются; порядок «сначала арбитр, пауза — запасной путь» в dispatchTask. Проба валидирована мутациями: master-ветка, предел арбитражей и выбор роли-арбитра"
   }
 }

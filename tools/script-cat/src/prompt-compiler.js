@@ -16,6 +16,7 @@
     const reminderMarkerBlock = (name) => ({
       CF_AGENT_RESULT: "marker.agent", CF_COORDINATOR_RESULT: "marker.coordinator",
       CF_REVIEW_RESULT: "marker.review", CF_ANSWER_RESULT: "marker.answer",
+      CF_ARBITER_RESULT: "marker.arbiter",
     }[name] || null);
 
     function metrics(text, parts) {
@@ -144,6 +145,10 @@
         const qid = c.question?.id; const turn = c.turnId || c.question?.turnId;
         if (qid && !eq(obj.question_id, qid)) return "question_id маркера не совпадает с ctx";
         if (turn && !eq(obj.turn_id, turn)) return "turn_id маркера не совпадает с ctx";
+      } else if (name === "CF_ARBITER_RESULT") {
+        // D-049: вердикт арбитра относится к конкретной карточке и ходу.
+        if (c.arbiter?.cardId && !eq(obj.dispatch_id, c.arbiter.cardId)) return "dispatch_id маркера не совпадает с карточкой арбитража";
+        if (c.turnId && !eq(obj.turn_id, c.turnId)) return "turn_id маркера не совпадает с ctx";
       } else if (name === "CF_AGENT_PROVISION_RESULT") {
         if (c.provision?.requestId && !eq(obj.request_id, c.provision.requestId)) return "request_id маркера не совпадает с ctx";
       }

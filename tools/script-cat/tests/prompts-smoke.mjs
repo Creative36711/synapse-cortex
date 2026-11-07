@@ -11,6 +11,7 @@ import {
 const BUDGETS = {
   'executor.card': 2800, 'auditor.card': 2200, 'coordinator.plan': 3200, 'coordinator.recovery': 1500,
   'reviewer.mission': 2400, 'reviewer.answer': 1800, 'reviewer.card': 2000, 'reminder.marker': 700,
+  'reviewer.arbiter': 2400, 'continuation.arbiter': 700,
   'delivery.compact': 1500, 'pilot.synapse': 250,
 };
 const TOTALS = {
@@ -330,4 +331,41 @@ for (const req of cases) {
   assert.ok(d.envelope.text.includes(k43.invariants.trim()), 'инварианты не порезаны');
 }
 
-console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim), D-039 (K-21 total Executor 7500), D-048 (K-43 total Executor 8000, оракул verbatim)');
+// 19. D-049: арбитраж петли — профиль и продолжение в бюджетах, ID карточки,
+// остановка цикла не подставлена по умолчанию, ничего «делающего» у арбитра нет.
+{
+  const arbiter = (over = {}) => ({
+    kind: 'arbiter', role: role('Reviewer', { name: 'Warden' }),
+    mission: { id: UUID.mission, name: 'SYN-2 · Мини-игра арены' },
+    turnId: UUID.turn,
+    arbiter: { cardId: UUID.dispatch, cardTitle: 'SYN-2 · S-4 · Мини-игра арены',
+      redispatchCount: 3, redispatchLimit: 3, windowHours: 6, reason: 'её видели в Rework',
+      state: 'Ready', check: 'fail', answer: 'Scope blocker — не готов к мержу.',
+      pr: 'https://github.com/Creative36711/synapse/pull/26', prState: 'draft, открыт',
+      attempts: '07.11 12:05 · dispatch · executor.card · Rework', queue: '1 Ready, 1 Rework' },
+    delivery: { tier: 'full' }, ...over,
+  });
+  const r = PromptCompiler.compile(arbiter());
+  assert.ok(r.ok, `reviewer.arbiter компилируется: ${r.error?.message}`);
+  assert.equal(r.profileId, 'reviewer.arbiter');
+  assert.equal(r.marker, 'CF_ARBITER_RESULT', 'маркер арбитража');
+  assert.ok(r.metrics.overheadChars <= 2400, `арбитр overhead ${r.metrics.overheadChars} ≤ 2400`);
+  assert.ok(r.metrics.chars <= 7000, `арбитр total ${r.metrics.chars} ≤ 7000 (DISPATCH_TOTAL Reviewer)`);
+  assert.ok(r.text.includes(UUID.dispatch) && r.text.includes(UUID.turn), 'ID карточки и хода в промпте');
+  assert.match(r.text.trim().split('\n').at(-1), /^CF_ARBITER_RESULT \{/, 'маркер — последней строкой');
+  assert.ok(!/"verdict":"master"\s*\}$/.test(r.text.trim().split('\n').at(-1)), 'по умолчанию не master');
+  for (const id of ['git.executor', 'task.assignment', 'queue.coordinator']) {
+    assert.ok(!r.blocks.some((b) => b.id === id), `арбитр без блока ${id}`);
+  }
+  // Продолжение после tool-call limit — тот же ход и те же ID.
+  const cont = PromptCompiler.compile(arbiter({ delivery: { tier: 'tool_limit' } }));
+  assert.ok(cont.ok, `continuation.arbiter компилируется: ${cont.error?.message}`);
+  assert.equal(cont.profileId, 'continuation.arbiter');
+  assert.ok(cont.metrics.overheadChars <= 700, `продолжение ${cont.metrics.overheadChars} ≤ 700`);
+  assert.ok(cont.text.includes(UUID.dispatch) && cont.text.includes(UUID.turn), 'продолжение с теми же ID');
+  // Карточка обязательна: разбор без неё не выдаётся.
+  const broken = PromptCompiler.compile(arbiter({ arbiter: {} }));
+  assert.equal(broken.error.code, 'missing_fact', 'без cardId — missing_fact');
+}
+
+console.log('OK: prompts — профили в бюджетах, маркеры/ID верны, пилот изолирован, #37/#38/#40 сохранены, D-034 (K-17, payload-указатель, разбивка бюджета), D-035 (прайм маркера, адрес артефактов), D-036 (K-20 длинная зона), D-038 (K-21 зона Executor — verbatim), D-039 (K-21 total Executor 7500), D-048 (K-43 total Executor 8000, оракул verbatim), D-049 (арбитраж петли в бюджетах)');

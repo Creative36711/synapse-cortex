@@ -238,7 +238,8 @@
       }
     }
     const mine = (m) => {
-        const result = parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_COORDINATOR_RESULT") || parseMarker(m.raw, "CF_REVIEW_RESULT");
+        const result = parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_COORDINATOR_RESULT") ||
+          parseMarker(m.raw, "CF_REVIEW_RESULT") || parseMarker(m.raw, "CF_ARBITER_RESULT");
       if (!result) return false;
       const ids = [result.dispatch_id, result.turn_id, result.mission_id].map(norm);
       if (!ids.includes(ref)) return false;
