@@ -225,6 +225,48 @@ for (const req of cases) {
   assert.equal(r.blocks[0].id, 'coordinator.prime', 'прайм остался первым блоком');
 }
 
+// 15б. D-075/1.14.1: план Координатора собирается на БОЕВЫХ размерах данных.
+//
+// 08.11 в 00:24 живой SYN-3 встал на budget_exceeded (overhead 3303 > 3200) —
+// а проба этого не видела, потому что гоняла короткое имя миссии и короткий ТЗ.
+// Факты (имя, id, ссылка на ТЗ, круг) теперь verbatim, как зона роли в D-036:
+// бюджет overhead защищает инструкции, а не длину данных Мастера. Здесь
+// проверяются именно предельные данные, а не фикстура.
+{
+  const zone = 'docs/agents/**, tools/script-cat/**, contracts/**, docs/DECISIONS.md, docs/REGULATION.md, docs/design/**, docs/process/**, docs/agents/roles/**, docs/adr/**';
+  const longMission = {
+    id: '4126f0cf-5705-819c-89c3-c1566cf5b67a',
+    name: 'SYN-3 · Транспорт и укомплектованность миссии (D-063…D-075)',
+    round: 2, reworkLimit: 3,
+    tzUrl: 'https://www.notion.so/creative36711/SYN-3-TZ-1-7-4126f0cf5705819c89c3c1566cf5b67a?pvs=4',
+  };
+  const live = PromptCompiler.compile(planRequest({ role: { name: 'Coordinator', fn: 'Coordinator', zone }, mission: longMission }));
+  assert.ok(live.ok, `боевой SYN-3 собирается: ${live.error?.message}`);
+  assert.ok(live.metrics.overheadChars <= 3200, `overhead ${live.metrics.overheadChars} ≤ 3200`);
+
+  // Overhead не должен зависеть от длины данных: иначе следующий длинный URL
+  // снова остановит цикл, и снова в самом дорогом месте.
+  const short = PromptCompiler.compile(planRequest({ role: { name: 'Coordinator', fn: 'Coordinator', zone } }));
+  assert.equal(live.metrics.overheadChars, short.metrics.overheadChars,
+    'имя миссии и ссылка на ТЗ не съедают бюджет инструкций');
+
+  const worst = PromptCompiler.compile(planRequest({
+    role: { name: 'Coordinator', fn: 'Coordinator', zone },
+    mission: { ...longMission, name: 'X'.repeat(200), tzUrl: `https://www.notion.so/creative36711/${'Y'.repeat(200)}` },
+  }));
+  assert.ok(worst.ok, `предельные данные тоже собираются: ${worst.error?.message}`);
+  // Общий предел от этого не отменён: жёсткий лимит считает весь текст.
+  // Жёсткий лимит задаётся доставкой (в бою его ставит compileOrPause через
+  // forDelivery); проверяем именно его, а не надежду на «и так упадёт».
+  const tooBig = PromptCompiler.compile(planRequest({
+    role: { name: 'Coordinator', fn: 'Coordinator', zone },
+    mission: { ...longMission, name: 'X'.repeat(9000) },
+    delivery: { tier: 'full', hardLimit: 9000 },
+  }));
+  assert.equal(tooBig.ok, false, 'жёсткий общий предел по-прежнему работает');
+  assert.equal(tooBig.error.code, 'budget_exceeded');
+}
+
 // 16. D-038: регрессия K-21 — реальная длинная зона Executor Core влезает в
 // executor.card без подъёма бюджета. D-036 закрыл auditor.card и plan, но
 // executor.card с длинной зоной не проверялся; боевая зона ~158 зн. пробила

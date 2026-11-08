@@ -19,7 +19,7 @@ const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs')
 const draftText = 'Черновики: NAR-1.10 · Регрессия и отчёт (Build/Release, Sequence 100).';
 const prompt = PromptCompiler.compile(planRequest({ queue: { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework', draft: draftText } })).text;
 
-assert.match(prompt, /незаконченный ход/, 'пустая очередь — незаконченный ход');
+assert.match(prompt, /пусто — не ход/, 'пустая очередь — незаконченный ход');
 assert.match(prompt, /next — имя роли выдаваемой карточки или done/, 'next должен называть исполнителя');
 assert.match(prompt, /CF_COORDINATOR_RESULT/, 'маркер на месте');
 assert.match(prompt, /NAR-1\.10 · Регрессия и отчёт/, 'черновики видны Координатору списком');
