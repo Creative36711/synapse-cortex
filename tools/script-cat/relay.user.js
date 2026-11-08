@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.18
+// @version      1.12.19
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -636,7 +636,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.18";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.19";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7601,6 +7601,41 @@
    *
    * Возвращает true, если ход разобран здесь; false — можно продолжать.
    */
+  /**
+   * Адрес адресата очереди — для перехода на его страницу.
+   *
+   * Сверить чат можно только в чате: и подтверждение доставки, и сам ответ
+   * живут на странице агента. Раньше переход брали из `roles()`, но она
+   * отдаёт лишь активные роли, а очередь живёт дольше смены статуса; поэтому
+   * берём строку базы по id, а кеш ролей — запасной путь. Пусто — адреса нет,
+   * и тогда нужна пауза, а не тик, который повторяет «сейчас открою».
+   */
+  async function roleAddress(pending) {
+    const id = String(pending?.roleId || "");
+    if (!id) return null;
+    const fromRow = (row) => (row && row.url
+      ? { id: row.id, name: row.name || pending.roleName || "", url: row.url, fn: row.fn || pending.roleFn || "", status: row.status || "Активна" }
+      : null);
+    try {
+      const rows = await roleRows().catch(() => []);
+      const found = fromRow(rows.find((row) => row.id && norm(row.id) === norm(id)));
+      if (found) return found;
+    } catch {
+      /* ниже пробуем кеш */
+    }
+    try {
+      const active = await roles().catch(() => []);
+      const found = fromRow(active.find((row) => row.id && norm(row.id) === norm(id)));
+      if (found) return found;
+    } catch {
+      /* адреса нет */
+    }
+    const stored = pending.roleUrl
+      ? { id, name: pending.roleName || "", url: pending.roleUrl, fn: pending.roleFn || "", status: "Активна" }
+      : null;
+    return stored;
+  }
+
   async function adoptOrphanReview(pending, me) {
     if (GM_getValue(K.expect, null)) return false;
     const kind = String(pending.kind || "");
@@ -7615,10 +7650,27 @@
       );
       return true;
     }
-    // Сверять чат можно только на странице адресата: цикл сам откроет её и
-    // вернётся к этому же шагу.
+    // Сверять чат можно только на странице адресата — и открыть её обязан этот
+    // же проход.
+    //
+    // 08.11, 17:45. Вопрос Координатора ушёл приёмке, ожидание хода не
+    // записалось, в очереди остался `kind: answer`. Ветка говорила «открываю
+    // страницу адресата» и возвращала true — а открывать было некому: строка
+    // только писалась в журнал, цикл оставался на странице Координатора и на
+    // каждом тике повторял тот же текст. Перехода не было ни разу, работа
+    // встала на пять часов.
     if (!me || norm(me) !== norm(pending.roleId)) {
-      pendingSay(pending, "Ход приёмки остался без ожидания: открываю страницу адресата, чтобы сверить чат по номеру хода.");
+      const who = await roleAddress(pending);
+      if (who) {
+        pendingSay(pending, `Ход приёмки остался без ожидания: открываю «${who.name}», чтобы сверить чат по номеру хода.`);
+        return navigateTo(who, "там ждёт ход приёмки без ожидания");
+      }
+      pause(
+        `В очереди остался ход приёмки без ожидания, но адрес адресата «${pending.roleName || pending.roleId || "?"}» ` +
+          "не читается из базы «Роли». Открыть чат для сверки не по чему: задание не отправляю и ничего не меняю. " +
+          "Проверьте «Agent URL» этой роли и нажмите «Продолжить».",
+        { kind: "orphan-review", ref, runId: "" },
+      );
       return true;
     }
     const shell = appReady();
@@ -7761,9 +7813,22 @@
       return true;
     }
     // Без доказательства судить по чату можно только со страницы адресата.
-    // Очередь сохраняем: цикл сам откроет нужную страницу и вернётся к сверке.
+    // Очередь сохраняем, а страницу открываем здесь же: обещание «цикл сам
+    // откроет» без самого перехода — это тик, который навсегда повторяет одну
+    // и ту же строку (08.11, ход приёмки: пять часов на одном месте).
     if (!me || norm(me) !== norm(pending.roleId)) {
-      pendingSay(pending, `Ход «${restored.title || ref}» потерял ожидание: открываю страницу адресата, чтобы сверить чат. Задание пока не отправляю.`);
+      const who = await roleAddress(pending);
+      if (who) {
+        pendingSay(pending, `Ход «${restored.title || ref}» потерял ожидание: открываю «${who.name}», чтобы сверить чат. Задание пока не отправляю.`);
+        return navigateTo(who, "там ждёт ход без ожидания");
+      }
+      pause(
+        `Ход «${restored.title || ref}» потерял ожидание, но адрес адресата ` +
+          `«${pending.roleName || pending.roleId || "?"}» не читается из базы «Роли». ` +
+          "Сверить чат не по чему: задание не отправляю, очередь и карточку сохраняю. " +
+          "Проверьте «Agent URL» этой роли и нажмите «Продолжить».",
+        { kind: "orphan-dispatch", ref, runId },
+      );
       return true;
     }
     // Пустой транскрипт недорисованной страницы не доказывает, что реплики нет:
@@ -14271,13 +14336,27 @@
       return false;
     }
     const turnId = uid();
-    log(`Вопрос «${oneLine(item.text, 90)}» передан приёмке «${role.name}».`, false, { ntfy: "quiet" });
-    await sendToRole(role, answerPrompt(mission, role, item, turnId), "answer", item.id, {
+    // D-068: «передан» пишем только тогда, когда ход действительно поставлен в
+    // очередь. Раньше строка печаталась до отправки и оставалась правдой даже
+    // при защитном отказе `sendToRole` (дубль, запрещённый адресат, окно
+    // настроек): в журнале ход «ушёл», а в очереди его нет — и цикл молча
+    // остаётся на странице Координатора.
+    const queued = await sendToRole(role, answerPrompt(mission, role, item, turnId), "answer", item.id, {
       questionId: item.id,
       missionId: mission.id,
       turnId,
       title: "ответ на вопрос агента",
     });
+    if (!queued) {
+      log(
+        `Вопрос «${oneLine(item.text, 90)}» не передан приёмке: транспорт не поставил ход в очередь ` +
+          "(защитный отказ или окно настроек). Вопрос остаётся «Ждёт» и повторится на следующем шаге.",
+        true,
+        { ntfy: "quiet", title: "Relay: вопрос не передан" },
+      );
+      return false;
+    }
+    log(`Вопрос «${oneLine(item.text, 90)}» передан приёмке «${role.name}».`, false, { ntfy: "quiet" });
     return true;
   }
 

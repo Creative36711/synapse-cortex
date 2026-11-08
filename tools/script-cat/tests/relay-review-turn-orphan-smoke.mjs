@@ -39,7 +39,7 @@ function cut(a, b) {
 const idsBlock = cut('  function promptDispatchIds(text) {', '  /** Своё сообщение в транскрипте');
 const reviewKinds = '';
 const receiptsBlock = cut('  const DELIVERY_RECEIPT_KEY', '  /** Уведомление и время относятся только к той очереди');
-const adoptBlock = cut('  async function adoptOrphanReview(', '  /**\n   * Досылает задание, сохранённое перед переходом');
+const adoptBlock = cut('  async function roleAddress(', '  /**\n   * Досылает задание, сохранённое перед переходом');
 const consumeBlock = cut('  async function consumePending(', '  // ───────────────────── следы прошлых попыток');
 const ghostBlock = cut('  async function dropGhostHandoff(', '  /** Уведомление и время относятся только к той очереди');
 
@@ -90,7 +90,7 @@ function make({
 } = {}) {
   const store = new Map([[K.expect, clone(expect)], [K.pending, clone(pending)], ['cfn-delivery-receipts-v1', clone(receipts)]]);
   if (deadSend) store.set(K.deadSend, deadSend);
-  const calls = { pauses: [], logs: [], delivered: [], notices: [], reads: [], rollbacks: [] };
+  const calls = { pauses: [], logs: [], delivered: [], notices: [], reads: [], rollbacks: [], navigations: [] };
   const env = {
     K, norm, isUuid, rt, idTime, flat,
     C: { pendingTtlMs: 600_000, undeliveredTtlMs: 7_200_000, sendRetries: 3, tickMs: 10, insertRetries: 2 },
@@ -98,6 +98,8 @@ function make({
     GM_setValue: (k, v) => store.set(k, clone(v)),
     roleFromPath: () => currentRole,
     roleRows: async () => clone(owners),
+    roles: async () => clone(owners.filter((r) => r.status === 'Активна')),
+    navigateTo: async (role, why) => { calls.navigations.push({ role, why }); return true; },
     notion: async (method, path) => { calls.reads.push({ method, path }); throw new Error('у хода приёмки нет карточки'); },
     taskState: () => '', taskTitle: () => '',
     patch: async () => { throw new Error('карточку трогать нельзя'); },
@@ -121,7 +123,7 @@ function make({
     openDialog: () => null, domReport: () => ({}), console: { warn() {} }, Math,
   };
   const boot = new Function('env', `
-    const {K, norm, isUuid, rt, idTime, flat, C, GM_getValue, GM_setValue, roleFromPath, roleRows, notion, taskState,
+    const {K, norm, isUuid, rt, idTime, flat, C, GM_getValue, GM_setValue, roleFromPath, roleRows, roles, navigateTo, notion, taskState,
       taskTitle, patch, userMessages, messageRaw, nodeId, messages, lastMessageId, releaseUndelivered, pause, log,
       nowIso, appReady, pendingSay, autoOn, sendKey, composerHolds, userSaysSince, lastUserSays, captchaDialog,
       busySettled, busyLabel, ensureFreshBranch, ensureComposer, composerText, clearComposer, sleep, writePrompt,
@@ -247,12 +249,27 @@ const OTHER_TURN = { id: 'm-other', raw: reviewPrompt.text.replaceAll(UUID.turn,
   assert.equal(h.store.get(K.pending).turnId, '', 'очередь сохранена как есть');
 }
 {
-  // Сверять чат на чужой странице нельзя: цикл сам открывает адресата.
+  // Сверять чат на чужой странице нельзя — и открыть адресата обязан этот же
+  // проход. D-068 (08.11, 17:45): раньше ветка только писала «открываю
+  // страницу адресата» и возвращала шаг, а перехода не делал никто: цикл
+  // повторял ту же строку пять часов.
   const h = make({ expect: null, pending: reviewPending(), nodes: [OUR_TURN], currentRole: WORKER.id });
   assert.equal(await h.consumePending(true), true);
-  assert.deepEqual(h.calls.pauses, []);
-  assert.match(String(h.calls.notices.at(-1)), /страницу адресата/, 'ждать Мастера незачем');
+  assert.deepEqual(h.calls.pauses, [], 'Мастера не будим');
+  assert.equal(h.calls.navigations.length, 1, 'переход к адресату действительно сделан');
+  assert.equal(h.calls.navigations[0].role.id, WARDEN.id, 'открывается страница адресата очереди');
+  assert.match(String(h.calls.notices.at(-1)), /открываю «Warden»/, 'в журнале назван адресат');
   assert.ok(h.store.get(K.pending), 'очередь остаётся');
+}
+{
+  // Адресата нет в базе и в очереди нет ссылки — тогда честная пауза, а не
+  // тик, который вечно повторяет «открываю».
+  const h = make({ expect: null, pending: reviewPending({ roleUrl: '' }), nodes: [OUR_TURN],
+    currentRole: WORKER.id, owners: [] });
+  assert.equal(await h.consumePending(true), true);
+  assert.equal(h.calls.navigations.length, 0, 'идти некуда');
+  assert.equal(h.calls.pauses.at(-1).ctx.kind, 'orphan-review', 'пауза называет причину');
+  assert.match(String(h.calls.pauses.at(-1).text), /Agent URL/, 'Мастеру сказано, что проверить');
 }
 
 // ── 6. Рабочая карточка Reviewer по-прежнему блокируется ───────────────────
