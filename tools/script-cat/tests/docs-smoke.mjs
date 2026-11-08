@@ -41,6 +41,11 @@ assert.equal(contract.d067?.budgetsRaised, false, 'D-067 не поднимал �
 assert.match(contract.d067?.protocolNote || '', /остаётся 1\.11/, 'D-067 транспорт-внутренний');
 assert.match(contract.d067?.fix || '', /no-name/, 'D-067: дефект назван по имени');
 assert.match(contract.d067?.safety || '', /не ослаблена|не подставляется/, 'D-067: идентичность не ослаблена');
+assert.equal(contract.d072?.budgetsRaised, false, 'D-072 не поднимал бюджеты');
+assert.match(contract.d072?.protocolNote || '', /остаётся 1\.11/, 'D-072 транспорт-внутренний');
+assert.match(contract.d072?.fix || '', /questionTextFull/, 'D-072: предел только физический');
+assert.match(contract.d072?.fix || '', /questions\.protocol/, 'D-072: правило промпта обновлено');
+assert.ok(/усечен/i.test(JSON.stringify(contract.d072?.safety || '')), 'D-072: усечения нет');
 assert.equal(contract.d069?.budgetsRaised, false, 'D-069 не поднимал бюджеты');
 assert.match(contract.d069?.protocolNote || '', /остаётся 1\.11/, 'D-069 транспорт-внутренний');
 assert.match(contract.d069?.fix || '', /driveFileIds/, 'D-069: поле payload разбирается на id');
