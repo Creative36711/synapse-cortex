@@ -27,11 +27,15 @@
    * одну строку: merged:false без изменений либо номер слитого PR.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
+    // D-067: вид дефекта решает текст. Если вызвавший не назвал причину
+    // (обычное «маркера нет»), берём её у разбора: «JSON без имени» просит
+    // дописать имя, а не переписать ответ.
+    const defect = String(why || "").trim() || (typeof markerRejectReason === "function" ? markerRejectReason(markerName) : "");
     const ctx = {
       kind: "reminder",
       role: promptRole(role),
       turnId: expect.turnId || "",
-      reminder: { markerName, attempt, max: C.markerReminders, why },
+      reminder: { markerName, attempt, max: C.markerReminders, why: defect },
       delivery: { tier: "full", attempt },
     };
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
@@ -383,6 +387,10 @@
     // Маркер мог быть и отвергнутым: «нет маркера» и «есть, но разбор его
     // выбросил» — разные поломки, и журнал обязан их различать.
     const reject = markerRejectHint(markerName);
+    // D-067: причину отказа разбора называем точно — «нет имени» лечится иначе,
+    // чем «нет отчёта» и «нет ID». Без этого напоминание просит строку, которую
+    // агент и так видит в своём ответе, и он повторяет тот же JSON.
+    const defect = String(why || "").trim() || (typeof markerRejectReason === "function" ? markerRejectReason(markerName) : "");
     if (markerStep(sent) === "remind") {
       log(
         why === "thin"
@@ -391,12 +399,18 @@
           ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : why === "pr-claim"
           ? `${role.name} прислал маркер ${markerName} с «pr:null» и «merged:true» одновременно — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
+          : defect === "no-name"
+          ? `${role.name} прислал JSON решения без имени ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
+              "Имя проставлено в образце ниже; ответ переписывать не нужно."
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : why === "pr-claim" ? "Relay: маркер противоречит себе" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: defect === "thin" ? "Relay: маркер без отчёта" : defect === "ids" ? "Relay: маркер без ID" : defect === "pr-claim" ? "Relay: маркер противоречит себе" : defect === "no-name" ? "Relay: маркер без имени" : "Relay: нет маркера" },
       );
-      await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
+      // Причина уходит в напоминание всегда: `why` от вызвавшего, иначе — от
+      // разбора (D-067). Раньше здесь стоял `why`, и «JSON без имени» получал
+      // общий текст про «последнюю строку».
+      await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, defect), expect.kind, expect.ref, {
         missionId: expect.missionId,
         turnId: expect.turnId,
         runId: expect.runId,
@@ -427,6 +441,9 @@
         : why === "pr-claim"
         ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
+        : defect === "no-name"
+        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: строка решения есть, не хватает только имени маркера — его можно дописать в конец ответа. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },

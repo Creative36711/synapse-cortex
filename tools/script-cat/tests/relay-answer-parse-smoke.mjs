@@ -209,10 +209,17 @@ const gateAt = tickBody.indexOf('if (!auto && !fromToggle) return;');
 const consumeAt = tickBody.indexOf('await consumePending(fromToggle)');
 assert.ok(consumeAt > 0 && gateAt > consumeAt, 'досылка очереди остаётся, ответы — только по нажатию');
 
-// 4.1. Напоминание больше не создаёт «другой вид» ожидания.
+// 4.1. Напоминание больше не создаёт «другой вид» ожидания. Пятым доводом идёт
+// вид дефекта (D-067): он же и есть `why`, когда вызывавший причину не назвал, —
+// без него «JSON без имени» получает общий текст про «последнюю строку».
 assert.match(
   src,
-  /await sendToRole\(role, markerReminder\(role, expect, sent \+ 1, markerName, why\), expect\.kind, expect\.ref,/,
+  /const defect = String\(why \|\| ""\)\.trim\(\) \|\| \(typeof markerRejectReason === "function" \? markerRejectReason\(markerName\) : ""\);/,
+  'причина отказа разбора доходит до напоминания',
+);
+assert.match(
+  src,
+  /await sendToRole\(role, markerReminder\(role, expect, sent \+ 1, markerName, defect\), expect\.kind, expect\.ref,/,
   'напоминание сохраняет вид ожидания',
 );
 assert.match(

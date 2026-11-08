@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.17
+// @version      1.12.18
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -636,7 +636,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.17";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.18";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -4494,6 +4494,26 @@
         /* пробуем следующий вариант */
       }
     }
+    // Ступень 4: «почти JSON». Агент пишет по памяти и ставит одинарные
+    // кавычки, типографские кавычки вокруг ключа или запятую перед закрытием.
+    // Это всё ещё его ответ с его ID — отказываться от него из-за кавычки
+    // значит звать Мастера там, где работа уже сделана.
+    const loose = variants
+      .map((text) =>
+        text
+          .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+          .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+          .replace(/,\s*([}\]])/g, "$1")
+          .replace(/([{,]\s*)'([^'\\\n]{1,80})'(\s*:)/g, '$1"$2"$3')
+          .replace(/(:\s*)'([^'\\\n]*?)'(\s*[,}])/g, '$1"$2"$3'),
+      );
+    for (const text of loose) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        /* следующий вариант */
+      }
+    }
     return null;
   }
 
@@ -4526,6 +4546,116 @@
   }
 
   /**
+   * «Лестница» чтения маркера (D-067).
+   *
+   * 07.11.2026, 16:56. Координатор ответил по делу, но последняя строка была
+   * JSON-ом без имени маркера:
+   *   {"next":"Contract Architect","question":{"id":"SYN3-ADR-V2-FRAMES-0",…}}
+   * Разбор искал только литерал `CF_COORDINATOR_RESULT`, не находил его — и
+   * цикл трижды просил «не хватило последней строки», хотя строка была. Агент
+   * повторял ровно тот же хвост, и через два напоминания шаг встал на паузу
+   * при полностью информативном ответе.
+   *
+   * Поэтому маркер ищется по ступеням, от строгой к мягкой:
+   *   1. точное имя + JSON (как было);
+   *   2. имя написано иначе — регистр, дефисы, подчёркивания, лишние пробелы;
+   *   3. имени нет, но JSON несёт характерный набор ключей этого маркера;
+   *   4. «почти JSON» — разбор в `markerJson`.
+   *
+   * Мягкие ступени ничего не разрешают сами по себе: идентичность (ID этой
+   * выдачи, mission_id этой миссии, next — существующая роль) по-прежнему
+   * проверяет вызывающий, и его отказ остаётся отказом. Поэтому ступени идут
+   * после строгой: разбор, а не доверчивость.
+   */
+  // Пары ключей — «подпись» маркера: по ней узнаём JSON без имени. Порядок
+  // важен: первым идёт более узкая подпись, иначе арбитраж с dispatch_id был бы
+  // принят за сдачу карточки.
+  const MARKER_STEPS = {
+    CF_ANSWER_RESULT: [["question_id"]],
+    CF_AGENT_PROVISION_RESULT: [["request_id"], ["jobs"]],
+    CF_ARBITER_RESULT: [["verdict", "action"], ["action", "fix"]],
+    CF_REVIEW_RESULT: [["verdict"]],
+    // У сдачи карточки нет вердикта: вердикт — это приёмка или арбитраж, и
+    // подписи ниже не пересекаются с ними именно поэтому (без этого вердикт с
+    // dispatch_id/run_id засчитывался бы как ответ исполнителя — проверено
+    // пробой relay-review-dispatch-integration).
+    CF_AGENT_RESULT: [["dispatch_id", "status"], ["dispatch_id", "run_id"], ["dispatch", "run"], ["run_id", "status"]],
+    CF_COORDINATOR_RESULT: [["next"]],
+  };
+  const MARKER_NAMES = Object.keys(MARKER_STEPS);
+
+  /** Похож ли объект на этот маркер: характерный набор ключей. */
+  const looksLikeMarker = (obj, name) => {
+    const o = obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+    const pairs = MARKER_STEPS[name] || [];
+    if (!o || !pairs.length) return false;
+    if (Object.keys(o).length > 14) return false;
+    return pairs.some((keys) => keys.every((k) => k in o));
+  };
+
+  /** Объект подходит хоть одному маркеру — и если да, то какому (по порядку). */
+  const markerOwner = (obj) => MARKER_NAMES.find((name) => looksLikeMarker(obj, name)) || "";
+
+  /**
+   * Последний настоящий JSON-объект текста: ответ мог быть без имени, но с JSON.
+   *
+   * Берём `{` только на нулевой глубине. Иначе «последняя скобка» оказывается
+   * вложенным объектом: у живого ответа Координатора
+   * `{"next":…,"question":{"id":…,"default":"A"}}` разбор доставал внутренний
+   * `question` — и вместо решения получался «JSON без next».
+   */
+  function lastJsonObject(text) {
+    const src = String(text || "");
+    const starts = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < src.length; i += 1) {
+      const ch = src[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") {
+        if (depth === 0) starts.push(i);
+        depth += 1;
+      } else if (ch === "}") {
+        depth = Math.max(0, depth - 1);
+      }
+    }
+    for (let k = starts.length - 1; k >= 0; k -= 1) {
+      const raw = braceJson(src.slice(starts[k]));
+      const obj = markerJson(raw);
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) return { obj, raw };
+    }
+    return null;
+  }
+
+  /**
+   * Имя маркера в мягком написании: `cf-coordinator-result`, `CF COORDINATOR
+   * RESULT`, `CF_COORDINATOR_RESULT`. Возвращает позицию находки или -1.
+   *
+   * Ступень 2 нужна из-за живых случаев: агент «переписывает» имя по-своему и
+   * получает «маркера нет» при готовом решении.
+   */
+  function looseMarkerAt(text, name) {
+    const src = String(text || "");
+    const core = name.replace(/^CF_/, "");
+    const pattern = core.split("_").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s_-]*");
+    const rx = new RegExp(`CF[\\s_-]*${pattern}`, "gi");
+    let last = -1;
+    let m;
+    while ((m = rx.exec(src))) {
+      last = m.index;
+      if (m[0].length === 0) rx.lastIndex += 1;
+    }
+    return last;
+  }
+
+  /**
    * Почему последний разбор не сложился: по имени маркера храним причину и
    * начало отвергнутого JSON. Журналу это нужно, чтобы «маркер есть, но он
    * отвергнут как шаблон» не сливалось с «маркера нет» — разные беды и чинятся
@@ -4538,6 +4668,12 @@
       .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\u00a0/g, " ")
       .replace(/\r\n?/g, "\n");
+    if (!src.trim()) {
+      delete markerNotes[name];
+      return null;
+    }
+
+    // ── ступень 1: точное имя + JSON (прежнее поведение, без изменений) ──
     let from = src.length;
     let rejected = "";
     while (from > 0) {
@@ -4552,20 +4688,76 @@
       if (obj && !rejected) rejected = raw.replace(/\s+/g, " ").trim().slice(0, 160);
       from = at;
     }
-    if (rejected) markerNotes[name] = { reason: "placeholder", sample: rejected };
-    else delete markerNotes[name];
+    if (rejected) {
+      markerNotes[name] = { reason: "placeholder", sample: rejected, rung: 1 };
+      return null;
+    }
+
+    // ── ступень 2: имя в другом написании ──
+    const loose = looseMarkerAt(src, name);
+    if (loose >= 0) {
+      const raw = braceJson(src.slice(loose));
+      const obj = markerJson(raw);
+      if (obj && !isPlaceholderMarker(obj)) {
+        markerNotes[name] = { reason: "loose-name", rung: 2 };
+        return obj;
+      }
+    }
+
+    // ── ступень 3: имени нет, но JSON несёт ключи этого маркера ──
+    const tail = lastJsonObject(src);
+    if (tail && !isPlaceholderMarker(tail.obj)) {
+      const owner = markerOwner(tail.obj);
+      // JSON засчитывается только за своим маркером: подпись должна совпасть
+      // именно с ожидаемым. Чужой JSON (вердикт вместо сдачи, сдача вместо
+      // решения) — не ответ на это ожидание, и подменять его нельзя.
+      if (owner === name) {
+        markerNotes[name] = { reason: "bare-json", rung: 3 };
+        return tail.obj;
+      }
+      if (owner) {
+        markerNotes[name] = { reason: "foreign-json", owner, sample: JSON.stringify(tail.obj).slice(0, 160), rung: 3 };
+        return null;
+      }
+    }
+
+    delete markerNotes[name];
     return null;
   }
 
   /** Пояснение к «маркера нет», если маркер был, но его отверг разбор. */
   const markerRejectHint = (name) => {
     const note = markerNotes[name];
-    if (!note || note.reason !== "placeholder") return "";
-    return (
-      ` В ответе есть ${name}, но разбор счёл его шаблоном из задания` +
-      `${note.sample ? ` (${note.sample})` : ""} — это дефект разбора, а не ответ агента.`
-    );
+    if (!note) return "";
+    if (note.reason === "placeholder") {
+      return (
+        ` В ответе есть ${name}, но разбор счёл его шаблоном из задания` +
+        `${note.sample ? ` (${note.sample})` : ""} — это дефект разбора, а не ответ агента.`
+      );
+    }
+    if (note.reason === "foreign-json") {
+      return (
+        ` Последний JSON в ответе — ${note.owner || "другой маркер"}` +
+        `${note.sample ? ` (${note.sample})` : ""}: он не считается ответом на это ожидание.`
+      );
+    }
+    return "";
   };
+
+  /**
+   * Что чинить: короткая причина для напоминания.
+   *
+   * Напоминание «не хватило последней строки» бесполезно, если строка есть, а
+   * в ней нет имени: агент видит свой JSON и повторяет его же. Поэтому причина
+   * называется точно, и по ней собирается отдельный текст напоминания.
+   */
+  const MARKER_REJECT_LABELS = {
+    "bare-json": "no-name",
+    "loose-name": "loose-name",
+    "foreign-json": "foreign-json",
+    placeholder: "placeholder",
+  };
+  const markerRejectReason = (name) => MARKER_REJECT_LABELS[markerNotes[name]?.reason] || "";
 
   /** Короткая подпись элемента для журнала: без разметки и лишнего текста. */
   const shortLabel = (el) =>
@@ -4752,11 +4944,15 @@
    * одну строку: merged:false без изменений либо номер слитого PR.
    */
   function markerReminder(role, expect, attempt, markerName, why = "") {
+    // D-067: вид дефекта решает текст. Если вызвавший не назвал причину
+    // (обычное «маркера нет»), берём её у разбора: «JSON без имени» просит
+    // дописать имя, а не переписать ответ.
+    const defect = String(why || "").trim() || (typeof markerRejectReason === "function" ? markerRejectReason(markerName) : "");
     const ctx = {
       kind: "reminder",
       role: promptRole(role),
       turnId: expect.turnId || "",
-      reminder: { markerName, attempt, max: C.markerReminders, why },
+      reminder: { markerName, attempt, max: C.markerReminders, why: defect },
       delivery: { tier: "full", attempt },
     };
     if (expect.kind === "dispatch") ctx.task = { id: expect.ref, runId: expect.runId, title: expect.title };
@@ -5108,6 +5304,10 @@
     // Маркер мог быть и отвергнутым: «нет маркера» и «есть, но разбор его
     // выбросил» — разные поломки, и журнал обязан их различать.
     const reject = markerRejectHint(markerName);
+    // D-067: причину отказа разбора называем точно — «нет имени» лечится иначе,
+    // чем «нет отчёта» и «нет ID». Без этого напоминание просит строку, которую
+    // агент и так видит в своём ответе, и он повторяет тот же JSON.
+    const defect = String(why || "").trim() || (typeof markerRejectReason === "function" ? markerRejectReason(markerName) : "");
     if (markerStep(sent) === "remind") {
       log(
         why === "thin"
@@ -5116,12 +5316,18 @@
           ? `${role.name} прислал маркер ${markerName} без dispatch_id/run_id этой выдачи — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
           : why === "pr-claim"
           ? `${role.name} прислал маркер ${markerName} с «pr:null» и «merged:true» одновременно — напоминание ${sent + 1} из ${C.markerReminders}. Работа не повторяется.`
+          : defect === "no-name"
+          ? `${role.name} прислал JSON решения без имени ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
+              "Имя проставлено в образце ниже; ответ переписывать не нужно."
           : `${role.name} ответил без маркера ${markerName} — напоминание ${sent + 1} из ${C.markerReminders}. ` +
               `Прочитан хвост: «${tail(last.text, 110)}»${reject}`,
         true,
-        { ntfy: "quiet", title: why === "thin" ? "Relay: маркер без отчёта" : why === "ids" ? "Relay: маркер без ID" : why === "pr-claim" ? "Relay: маркер противоречит себе" : "Relay: нет маркера" },
+        { ntfy: "quiet", title: defect === "thin" ? "Relay: маркер без отчёта" : defect === "ids" ? "Relay: маркер без ID" : defect === "pr-claim" ? "Relay: маркер противоречит себе" : defect === "no-name" ? "Relay: маркер без имени" : "Relay: нет маркера" },
       );
-      await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, why), expect.kind, expect.ref, {
+      // Причина уходит в напоминание всегда: `why` от вызвавшего, иначе — от
+      // разбора (D-067). Раньше здесь стоял `why`, и «JSON без имени» получал
+      // общий текст про «последнюю строку».
+      await sendToRole(role, markerReminder(role, expect, sent + 1, markerName, defect), expect.kind, expect.ref, {
         missionId: expect.missionId,
         turnId: expect.turnId,
         runId: expect.runId,
@@ -5152,6 +5358,9 @@
         : why === "pr-claim"
         ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
             "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
+        : defect === "no-name"
+        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. ` +
+            "Нужен Мастер: строка решения есть, не хватает только имени маркера — его можно дописать в конец ответа. "
         : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
             `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
       { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
@@ -9410,6 +9619,13 @@
 
     def("reminder.marker", { ruleIds: ["R-MARKER"], render: (c) => {
       const thin = c.reminder?.why === "thin";
+      // D-067: «маркера нет» и «маркер есть, но без имени» — разные дефекты, и
+      // лечатся они по-разному. Живой случай 07.11: Координатор прислал
+      // {"next":…,"question":…} без имени маркера, а напоминание просило
+      // «последнюю строку с CF_COORDINATOR_RESULT» — он смотрел на свой ответ,
+      // видел там JSON и повторял его же до паузы. Напоминание обязано назвать
+      // то, чего не хватает: имя перед JSON.
+      const noName = c.reminder?.why === "no-name";
       const ids = c.reminder?.why === "ids";
       const prClaim = c.reminder?.why === "pr-claim";
       // Бюджет напоминания жёсткий (C.promptBudgets: reminder.marker + marker.agent
@@ -9417,11 +9633,15 @@
       // за себя и заменяет общую концовку: она уже просит поправить только маркер.
       return [
         `Техническое напоминание (${c.reminder?.attempt ?? 1} из ${c.reminder?.max ?? 2}; это не задание и не новый ход).`,
-        ids ? `В маркере ${c.reminder?.markerName} нет dispatch_id/run_id этой выдачи либо они иные. Скопируй ID из строки ниже; работу не повторяй.`
+        // Ветка короткая намеренно: бюджет reminder.marker — 700, поднимать
+        // нельзя, а пояснение про «переписывать не нужно» живёт в сообщении
+        // транспорта (markerMissing), где бюджета нет.
+        noName ? `В ответе есть JSON решения, но нет имени ${c.reminder?.markerName}. Поставь имя в начало этой же строки; JSON верный.`
+          : ids ? `В маркере ${c.reminder?.markerName} нет dispatch_id/run_id этой выдачи либо они иные. Скопируй ID из строки ниже; работу не повторяй.`
           : prClaim ? `В маркере ${c.reminder?.markerName} "pr":null и "merged":true разом — так нельзя. Изменений не было — "pr":null,"merged":false. Слил свой PR — номер PR и "merged":true. Поправь только маркер.`
           : thin ? `В ответе пришёл только маркер ${c.reminder?.markerName}, без отчёта. Маркер без фактов не считается ответом.`
           : `В ответе не хватило последней строки с ${c.reminder?.markerName}.`,
-        prClaim ? "" : "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
+        prClaim ? "" : noName ? "" : "Не повторяй сделанное: пришли ответ целиком; маркер — последней строкой, без кода и текста после.",
       ].filter(Boolean).join("\n");
     } });
 
