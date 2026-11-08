@@ -1,6 +1,6 @@
 # SYN-2 · Фаза 1.1 — путь автора: сцена из модуля, игра с вводом, локализованный UI
 
-Состояние: **Принята** (`accept`, круг 1, 2026-11-02, SHA `6cff12a`; акт —
+Состояние: **Принята** (`accept`, круг 1, 2026-11-08, SHA `6cff12a`; акт —
 `docs/handoff/phase-1-warden-decision.md` §A). Активирована Warden по D-051.
 Версия ТЗ 1.0. Владелец приёмки: Warden. Исполнители: `Contract Architect`, `Executor Core`,
 `Locale Auditor`, `Spec Auditor` (доступ только к `Creative36711/synapse`, D-022).
@@ -56,7 +56,8 @@ SYN-2 закрывает ровно это и ничего сверх:
   достижима через `run` без изменения файлов ядра. Проверка: N-2, N-3 на модуле, добавленном в
   `examples/**`, а не в `game/**`.
 - **INV-12. Локаль не меняет ни правил, ни состояния UI.** Смена локали меняет только текст;
-  отпечаток мира `synapse.world-state.v1` совпадает между `en`, `de`, `ru`, `zh-Hans`. Проверка: N-5, N-7.
+  срез отпечатка мира `rules` (без локали и без текста) совпадает между всеми восемью локалями;
+  срез `presentation` меняется вместе с текстом (D-058). Проверка: N-5, N-7; в редакции SYN-3 — V-2.
 - **INV-13. Ни одного пользовательского текста вне каталогов, включая сцены.** Текст `Label`,
   `Button`, `tooltip_text`, заголовков окна берётся из каталога по ключу. Проверка: N-7.
 - **INV-14. Диагностика не зависит от среды исполнения.** Ошибка инструмента (нет Godot, нет Node,
@@ -83,7 +84,7 @@ SYN-2 закрывает ровно это и ничего сверх:
 | N-2 | `… -- validate examples/module-scene.game.yaml`, `… -- resolve …`, `… -- run … --frames 60 --shot /tmp/syn2/module.png` | validate и resolve код 0; в `resolve.order` есть модуль-владелец сцены; run код 0, PNG создан, **открыт и описан**: на изображении сцена модуля (не встроенное меню) |
 | N-3 | `… -- run examples/minimal.game.yaml` (регресс) и два прогона GameSpec с `entry.scene` от модуля: без `sceneEntries` и с ними | regress код 0; без записи — код ≠ 0, `code=scene.id.unknown`, `params.expected` = фактический список доступных ID сборки (встроенные + модульные), без хардкода; с записью — код 0 |
 | N-4 | четыре негативные декларации: `sceneEntries[].id` не объявлен в `provides.scenes`; `resource` отсутствует на диске; `resource` вне `res://` или с `..`; один ID у двух модулей | код ≠ 0 у всех; коды `scene.entry.unknown`, `scene.resource.missing`, `field.pattern`, `scene.duplicate`; в каждой записи есть `path`, `expected`, `actual`; на `--lang ja` те же `code`/`path`/`actual`, текст японский и непустой |
-| N-5 | `… -- run examples/arena.game.yaml --frames 120 --input /tmp/syn2/actions.json --shot /tmp/syn2/arena.png --state /tmp/syn2/arena.json`, то же с `--lang de`, `--lang ru`, `--lang zh-Hans` | все прогоны код 0; PNG открыт: игрок сместился по сценарию ввода, счётчик собранных предметов вырос, HUD читаем; отпечаток на 120 кадрах отличается от отпечатка на 0 и на 60; отпечатки между локалями **побайтово равны** (INV-10/INV-12) |
+| N-5 | `… -- run examples/arena.game.yaml --frames 120 --input /tmp/syn2/actions.json --shot /tmp/syn2/arena.png --state /tmp/syn2/arena.json`, то же с `--lang de`, `--lang ru`, `--lang zh-Hans` | все прогоны код 0; PNG открыт: игрок сместился по сценарию ввода, счётчик собранных предметов вырос, HUD читаем; отпечаток на 120 кадрах отличается от отпечатка на 0 и на 60; срез отпечатка **`rules`** (frame, геометрия, visible, состояние сущностей — без локали и текста) **побайтово равен** между всеми локалями (INV-10/INV-12) |
 | N-6 | `npm run test:runtime` (или явный `node --test tests/runtime/*.test.mjs`) | код 0; в выводе два экземпляра одного определения с разными `hp`, изменение одного не меняет другой; попытка записать изменяемое поле в определение даёт `definition.state.forbidden` (INV-4) |
 | N-7 | `npm run i18n-check`, `npm run i18n-no-literals`, `… -- run examples/arena.game.yaml --lang ru --shot …`, то же `--lang zh-Hans` | i18n-check код 0: `en` 100 % ключей `ui.*` и новых кодов, остальные семь ≥ 95 %; i18n-no-literals код 0 и покрывает `text`/`tooltip_text`/`title` в `.gd` и `.tscn` (0 литералов); PNG на `ru` и `zh-Hans` **открыты**: те же элементы, текст на запрошенном языке, тофу нет |
 | N-8 | `… -- validate /tmp/syn2/nope.game.yaml` и то же с `--lang ja`; `run` с `PATH` без `godot`; `validate` с `PATH` без `node` | все код ≠ 0 и машинная запись: `spec.file.missing`, `cli.dependency.node_missing`, `runtime.engine.missing`; `path`/`expected`/`actual` заполнены, текст из каталога, на `ja` — японский; сырого `ENOENT`/`127` без JSON нет |
@@ -93,6 +94,12 @@ SYN-2 закрывает ровно это и ничего сверх:
 Вспомогательные (быстрые, для карточек): `godot --headless --path game --quit`; `git diff --check`;
 повторные прогоны N-2/N-3/N-5 дважды подряд (идемпотентность); `npm run check:contracts`;
 `tools/deps/offline-install.sh` при мёртвом реестре.
+
+**Редакция N-5 (D-058, поправка 2026-11-08).** Первая редакция требовала побайтового равенства
+отпечатка целиком. Отпечаток v2 состоит из двух срезов, поэтому N-5 проверяется по срезу `rules`;
+срез `presentation` (`locale`, `text`, `tooltip_text`, `title`) на тех же прогонах обязан
+различаться — это SYN-3 V-2. Это уточнение, а не ослабление: набор локалей и требование равенства
+по `rules` те же, добавлено требование различия по `presentation`.
 
 `not run`, тайм-аут, «зелёный CI» и мок не равны pass. Для визуальных пунктов агент обязан открыть PNG
 и описать наблюдаемое; «по таблице символов» вместо открытого скриншота — не доказательство.
