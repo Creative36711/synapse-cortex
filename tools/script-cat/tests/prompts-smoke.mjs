@@ -267,6 +267,48 @@ for (const req of cases) {
   assert.equal(tooBig.error.code, 'budget_exceeded');
 }
 
+// 15в. D-075/1.14.2: total-лимит действует на всех путях, а не только на выдаче.
+//
+// В телеметрии 08.11 боевой план Координатора пришёл 7271 знак, и ничто, кроме
+// overhead, его не ограничивало: `hardLimit` передавал только путь выдачи
+// (`DISPATCH_TOTAL` в 21-prompts.js), а план, приёмка, ответ и напоминание
+// собирались без общего предела. Значения при этом были записаны в
+// docs/agents/protocol.md — код их просто не применял.
+{
+  const limits = { Executor: 8000, Auditor: 5500, Coordinator: 7500, Reviewer: 7000 };
+  for (const [fn, limit] of Object.entries(limits)) {
+    assert.equal(PromptCompiler.totalLimit({ role: { fn } }, 'x'), limit, `${fn}: предел из протокола`);
+  }
+  // Боевой план из телеметрии — 7271 — обязан влезать: документированный
+  // предел Coordinator 7500, и правка не должна ломать живую работу.
+  const live = planRequest({
+    mission: { id: '4126f0cf-5705-819c-89c3-c1566cf5b67a', name: 'SYN-3 · Транспорт', round: 1, reworkLimit: 3 },
+    role: { name: 'Coordinator', fn: 'Coordinator', zone: 'a/**' },
+    queue: { summary: '0 Submitted, 0 Running, 1 Ready', ready: 'Готовы: ' + 'X'.repeat(1030), answersLine: 'О'.repeat(2770) },
+  });
+  const ok = PromptCompiler.compile(live);
+  assert.ok(ok.ok, `боевой план собирается: ${ok.error?.message}`);
+  assert.ok(ok.metrics.chars <= 7500, `боевой план ${ok.metrics.chars} ≤ 7500`);
+
+  // А предел обязан срабатывать без всякого `delivery.hardLimit`.
+  const tooBig = PromptCompiler.compile(planRequest({
+    role: { name: 'Coordinator', fn: 'Coordinator', zone: 'a/**' },
+    queue: { summary: 's', answersLine: 'О'.repeat(9000) },
+  }));
+  assert.equal(tooBig.ok, false, 'план без общего предела больше не собирается молча');
+  assert.equal(tooBig.error.code, 'budget_exceeded');
+  assert.equal(tooBig.error.detail.limit, 7500, 'назван именно предел роли');
+
+  // Явный hardLimit вызывающего по-прежнему главнее (путь выдачи с payload).
+  assert.equal(PromptCompiler.totalLimit({ role: { fn: 'Executor' }, delivery: { hardLimit: 4000 } }, 'executor.card'), 4000,
+    'явный предел вызывающего не перетирается');
+  // Ответ на вопрос везёт сам вопрос целиком (до 12000), поэтому его предел
+  // считается про инструкции и не равен «Answer ≤6000» по тексту.
+  const answer = PromptCompiler.compile(answerRequest({ question: { id: 'q', turnId: 't', text: 'Вопрос', fullText: 'В'.repeat(9000), fallback: 'A' } }));
+  assert.ok(answer.ok, `длинный вопрос доезжает: ${answer.error?.message}`);
+  assert.ok(answer.metrics.chars <= 14000);
+}
+
 // 16. D-038: регрессия K-21 — реальная длинная зона Executor Core влезает в
 // executor.card без подъёма бюджета. D-036 закрыл auditor.card и plan, но
 // executor.card с длинной зоной не проверялся; боевая зона ~158 зн. пробила

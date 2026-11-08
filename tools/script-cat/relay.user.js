@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.1
+// @version      1.14.2
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -74,7 +74,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "ea1c115565bf6a2e",
+    buildFingerprint: "6ea880c66c0a8e1d",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -694,7 +694,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.1";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.2";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -10206,6 +10206,43 @@
       CF_ARBITER_RESULT: "marker.arbiter",
     }[name] || null);
 
+    /**
+     * Total-лимит по роли — единственный источник истины.
+     *
+     * До 1.14.2 предел действовал только на пути выдачи (`DISPATCH_TOTAL` в
+     * 21-prompts.js), а план Координатора, приёмка, ответ и напоминание
+     * собирались вообще без общего предела: в телеметрии 08.11 боевой план
+     * пришёл 7271 знак, и ничто, кроме overhead, его не ограничивало. Значения
+     * уже были записаны в `docs/agents/protocol.md:44` («Executor ≤8000,
+     * Auditor ≤5500, Coordinator ≤7500, Review ≤7000, Answer ≤6000»), просто
+     * код их не применял. Теперь применяет компилятор — на всех путях сразу, а
+     * `forDelivery` задаёт свой предел только там, где нужен особый (payload).
+     *
+     * Лимит не режет данные молча (D-034): при превышении — отказ с причиной,
+     * а решение (разбить карточку, убрать повторы) остаётся за ролью.
+     */
+    const PROMPT_TOTAL = {
+      Executor: 8000, Auditor: 5500, Coordinator: 7500, Reviewer: 7000,
+      Maintainer: 3600, pilot: 4000,
+    };
+    // Профиль, у которого предел строже общего по роли: ответ на вопрос
+    // содержит сам вопрос целиком (до 12000 знаков, D-072), и «Answer ≤6000» —
+    // про инструкции, иначе вопрос не доедет.
+    const PROFILE_TOTAL = { "reviewer.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
+
+    /** Предел текста для запроса: профиль важнее роли, роль важнее общего. */
+    function totalLimit(request, profileId) {
+      const c = request || {};
+      if (c.delivery?.hardLimit) return c.delivery.hardLimit;
+      if (PROFILE_TOTAL[profileId]) return PROFILE_TOTAL[profileId];
+      if (/reminder$/.test(profileId || "")) return 1600;
+      const fn = c.role?.fn || "";
+      if (PROMPT_TOTAL[fn]) return PROMPT_TOTAL[fn];
+      // Резервная строка не должна быть больше самого щедрого предела: иначе
+      // «неизвестная роль» получила бы больше прав, чем обычный исполнитель.
+      return 9000;
+    }
+
     function metrics(text, parts) {
       const verbatimChars = parts.filter((p) => p.verbatim).reduce((a, p) => a + p.text.length, 0);
       return {
@@ -10291,7 +10328,9 @@
       if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
         return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead, blocks: breakdown });
       }
-      const hard = c.delivery?.hardLimit || 0;
+      // Предел берётся из одного места: компилятор не должен зависеть от того,
+      // помнит ли вызывающий передать `delivery.hardLimit`.
+      const hard = totalLimit(c, profileId);
       if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard, blocks: breakdown });
 
       return {
@@ -10362,7 +10401,7 @@
       return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
     }
 
-    return { compile, forDelivery, metrics, hash, reminderMarkerBlock };
+    return { compile, forDelivery, metrics, hash, reminderMarkerBlock, totalLimit, PROMPT_TOTAL, PROFILE_TOTAL };
   })();
 
   // ───────────────────────── факты и компиляция ─────────────────────────

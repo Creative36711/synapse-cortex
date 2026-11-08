@@ -1031,7 +1031,7 @@
   "d075": {
     "decision": "D-075",
     "summary": "Укомплектованность миссии: транспорт отказывается выдавать карточки при некомплекте ролей, дефект адресата виден у карточки в любом состоянии, некомплект — класс master, вариант «Функция» добавляется под строку",
-    "fix": "1) Правила состава в src/42-roster.js: rosterRoleGaps, missionRoster, rosterReason, rosterGate. 2) Гейт в src/25-legacy-adr.js перед выдачей: карточки Draft+Ready сверяются с базой «Роли» целиком (не только с активными), пауза mission-roster класса master с текстом по образцу blockedReason: «создать агента» / «дозаполнить существующую строку» / «проверьте функцию и зону». 3) roleDefect — один разбор адресата для draftLine, readyLine и reworkLine; readyLine и reworkLine получают базу «Роли»; обязанность сверки в блоке queue.coordinator и в файле роли Координатора. 4) HEAL_MASTER_TEXT: reviewer-task-check и reviewer-task-pending при причине «адресат не подтверждён среди активных» / «Статус/Agent URL/нет варианта Кому» классифицируются как master (by:\"roster\"), а потеря доставки остаётся transport. 5) provisionRosterRequest в src/31-provision-core.js: сигнал Agent State = запрошен ставит Coordinator, при включённом provisioning пауза просит одобрения, при выключенном создание остаётся Мастеру; Maintainer в PROVISION_FUNCTIONS не добавлен. 6) recipientOptionNames в src/12-notion.js для проверки вариантов «Кому». 7) Вариант «Функция» в src/08-projects-ui.js дописывается под существующую строку тем же приёмом, что «Кому»: обязательны Coordinator/Executor/Auditor/Reviewer, Maintainer — только при строке. 8) 1.14.1: identity.mission — verbatim-факт (имя, id, ТЗ, круг), как зона роли в D-036; queue.coordinator сокращён; текст паузы prompt-compile прямо называет Maintainer'а при перерасходе профиля.",
+    "fix": "1) Правила состава в src/42-roster.js: rosterRoleGaps, missionRoster, rosterReason, rosterGate. 2) Гейт в src/25-legacy-adr.js перед выдачей: карточки Draft+Ready сверяются с базой «Роли» целиком (не только с активными), пауза mission-roster класса master с текстом по образцу blockedReason: «создать агента» / «дозаполнить существующую строку» / «проверьте функцию и зону». 3) roleDefect — один разбор адресата для draftLine, readyLine и reworkLine; readyLine и reworkLine получают базу «Роли»; обязанность сверки в блоке queue.coordinator и в файле роли Координатора. 4) HEAL_MASTER_TEXT: reviewer-task-check и reviewer-task-pending при причине «адресат не подтверждён среди активных» / «Статус/Agent URL/нет варианта Кому» классифицируются как master (by:\"roster\"), а потеря доставки остаётся transport. 5) provisionRosterRequest в src/31-provision-core.js: сигнал Agent State = запрошен ставит Coordinator, при включённом provisioning пауза просит одобрения, при выключенном создание остаётся Мастеру; Maintainer в PROVISION_FUNCTIONS не добавлен. 6) recipientOptionNames в src/12-notion.js для проверки вариантов «Кому». 7) Вариант «Функция» в src/08-projects-ui.js дописывается под существующую строку тем же приёмом, что «Кому»: обязательны Coordinator/Executor/Auditor/Reviewer, Maintainer — только при строке. 8) 1.14.1: identity.mission — verbatim-факт (имя, id, ТЗ, круг), как зона роли в D-036; queue.coordinator сокращён; текст паузы prompt-compile прямо называет Maintainer'а при перерасходе профиля. 9) 1.14.2: PROMPT_TOTAL в prompt-compiler.js — общий предел текста действует на плане, приёмке, ответе и напоминании, профиль уточняет свой, явный hardLimit вызывающего главнее.",
     "safety": [
       "некомплект не ослабляет приёмку: Submitted и Rework разбираются по-прежнему, гейт стоит только перед выдачей",
       "пауза mission-roster — класс master: автопродолжения и передачи Maintainer'у у неё нет",
@@ -1041,7 +1041,8 @@
       "вариант «Функция» не даёт прав: он следует за строкой, без строки не появляется",
       "бюджеты overhead не подняты (D-034): coordinator.plan 3173 ≤ 3200",
       "переписка и секреты наружу не выносятся: в паузах только имена ролей, статусы и поля",
-      "общий предел текста не отменён: delivery.hardLimit считает весь промпт, verbatim только снимает факты с бюджета инструкций"
+      "общий предел текста не отменён: delivery.hardLimit считает весь промпт, verbatim только снимает факты с бюджета инструкций",
+      "total-лимиты протокола применяет компилятор на всех путях; данные при превышении не режутся молча (D-034)"
     ],
     "evidence": {
       "probe": "tools/script-cat/tests/mission-roster-smoke.mjs, tools/script-cat/tests/arbiter-escalation-smoke.mjs (критерий D-074), tools/script-cat/regression-tests/relay-project-schema-integration.mjs",
@@ -1051,6 +1052,6 @@
     "budgetsRaised": false,
     "raisedBudget": "",
     "protocolNote": "protocolVersion остаётся 1.11: форма маркеров, профили команды и бюджеты не менялись. Новый вид паузы mission-roster аддитивен; блок queue.coordinator дополнен обязанностью сверки без подъёма бюджета. Скрипт 1.14.0.",
-    "version": "1.14.1"
+    "version": "1.14.2"
   }
 }
