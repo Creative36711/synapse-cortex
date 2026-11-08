@@ -81,8 +81,9 @@ SYN-1 и SYN-2 дали работающий каркас: описание пр
   переписывать нельзя; `tools/godot/patches/` не меняется (INV-2).
 - `examples/**` — эталонные примеры; после появления не подгоняются под код, правка требует абзаца
   «почему» в отчёте.
-- `schema/**`, `docs/contracts/**` — меняются только карточкой B1 с записью в
-  `docs/decisions/SYN-3.md`.
+- `schema/**`, `docs/contracts/**`, `tests/contracts/**` — меняются только карточкой B1 с записью
+  в `docs/decisions/SYN-3.md`. Владелец контракта владеет и его тестами: иначе новую схему некуда
+  зарегистрировать (`CASE_SETS` — жёсткий массив, не автообнаружение).
 - `tests/**` — можно дополнять; ослаблять существующие проверки запрещено. Удаление проверки —
   отдельное решение Warden.
 - `synapse.world-state.v1` остаётся **схемой** и историческим артефактом: документы v1 остаются
@@ -95,7 +96,7 @@ SYN-1 и SYN-2 дали работающий каркас: описание пр
 
 | # | Команда / процедура | Ожидается |
 |---|---|---|
-| V-1 | `npm run check:contracts`; чтение `docs/contracts/world-state.md`; `grep -n "ref.unresolved\|actions.file.missing" docs/contracts/scene-binding.md` | в спецификации отпечатка перечислены обязательные поля и смысл `fingerprintScope`; оба кода есть в таблице ошибок сцены; контракты зелёные, число тестов не уменьшилось |
+| V-1 | `npm run check:contracts`; чтение `docs/contracts/world-state.md`; `ls schema/world-state.*.schema.json`; `grep -n world-state tests/contracts/lib/contracts.mjs`; `grep -n "ref.unresolved\|actions.file.missing" docs/contracts/scene-binding.md` | спецификация отпечатка **создана** и перечисляет поля обоих срезов и смысл `fingerprintScope`; в `schema/` лежат **и** `v2`, **и** `v1` (восстановленный по текущему эмиттеру); оба набора зарегистрированы в `CASE_SETS`; оба кода есть в таблице ошибок сцены; контракты зелёные, число тестов **выросло** |
 | V-2 | `run examples/arena.game.yaml --state …` на всех восьми локалях, `--frames 0/60/120`; повтор `en` дважды; две негативные фикстуры (а) и (б) | срез **`rules`** равен между всеми восемью локалями и между повторами `en`, различается на 0/60/120; срез **`presentation`** различается между локалями и равен между повторами одной локали — причём между `en` и `de` различается **хотя бы одно из полей `text`/`tooltip_text`/`title`**, а не только `locale` (иначе «различается» проходит и при полностью непереведённом UI); **фикстура (а)** «геометрия сцены зависит от локали» → `rules` обязаны **различаться**; **фикстура (б)** обычный перевод → `presentation` различается, `rules` равен; в артефакте есть `fingerprintScope` с именами срезов; полный хеш `artifact` в доказательстве INV-12 не участвует |
 | V-3 | прогон сценария `InputEvent` (файл `tests/fixtures/input/ui-script.json`) дважды; отдельно — нажатие `PauseButton`/`RestartButton` через тот же канал | код 0 у обоих; отпечатки равны между повторами; после паузы кадр не растёт, после перезапуска счётчик сброшен — видно в отпечатке; `_unhandled_input` и `pressed.connect` присутствуют в коде сцены |
 | V-4 | `run … --state /proc/nope/state.json`; `run … --input /tmp/nope.json`; `run` с `PATH` без `godot` | три разных кода: `cli.run.state.write_failed`, `actions.file.missing`, `runtime.engine.missing`; `params.path` равен переданному пути (никакого `/--state`); `expected`/`actual` заполнены; сырого `ENOENT`/`127` нет |
@@ -105,7 +106,7 @@ SYN-1 и SYN-2 дали работающий каркас: описание пр
 | V-8 | `README.md` §CLI, `AGENTS.md`: чтение абзацев о `--state`, `--input`, локали | сказано, что именно входит в отпечаток и что равенство отпечатков не значит равенство картинки; ввод описан так, как он работает; ссылок на cortex нет |
 | V-9 | ручной прогон `node tools/ci/run-cli-tests.mjs` с шаблоном, не совпадающим ни с одним тестом; и без `godot` в `PATH` | оба прогона код ≠ 0 с явным сообщением; «найдено 0 тестов, всё хорошо» невозможно (INV-16) |
 | V-10 | `grep -rniI "synapse-cortex" . --exclude-dir=.git`; `grep -rn "repository is private" AGENTS.md`; `git diff --check` | совпадений нет, кроме негативного assert в тестах; «private» нет; пробельных ошибок нет |
-| V-11 | повтор V-1…V-10 на том же SHA после `git clean -xdf && ./tools/deps/offline-install.sh && tools/godot/install.sh --check` | все коды возврата те же; отпечатки V-2 воспроизводятся побайтово; артефакты в Drive |
+| V-11 | повтор V-1…V-10 на том же SHA после чистой сборки: `git clean -xdf && ./tools/deps/offline-install.sh && tools/godot/install.sh --check && node tools/i18n/setup-parser.mjs` | все коды возврата те же, **включая V-5** (парсер восстановлен скриптом, а не «остался с прошлого раза»); отпечатки V-2 воспроизводятся побайтово; артефакты в Drive |
 
 Вспомогательные: `godot --headless --path game --quit`; `npm run test:contracts`,
 `test:validation`, `test:modules`, `test:i18n`, `test:runtime`, `test:deps`, `test:cli`,
@@ -129,7 +130,9 @@ PNG и описать наблюдаемое; «по таблице символ
   роль `Transport Maintainer` вне очереди.
 - **D-064** — `ROADMAP.md` и `METRICS.md` ведутся в публичном `synapse`.
 - **D-059** — анализатор литералов fail-closed на настоящем парсере (`gdtoolkit`/`gdparse`) в
-  изолированном venv; самописный токенизатор в роли «доказательства» не используется.
+  изолированном venv; venv ставится скриптом `tools/i18n/setup-parser.mjs` с зафиксированной
+  версией и явным путём, поэтому повтор V-11 после `git clean -xdf` восстановим; самописный
+  токенизатор в роли «доказательства» не используется.
 - **D-060** — код ошибки называет причину; подмена класса отказа запрещена (INV-17).
 - **D-061** — игровой контент переводится на все восемь локалей; порог для ключей `game.*` — 100 %
   к концу миссии.
@@ -139,7 +142,7 @@ PNG и описать наблюдаемое; «по таблице символ
 
 | Шаг | Роль | Зона записи |
 |---|---|---|
-| Контракт отпечатка v2, дополнение таблиц ошибок | `Contract Architect` | `schema/**`, `docs/contracts/**`, `docs/decisions/SYN-3.md` |
+| Контракт отпечатка v2 и v1, регистрация наборов, дополнение таблиц ошибок | `Contract Architect` | `schema/**`, `docs/contracts/**`, `tests/contracts/**`, `docs/decisions/SYN-3.md` |
 | Runtime: отпечаток, ввод, диагностика, CI | `Executor Core` | `game/**`, `tests/cli/**`, `tests/runtime/**`, `tests/fixtures/**`, `.github/workflows/**`, `README.md`, `AGENTS.md`, `package.json` |
 | Анализатор литералов, локали игрового UI | `Locale Auditor` | `tools/i18n/**`, `tests/i18n/**`, `locales/**`, `docs/I18N.md` |
 | Независимый аудит V-1…V-6, V-8, V-10 | `Spec Auditor` | чтение; отчёт |
