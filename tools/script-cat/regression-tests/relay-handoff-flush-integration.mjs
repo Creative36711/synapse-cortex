@@ -25,7 +25,7 @@ const idsBlock = cut('  function promptDispatchIds(text) {', '  /** Своё с�
 const sendKeyBlock = cut('  function sendKey(text) {', '  /** Своё сообщение в транскрипте');
 const flushBlock = cut('  async function flushBeforeNavigate(', '  const norm = (x) =>');
 const receiptsBlock = cut('  const DELIVERY_RECEIPT_KEY', '  /** Уведомление и время относятся только к той очереди');
-const adoptBlock = cut('  async function adoptOrphanReview(', '  /**\n   * Досылает задание, сохранённое перед переходом');
+const adoptBlock = cut('  async function roleAddress(', '  /**\n   * Досылает задание, сохранённое перед переходом');
 const sendBlock = cut('  async function sendToRole(', '  /** Перейти на страницу роли без задания');
 const consumeBlock = cut('  async function consumePending(', '  // ───────────────────── следы прошлых попыток');
 
@@ -239,7 +239,7 @@ function makeAdopt({ page = card(), notionFails = false, nodes = [], receipts = 
     targetBranch: 'main', text: REAL, at: Date.now(), ...pendingOver,
   };
   const store = new Map([[K.pending, clone(pending)], [K.expect, null], ['cfn-delivery-receipts-v1', clone(receipts)]]);
-  const calls = { logs: [], pauses: [], reads: [], rollbacks: [], delivered: [] };
+  const calls = { logs: [], pauses: [], reads: [], rollbacks: [], delivered: [], navigations: [] };
   const env = {
     K, norm, isUuid, rt, idTime,
     C: { pendingTtlMs: 600_000, undeliveredTtlMs: 7_200_000, sendRetries: 3, tickMs: 10, insertRetries: 2 },
@@ -247,6 +247,8 @@ function makeAdopt({ page = card(), notionFails = false, nodes = [], receipts = 
     GM_setValue: (k, v) => store.set(k, clone(v)),
     roleFromPath: () => currentRole,
     roleRows: async () => [clone(ROLE)],
+    roles: async () => [clone(ROLE)],
+    navigateTo: async (role, why) => { calls.navigations.push({ role, why }); return true; },
     notion: async (method, path) => { calls.reads.push({ method, path }); if (notionFails) throw new Error('Notion offline'); return clone(page); },
     taskState: (p) => p.properties['Dispatch State']?.select?.name || '',
     taskTitle: (p) => rt(p.properties['Запрос']),
@@ -269,7 +271,7 @@ function makeAdopt({ page = card(), notionFails = false, nodes = [], receipts = 
     openDialog: () => null, domReport: () => ({}), console: { warn() {} }, Math,
   };
   const make = new Function('env', `
-    const {K, norm, isUuid, rt, idTime, C, GM_getValue, GM_setValue, roleFromPath, roleRows, notion, taskState,
+    const {K, norm, isUuid, rt, idTime, C, GM_getValue, GM_setValue, roleFromPath, roleRows, roles, navigateTo, notion, taskState,
       taskTitle, patch, userMessages, messageRaw, nodeId, releaseUndelivered, pause, log, nowIso, appReady, pendingSay,
       autoOn, sendKey, flat, composerHolds, userSaysSince, lastUserSays, captchaDialog, busySettled,
       busyLabel, ensureFreshBranch, ensureComposer, composerText, clearComposer, sleep, writePrompt, lastMessageId,
@@ -371,6 +373,9 @@ for (const [why, over] of [
   const h = makeAdopt({ nodes: [{ id: MSG, raw: REAL }], currentRole: '01a19d29-b5c1-7368-8eba-1492816dda30' });
   assert.equal(await h.consumePending(true), true);
   assert.deepEqual(h.calls.delivered, [], 'с чужой страницы задание не уходит');
+  // D-068: «открываю страницу адресата» — это переход, а не строка в журнале.
+  assert.equal(h.calls.navigations.length, 1, 'переход к адресату выполнен');
+  assert.equal(h.calls.navigations[0].role.id, ROLE.id, 'открывается страница адресата очереди');
   assert.equal(h.store.get(K.pending).text, REAL, 'очередь сохранена для страницы адресата');
   assert.equal(h.store.get(K.expect), null, 'ожидание по чужому чату не выдумывается');
 }

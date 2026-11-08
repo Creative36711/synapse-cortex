@@ -125,13 +125,27 @@
       return false;
     }
     const turnId = uid();
-    log(`Вопрос «${oneLine(item.text, 90)}» передан приёмке «${role.name}».`, false, { ntfy: "quiet" });
-    await sendToRole(role, answerPrompt(mission, role, item, turnId), "answer", item.id, {
+    // D-068: «передан» пишем только тогда, когда ход действительно поставлен в
+    // очередь. Раньше строка печаталась до отправки и оставалась правдой даже
+    // при защитном отказе `sendToRole` (дубль, запрещённый адресат, окно
+    // настроек): в журнале ход «ушёл», а в очереди его нет — и цикл молча
+    // остаётся на странице Координатора.
+    const queued = await sendToRole(role, answerPrompt(mission, role, item, turnId), "answer", item.id, {
       questionId: item.id,
       missionId: mission.id,
       turnId,
       title: "ответ на вопрос агента",
     });
+    if (!queued) {
+      log(
+        `Вопрос «${oneLine(item.text, 90)}» не передан приёмке: транспорт не поставил ход в очередь ` +
+          "(защитный отказ или окно настроек). Вопрос остаётся «Ждёт» и повторится на следующем шаге.",
+        true,
+        { ntfy: "quiet", title: "Relay: вопрос не передан" },
+      );
+      return false;
+    }
+    log(`Вопрос «${oneLine(item.text, 90)}» передан приёмке «${role.name}».`, false, { ntfy: "quiet" });
     return true;
   }
 
