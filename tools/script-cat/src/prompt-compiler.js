@@ -19,6 +19,43 @@
       CF_ARBITER_RESULT: "marker.arbiter",
     }[name] || null);
 
+    /**
+     * Total-лимит по роли — единственный источник истины.
+     *
+     * До 1.14.2 предел действовал только на пути выдачи (`DISPATCH_TOTAL` в
+     * 21-prompts.js), а план Координатора, приёмка, ответ и напоминание
+     * собирались вообще без общего предела: в телеметрии 08.11 боевой план
+     * пришёл 7271 знак, и ничто, кроме overhead, его не ограничивало. Значения
+     * уже были записаны в `docs/agents/protocol.md:44` («Executor ≤8000,
+     * Auditor ≤5500, Coordinator ≤7500, Review ≤7000, Answer ≤6000»), просто
+     * код их не применял. Теперь применяет компилятор — на всех путях сразу, а
+     * `forDelivery` задаёт свой предел только там, где нужен особый (payload).
+     *
+     * Лимит не режет данные молча (D-034): при превышении — отказ с причиной,
+     * а решение (разбить карточку, убрать повторы) остаётся за ролью.
+     */
+    const PROMPT_TOTAL = {
+      Executor: 8000, Auditor: 5500, Coordinator: 7500, Reviewer: 7000,
+      Maintainer: 3600, pilot: 4000,
+    };
+    // Профиль, у которого предел строже общего по роли: ответ на вопрос
+    // содержит сам вопрос целиком (до 12000 знаков, D-072), и «Answer ≤6000» —
+    // про инструкции, иначе вопрос не доедет.
+    const PROFILE_TOTAL = { "reviewer.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
+
+    /** Предел текста для запроса: профиль важнее роли, роль важнее общего. */
+    function totalLimit(request, profileId) {
+      const c = request || {};
+      if (c.delivery?.hardLimit) return c.delivery.hardLimit;
+      if (PROFILE_TOTAL[profileId]) return PROFILE_TOTAL[profileId];
+      if (/reminder$/.test(profileId || "")) return 1600;
+      const fn = c.role?.fn || "";
+      if (PROMPT_TOTAL[fn]) return PROMPT_TOTAL[fn];
+      // Резервная строка не должна быть больше самого щедрого предела: иначе
+      // «неизвестная роль» получила бы больше прав, чем обычный исполнитель.
+      return 9000;
+    }
+
     function metrics(text, parts) {
       const verbatimChars = parts.filter((p) => p.verbatim).reduce((a, p) => a + p.text.length, 0);
       return {
@@ -104,7 +141,9 @@
       if (profile.budget.overhead && m.overheadChars > profile.budget.overhead) {
         return err("budget_exceeded", `overhead ${m.overheadChars} > бюджета ${profile.budget.overhead} для ${profileId}`, { overhead: m.overheadChars, limit: profile.budget.overhead, blocks: breakdown });
       }
-      const hard = c.delivery?.hardLimit || 0;
+      // Предел берётся из одного места: компилятор не должен зависеть от того,
+      // помнит ли вызывающий передать `delivery.hardLimit`.
+      const hard = totalLimit(c, profileId);
       if (hard && m.chars > hard) return err("budget_exceeded", `total ${m.chars} > жёсткого лимита ${hard}`, { total: m.chars, limit: hard, blocks: breakdown });
 
       return {
@@ -175,5 +214,5 @@
       return { strategy: "pause", error: why.error || { code: "budget_exceeded", message: "не удалось собрать сообщение в лимит" } };
     }
 
-    return { compile, forDelivery, metrics, hash, reminderMarkerBlock };
+    return { compile, forDelivery, metrics, hash, reminderMarkerBlock, totalLimit, PROMPT_TOTAL, PROFILE_TOTAL };
   })();

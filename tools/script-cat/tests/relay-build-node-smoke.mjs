@@ -73,6 +73,10 @@ const bundle = readFileSync(join(scDir, 'relay.user.js'), 'utf8');
     // И ломаем настоящую проверку: так видно, что узел исполняет код, а не package.json.
     const guardPath = join(temp, 'tools/script-cat/portability-guard.mjs');
     writeFileSync(guardPath, 'process.exit(7);\n', 'utf8');
+    // Сборка в копии должна соответствовать исходникам — иначе первым упадёт
+    // scriptcat:check, и проба перестанет проверять то, ради чего написана.
+    const stale = spawnSync(process.execPath, ['build.mjs'], { cwd: join(temp, 'tools/script-cat'), encoding: 'utf8' });
+    assert.equal(stale.status, 0, 'копия собирается до подмены проверок');
     const run = spawnSync(process.execPath, [join(temp, 'tools/relay-build.mjs'), '--repo', temp, '--json', '--allow-dirty'],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
     assert.equal(run.status, 2, 'подмена npm-скриптов не спасает: узел возвращает «не допущена»');
