@@ -19,7 +19,17 @@ const from = src.indexOf('  async function dispatchTask(');
 const to = src.indexOf('  // ───────────────────────────── цикл', from);
 assert.ok(from > 0 && to > from, 'dispatchTask на месте');
 
-function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFail = false, reworkObserved = true } = {}) {
+// D-069: разбор поля и склейка файлов берутся из самого скрипта, а не копией в
+// пробе — иначе мутация в исходнике не роняет проверку.
+const utilsFrom = src.indexOf('  function driveFileIds(');
+const utilsTo = src.indexOf('  function joinPayloadFiles(', utilsFrom);
+const utilsEnd = src.indexOf('\n  }', utilsTo) + 4;
+assert.ok(utilsFrom > 0 && utilsTo > utilsFrom && utilsEnd > utilsTo, 'помощники payload на месте');
+const { driveFileIds, joinPayloadFiles } = new Function(
+  `${src.slice(utilsFrom, utilsEnd)}; return { driveFileIds, joinPayloadFiles };`,
+)();
+
+function makeHarness({ payloadId = '', fileText = '', fileTexts = null, readFails = false, checkFail = false, reworkObserved = true } = {}) {
   const calls = [];
   const store = {};
   const card = {
@@ -43,7 +53,7 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
     'notion', 'taskState', 'taskRole', 'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue', 'pause', 'K',
     'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
-    'answerStampKey', 'reworkKey', 'taskPreflight',
+    'answerStampKey', 'reworkKey', 'taskPreflight', 'driveFileIds', 'joinPayloadFiles',
     `${src.slice(from, to)}; return dispatchTask;`,
   )(
     async () => [{ id: 'agent-1', name: 'Kernel', fn: 'Executor' }],
@@ -54,7 +64,10 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
       calls.push({ action, fileId, entry: extra.entry, marker: extra.marker });
       if (action === 'read') {
         if (readFails) throw new Error('Файл недоступен');
-        return { ok: true, content: fileText };
+        const content = fileTexts && Object.prototype.hasOwnProperty.call(fileTexts, fileId)
+          ? fileTexts[fileId]
+          : fileText;
+        return { ok: true, content };
       }
       if (action === 'createLog') return { ok: true, fileId: 'LOG1' };
       return { ok: true, result: 'appended' };
@@ -98,6 +111,8 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
     3,
     (id) => `cfn-answer-stamp:${id}`,
     (id) => `cfn-rework:${id}`, async () => '',
+    driveFileIds,
+    joinPayloadFiles,
   );
   return { dispatchTask, card, calls };
 }
@@ -105,13 +120,13 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
 // ── 1. Файл есть: его текст идёт и в задание, и в журнал ───────────────────
 {
   const text = 'ПОДРОБНОЕ ЗАДАНИЕ ИЗ ФАЙЛА\nвторая строка';
-  const h = makeHarness({ payloadId: 'PAYLOAD_FILE_1', fileText: text });
+  const h = makeHarness({ payloadId: 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa', fileText: text });
   const sent = await h.dispatchTask(h.card, 'Kernel');
 
   assert.equal(sent, true, 'ход выдан');
   const read = h.calls.find((c) => c.action === 'read');
   assert.ok(read, 'файл задания прочитан');
-  assert.equal(read.fileId, 'PAYLOAD_FILE_1', 'читается именно id из карточки');
+  assert.equal(read.fileId, 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa', 'читается именно id из карточки');
   assert.ok(
     h.calls.some((c) => c.action === 'send' && c.prompt === `PROMPT[${text}]`),
     'текст файла дошёл до промпта исполнителя',
@@ -144,13 +159,47 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
 
 // ── 3. Битый id: пауза с понятной причиной, а не тихий переход на карточку ─
 {
-  const h = makeHarness({ payloadId: 'BROKEN', readFails: true });
+  const h = makeHarness({ payloadId: 'BROKENFILEaaaaaaaaaaaaaaaaaaaaaaa', readFails: true });
   await assert.rejects(
     () => h.dispatchTask(h.card, 'Kernel'),
-    /Payload не прочитан: Файл недоступен/,
+    /Payload не прочитан \(файл BROKENFILEaaaaaaaaaaaaaaaaaaaaaaa\): Файл недоступен/,
     'нечитаемый файл останавливает выдачу с причиной',
   );
   assert.ok(!h.calls.some((c) => c.action === 'send'), 'исполнителю пустышка не уходит');
+}
+
+// ── 3б. Несколько файлов в поле (боевой B1 08.11): строка «id1, id2» — это два
+// файла, а не один битый id. Раньше шлюз отвечал «Некорректный Drive file ID»,
+// отказ разбирался как сбой Notion, и ход вставал.
+{
+  const first = 'ФАЙЛ-КОНТРАКТ: таблица ошибок сцены';
+  const second = 'ФАЙЛ-ДОПОЛНЕНИЕ: карта соответствий';
+  const ids = '1dCrg0UDwIwuPCDHHBC6hXx-rSrmrf2RV, 1nzGpfiDROrv5aiMfbyW-6dzceSvPjyrT (SYN3-B0-addendum-mapping.md)';
+  const texts = {
+    '1dCrg0UDwIwuPCDHHBC6hXx-rSrmrf2RV': first,
+    '1nzGpfiDROrv5aiMfbyW-6dzceSvPjyrT': second,
+  };
+  const h = makeHarness({ payloadId: ids, fileText: '', fileTexts: texts });
+  const sent = await h.dispatchTask(h.card, 'Kernel');
+  assert.equal(sent, true, 'выдача с двумя файлами проходит');
+  const reads = h.calls.filter((c) => c.action === 'read').map((c) => c.fileId);
+  assert.deepEqual(reads, Object.keys(texts), 'каждый id прочитан отдельно, имя файла не мешает');
+  const prompt = h.calls.find((c) => c.action === 'send').prompt;
+  assert.ok(prompt.includes(first) && prompt.includes(second), 'в задании оба файла');
+  assert.match(prompt, /--- файл 1 из 2: 1dCrg0UDwIwuPCDHHBC6hXx-rSrmrf2RV ---/, 'видно, где кончается первый файл');
+  assert.match(prompt, /--- файл 2 из 2: 1nzGpfiDROrv5aiMfbyW-6dzceSvPjyrT ---/, 'и где начинается второй');
+  const log = h.calls.find((c) => c.action === 'append');
+  assert.ok(log && log.entry.includes(second), 'журнал попытки знает оба файла');
+}
+
+// ── 3в. Один файл остаётся дословным: заголовков «файл 1 из 1» в задании нет.
+{
+  const text = 'ОДИН ФАЙЛ, ДОСЛОВНО';
+  const h = makeHarness({ payloadId: 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa', fileText: text });
+  h.calls.length = 0;
+  await h.dispatchTask(h.card, 'Kernel');
+  const prompt = h.calls.find((c) => c.action === 'send').prompt;
+  assert.equal(prompt, `PROMPT[${text}]`, 'текст единственного файла не обёрнут и не обрезан');
 }
 
 // ── 4. Check=fail без наблюдённого Rework возвращается Coordinator, не паузит и не чистит следы ──
@@ -168,9 +217,23 @@ function makeHarness({ payloadId = '', fileText = '', readFails = false, checkFa
 // ── 5. Порядок: файл читается до выдачи, запись в журнал — до отправки ────
 assert.match(
   src.slice(from, to),
-  /gateway\("read", payloadId\)[\s\S]*?const prompt = executorPrompt[\s\S]*?await patch\(card\.id[\s\S]*?gateway\("append", logId[\s\S]*?sendToRole\(role, prompt/,
-  'чтение файла → проверка промпта → Running → журнал → отправка',
+  /gateway\("read", id\)[\s\S]*?const prompt = executorPrompt[\s\S]*?await patch\(card\.id[\s\S]*?gateway\("append", logId[\s\S]*?sendToRole\(role, prompt/,
+  'чтение файла (каждый id отдельно) → проверка промпта → Running → журнал → отправка',
 );
+
+// ── 4б. Отказ чтения файла называется своим именем, а не «записью в Notion».
+// Боевой разбор 08.11 показывал Мастеру «Шаг прервался на записи в Notion», хотя
+// ни одной записи не было: упало чтение файла задания.
+{
+  const cycle = readFileSync(new URL('../src/28-cycle.js', import.meta.url), 'utf8');
+  const payloadBranch = cycle.indexOf('/^Payload не прочитан/');
+  const notionFallback = cycle.indexOf('"Шаг прервался на записи в Notion."');
+  assert.ok(payloadBranch > 0, 'ветка «Payload не прочитан» есть');
+  assert.ok(notionFallback > payloadBranch, 'она проверяется раньше общего «записи в Notion»');
+  const branchText = cycle.slice(payloadBranch, notionFallback);
+  assert.match(branchText, /Payload Drive File ID/, 'Мастеру сказано, что проверить');
+  assert.match(branchText, /карточка не тронута/, 'сказано, что ход не потерян');
+}
 
 // ── 5. Координатору сказано, когда файл нужен, а когда нет ────────────────
 const { PromptCompiler, planRequest } = await import('./helpers/prompt-env.mjs');

@@ -103,7 +103,7 @@ const dispatchTask = new Function(
   'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue',
   'pause', 'K', 'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
   'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
-  'answerStampKey', 'reworkKey', 'taskPreflight', 'releaseUndelivered',
+  'answerStampKey', 'reworkKey', 'taskPreflight', 'driveFileIds', 'joinPayloadFiles', 'releaseUndelivered',
   `${src.slice(dispatchFrom, dispatchTo)}; return dispatchTask;`,
 )(
   async () => [role], async () => [role], norm, rt,
@@ -133,6 +133,9 @@ const dispatchTask = new Function(
   () => fixture.repository, (value, fallback) => String(value || fallback || '').trim(), () => 'main',
   () => null, () => '', () => {}, 3,
   (id) => `cfn-answer-stamp:${id}`, (id) => `cfn-rework:${id}`, async () => '',
+  // D-069: поле payload — список id; здесь проверяется бюджет промпта, а не разбор поля.
+  (value) => (String(value || '').match(/[A-Za-z0-9_-]{25,}/g) || []),
+  (parts) => parts.map((x) => String(x.text || '').trim()).filter(Boolean).join('\n\n'),
   async () => { throw new Error('откат Running не должен вызываться: Running не создавался'); },
 );
 const problem = await dispatchTask(card, role.name, mission);

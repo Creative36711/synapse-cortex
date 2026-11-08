@@ -484,15 +484,24 @@
     }
 
     const runId = uid();
-    const payloadId = rt(fresh.properties["Payload Drive File ID"]);
-    let payload = "";
-    if (payloadId) {
+    // 08.11, 18:34: поле «Payload Drive File ID» у B1 перечисляло два файла
+    // через запятую — и скрипт отправил шлюзу всю строку как один id, получив
+    // «Некорректный Drive file ID». Сеть и карточка были в порядке: отказ
+    // разбирался как сбой записи в Notion и ход вставал до утра. Теперь id
+    // разбираются по одному и читаются по очереди.
+    const payloadIds = driveFileIds(rt(fresh.properties["Payload Drive File ID"]));
+    const payloadId = payloadIds[0] || "";
+    const payloadParts = [];
+    for (const id of payloadIds) {
       try {
-        payload = (await gateway("read", payloadId)).content || "";
+        payloadParts.push({ id, text: (await gateway("read", id)).content || "" });
       } catch (e) {
-        throw new Error(`Payload не прочитан: ${e.message}`);
+        // Называет файл, а не только «Payload не прочитан»: в карточке их может
+        // быть несколько, и Мастеру важно знать, какой именно не открылся.
+        throw new Error(`Payload не прочитан (файл ${id}): ${e.message}`);
       }
     }
+    const payload = joinPayloadFiles(payloadParts);
     const previousLogId = rt(fresh.properties["Output Drive File ID"]);
     // D-034: снимок большого payload фиксируется до сборки сообщения. D-043:
     // сам промпт проверяется ДО журнала и Running. Иначе oversized-карточка
