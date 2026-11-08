@@ -241,8 +241,20 @@
       log(`База «Роли» не ответила при поиске Maintainer'а: ${e.message}`, true, { ntfy: "quiet" });
       return { role: null, why: `список ролей не прочитан: ${e.message}` };
     }
-    const hit = list.find((r) => r.fn === "Maintainer" && r.url) || null;
-    if (!hit) return { role: null, why: "в базе «Роли» нет активной роли с функцией Maintainer" };
+    // Статус проверяется по той же причине, по которой он назван в тексте
+    // отказа: «нет активной роли». Раньше код брал первую строку с заполненным
+    // URL и молча считал её активной — роль со статусом «Ждёт» уезжала разбор,
+    // которого Мастер ещё не разрешил (D-074 п. 3: строка и доступ — разные шаги).
+    const hit = list.find((r) => r.fn === "Maintainer" && r.url && r.status === "Активна") || null;
+    if (!hit) {
+      const seenRow = list.find((r) => r.fn === "Maintainer") || null;
+      const why = !seenRow
+        ? "в базе «Роли» нет строки с функцией Maintainer"
+        : !seenRow.url
+          ? "у роли Maintainer пуст «Agent URL» — разбор передавать некуда"
+          : `роль Maintainer есть, но «Статус» = «${seenRow.status || "пуст"}»: нужна активная строка`;
+      return { role: null, why };
+    }
     return { role: hit, why: "" };
   }
 

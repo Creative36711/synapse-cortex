@@ -35,10 +35,50 @@
 
   /** Проверка схемы и ролей только чтением, до включения фоновых сторожей. */
   async function validateProjectSchema(settings) {
+    // Варианты «Функция» живут внутри проверки: проба исполняет ровно этот
+    // срез (regression-tests/relay-project-schema-integration.mjs), и помощник,
+    // вынесенный наружу, в ней просто не существует.
+    /**
+     * Обязательные варианты «Функция» — те, что несут систему, плюс те, что уже
+     * стоят в строках.
+     *
+     * `Maintainer` сам по себе не обязателен: закулисная роль может и не быть
+     * заведена, и требовать её вариант «на всякий случай» значило бы ломать
+     * включение любому проекту без неё (D-074 требовал вариант, D-075 п. 6
+     * заменяет это правилом «вариант следует за строкой»). Если строка с
+     * `Maintainer` есть, вариант становится обязательным и дописывается сам.
+     */
+    const BASE_FUNCTIONS = ["Coordinator", "Executor", "Auditor", "Reviewer"];
+
+    function ensureFunctionOption(roleSchema, used = []) {
+      const prop = roleSchema?.["Функция"];
+      if (!prop || prop.type !== "select") return { missing: [], prop: null, required: [] };
+      const options = Array.isArray(prop.select?.options) ? prop.select.options : [];
+      const required = [...new Set([...BASE_FUNCTIONS, ...(used || []).filter(Boolean)])];
+      const missing = required.filter((fn) => !options.some((option) => String(option.name || "") === fn));
+      return { missing, prop, options, required };
+    }
+
+    /** PATCH только вариантов select «Функция»; существующие не трогаются. */
+    async function patchFunctionOptions(roleSchema, functions) {
+      const prop = roleSchema?.["Функция"];
+      const options = Array.isArray(prop?.select?.options) ? prop.select.options : [];
+      if (!options.length) return false;
+      const next = [
+        ...options.map((option) => ({ id: option.id, name: option.name, color: option.color })),
+        ...functions.filter((fn) => !options.some((option) => String(option.name || "") === fn)).map((fn) => ({ name: fn })),
+      ];
+      const headers = { Authorization: `Bearer ${C.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
+      await request("PATCH", `https://api.notion.com/v1/data_sources/${C.roles}`, headers,
+        { properties: { "Функция": { select: { options: next } } } });
+      return true;
+    }
     const headers = { Authorization: `Bearer ${settings.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
     const contracts = [
       ["Роли", C.roles, { "Роль": "title", "Функция": "select", "Статус": "select", "Agent URL": "url", "Зона записи": "rich_text", "Гейт": "rich_text", "Репозиторий": "rich_text" },
-        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer", "Maintainer"], "Статус": ["Активна"] }],
+        // «Функция» проверяется после чтения строк: вариант добавляется под
+        // существующую строку (D-075 п. 6), а не «на всякий случай».
+        { "Статус": ["Активна"] }],
       ["Миссии", C.missions, { "Миссия": "title", "Состояние": "select", "Создана": "date", "Завершена": "date", "Возвращена": "date", "Круг": "number", "Замечания": "rich_text", "Итог": "rich_text", "ТЗ URL": "url" },
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
@@ -82,7 +122,29 @@
         if (!cursor || cursors.has(cursor)) throw new Error("База «Роли» вернула неверный курсор.");
         cursors.add(cursor);
       }
-      const active = rows.map(mapRoleRow).filter((role) => role.status === "Активна");
+      const mapped = rows.map(mapRoleRow);
+      // D-075 п. 6: вариант «Функция» добавляется по факту строки роли — тем же
+      // приёмом, что «Кому» для адресата (provisionEnsureRecipientOption).
+      // Иначе включение проекта отказывает, пока вариант не добавили руками,
+      // хотя строка уже есть. Вариант списка — не право: право несёт строка.
+      //
+      // Добавляем только те значения, под которые строка действительно есть.
+      // База без строки Maintainer остаётся без варианта и честно отказывает:
+      // иначе вариант появился бы из воздуха и выглядел бы как право.
+      const rowFunctions = [...new Set(mapped.map((role) => String(role.fn || "").trim()).filter(Boolean))];
+      const fnGap = ensureFunctionOption(schemas["Роли"], rowFunctions);
+      const addable = rowFunctions.filter((fn) => fnGap.missing.includes(fn));
+      if (addable.length) {
+        await patchFunctionOptions(schemas["Роли"], addable);
+        const fresh = await request("GET", `https://api.notion.com/v1/data_sources/${C.roles}`, headers);
+        if (fresh?.properties) schemas["Роли"] = fresh.properties;
+      }
+      const stillMissing = ensureFunctionOption(schemas["Роли"], rowFunctions).missing;
+      if (stillMissing.length) {
+        throw new Error(`«Роли»: Функция: нет «${stillMissing[0]}». ` +
+          "Добавьте вариант в схему базы «Роли»: он должен следовать за строкой роли, а строка с такой функцией не читается.");
+      }
+      const active = mapped.filter((role) => role.status === "Активна");
       if (active.filter((role) => role.fn === "Coordinator").length !== 1) throw new Error("Нужен ровно один активный Coordinator.");
       if (!active.some((role) => role.fn === "Reviewer")) throw new Error("Нужна активная роль Reviewer для приёмки и вопросов.");
       if (!active.some((role) => ["Executor", "Auditor"].includes(role.fn))) throw new Error("Нужен активный исполнитель или аудитор.");

@@ -309,6 +309,41 @@ for (const [label, data] of [
   assert.equal(h.plans.length, 0);
 }
 
+// ── 10b. Критерий D-074: арбитраж по-прежнему уходит Warden ──────────────
+// Роль Maintainer (функция «Maintainer») в арбитраж не попадает ни в каком
+// порядке: арбитра берут по функции Reviewer, а не по позиции в списке. Три
+// случая — Maintainer первым, последним и единственным.
+{
+  const maint = { id: 'agent-maint', name: 'Transport Maintainer', fn: 'Maintainer', url: '/agent/maint', status: 'Активна' };
+
+  {
+    const h = harness({ roles: [maint, WARDEN, COORD, EXEC] });
+    const picked = await h.api.arbiterRole();
+    assert.equal(picked?.name, 'Warden', 'Maintainer первым в списке — арбитр всё равно Warden');
+    assert.equal(picked?.fn, 'Reviewer');
+  }
+  {
+    const h = harness({ roles: [WARDEN, COORD, EXEC, maint] });
+    const picked = await h.api.arbiterRole();
+    assert.equal(picked?.name, 'Warden', 'Maintainer последним — арбитр Warden');
+  }
+  {
+    const h = harness({ roles: [maint, COORD, EXEC] });
+    const picked = await h.api.arbiterRole();
+    assert.equal(picked, null, 'только Maintainer — арбитра нет, и подмены не происходит');
+  }
+  // На уровне решения: без Reviewer арбитраж не начинается вовсе — ни хода
+  // Maintainer'у, ни молчаливой подмены. Отсутствие арбитра обрабатывает
+  // вызывающий (пауза «нет активной роли с функцией Reviewer»).
+  {
+    const h = harness({ roles: [maint, COORD, EXEC] });
+    assert.equal(await h.api.escalateToWarden(h.pages.get(CARD), 'петля'), false,
+      'без Reviewer арбитраж не начинается: false, а не ход Maintainer-у');
+    assert.equal(h.pauses.length, 0, 'и паузу ставит вызывающий, а не этот слой');
+    assert.equal(h.sends.length, 0, 'никакой отправки Maintainer-у');
+  }
+}
+
 // ── 11. Перевыдача в dispatchTask: сначала арбитр, пауза — запасной путь ──
 {
   const file = readFileSync(new URL('../src/27-review-answers.js', import.meta.url), 'utf8');

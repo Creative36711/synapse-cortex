@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 94, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan, D-056 unbound-binding, D-067 marker-ladder, D-068 orphan-navigation, D-072 questions и четыре сюиты D-073 (heal-core, heal-flow, watchdog, relay-build-node) остаются в наборе');
+assert.equal(tests.length, 95, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan, D-056 unbound-binding, D-067 marker-ladder, D-068 orphan-navigation, D-072 questions, четыре сюиты D-073 (heal-core, heal-flow, watchdog, relay-build-node) и mission-roster D-075 остаются в наборе');
 for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
   assert.ok(tests.includes(added), `${added} suite present`);
 }

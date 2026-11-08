@@ -41,7 +41,9 @@ assert.match(prompt, /Reviewer карточку не выдавай/, 'Reviewer 
 assert.doesNotMatch(prompt, /не вправе|нельзя переводить Draft/i, 'запрета на выдачу черновика нет');
 
 // ── 2. draftLine: список, а не число ────────────────────────────────────────
-const lineFrom = src.indexOf('  function draftLine(cards, known = []) {');
+// Разбор дефекта адресата вынесен в roleDefect: его теперь используют и
+// readyLine, и reworkLine (D-075 п. 2), а не только черновики.
+const lineFrom = src.indexOf('  function roleDefect(role, known = []) {');
 const lineTo = src.indexOf('  async function coordinatorStep(');
 assert.ok(lineFrom > 0 && lineTo > lineFrom, 'draftLine на месте');
 const draftLine = new Function(
@@ -126,16 +128,20 @@ assert.ok(
 );
 
 // ── 2a. readyLine: что лежит в Ready — с ролью ─────────────────────────────
-const rFrom = src.indexOf('  function readyLine(cards) {');
+const rFrom = src.indexOf('  function readyLine(cards, known = []) {');
 const rTo = src.indexOf('  async function coordinatorStep(');
 assert.ok(rFrom > 0 && rTo > rFrom, 'readyLine на месте');
+// D-075 п. 2: readyLine принимает список ролей и называет дефект адресата,
+// поэтому в песочницу идёт и roleDefect.
 const readyLine = new Function(
-  'C', 'taskTitle', 'taskRole',
-  `${src.slice(rFrom, rTo)}; return readyLine;`,
+  'C', 'taskTitle', 'taskRole', 'norm',
+  `${src.slice(src.indexOf('  function roleDefect(role, known = []) {'), src.indexOf('  /**\n   * Что уже лежит в Ready'))}
+   ${src.slice(rFrom, rTo)}; return readyLine;`,
 )(
   { readyLineMax: 2 },
   (card) => card.properties['Запрос'].title[0].text.content,
   (card) => card.properties['Кому']?.select?.name || '',
+  (x) => String(x || '').replace(/-/g, '').toLowerCase(),
 );
 
 assert.match(readyLine([]), /Ready пуст/, 'пустой Ready назван словами');
@@ -190,8 +196,8 @@ queueOf({ id: 'm1' }).then((queue) => {
   assert.match(plan, /const directory = await roleRows\(\)/, 'и сверяется со всей базой «Роли», а не только с активными');
   assert.match(
     plan,
-    /coordinatorPrompt\(\s*mission,\s*role,\s*summary,\s*turnId,\s*note,\s*answerLine,\s*drafts,\s*readyLine\(queue\.ready\),\s*reworkLine\(queue\.rework\),\s*briefing\.openLine,\s*briefing\.answersLine,?\s*\)/s,
-    'и уходит в промпт',
+    /coordinatorPrompt\(\s*mission,\s*role,\s*summary,\s*turnId,\s*note,\s*answerLine,\s*drafts,\s*readyLine\(queue\.ready, directory\),\s*reworkLine\(queue\.rework, directory\),\s*briefing\.openLine,\s*briefing\.answersLine,?\s*\)/s,
+    'и уходит в промпт (D-075 п. 2: списки получают базу «Роли», чтобы дефект адресата был виден)',
   );
   assert.match(plan, /\$\{\(queue\.draft \|\| \[\]\)\.length\} Draft/, 'запасной счётчик тоже знает про Draft');
 

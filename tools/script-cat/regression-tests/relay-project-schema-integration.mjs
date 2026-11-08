@@ -33,8 +33,22 @@ const request = async (method, url, _headers, body) => {
   }
   const id = url.split('/').at(-1); return structuredClone(currentSchemas[id]);
 };
+// D-075 п. 6: вариант «Функция» дописывается под существующую строку, поэтому
+// валидатору нужен доступ к PATCH схемы. Проверяем это отдельным запросом в
+// `request`, а не моком самой функции: смысл в том, что PATCH уходит.
+const patches = [];
+const requestWithPatch = async (method, url, headers, body) => {
+  if (method === 'PATCH') {
+    patches.push({url, body});
+    const id = url.split('/').at(-1);
+    const prop = currentSchemas[id].properties['Функция'];
+    if (prop?.select) prop.select.options = body.properties['Функция'].select.options.map((o) => ({name:o.name}));
+    return {};
+  }
+  return request(method, url, headers, body);
+};
 const run = new Function('C','request','mapRoleRow','location','URL','githubHeaders','connectionProblem','setTimeout',
-  `${validator}\nreturn validateProjectSchema;`)(C,request,(row)=>row,{origin:'https://arena.ai'},URL,()=>({}),
+  `${validator}\nreturn validateProjectSchema;`)(C,requestWithPatch,(row)=>row,{origin:'https://arena.ai'},URL,()=>({}),
   (e)=>String(e.message || e), (fn)=>fn());
 const settings = {notion:'secret',github:'secret'};
 assert.equal((await run(settings)).ok,true);
@@ -47,6 +61,11 @@ for (const [id, {fields, options}] of Object.entries(fixture)) {
     assert.equal((await run(settings)).ok, false, `пропущено обязательное поле ${id}.${field}`);
   }
   for (const [field, names] of Object.entries(options)) for (const option of names) {
+    // D-075 п. 6: вариант «Функция» больше не обязателен сам по себе — он
+    // дописывается под существующую строку. Поэтому его отсутствие проверяется
+    // отдельными случаями ниже (со строкой проходит, без строки отказывает),
+    // а здесь цикл проверяет только варианты, которые обязаны быть всегда.
+    if (id === 'roles' && field === 'Функция') continue;
     currentSchemas = structuredClone(schemas);
     currentSchemas[id].properties[field].select.options = currentSchemas[id].properties[field].select.options.filter((value) => value.name !== option);
     assert.equal((await run(settings)).ok, false, `пропущен обязательный вариант ${id}.${field}.${option}`);
@@ -81,3 +100,57 @@ assert.match((await run(settings)).text,/отсутствует вариант/)
 currentSchemas = structuredClone(schemas); branch = 'main';
 assert.match((await run(settings)).text,/не подтвердил ветку/);
 console.log('OK: проверка схемы, select, ролей, домена, однозначности агентов и базовой ветки');
+
+// ── D-075 п. 6: вариант «Функция» добавляется под строку, а не «на всякий случай»
+{
+  // Строка Maintainer есть, варианта в схеме нет: проверка проходит и PATCH уходит.
+  currentSchemas = structuredClone(schemas);
+  currentSchemas.roles.properties['Функция'].select.options =
+    currentSchemas.roles.properties['Функция'].select.options.filter((o) => o.name !== 'Maintainer');
+  assert.equal(currentSchemas.roles.properties['Функция'].select.options.some((o) => o.name === 'Maintainer'), false);
+  currentRoles = structuredClone(allRoles).concat([
+    {name:'Transport Maintainer', fn:'Maintainer', status:'Активна', id:'maint', url:'https://arena.ai/agent/maint'},
+  ]);
+  branch = C.branch;
+  patches.length = 0;
+  const withRow = await run(settings);
+  assert.equal(withRow.ok, true, `база без варианта Maintainer, но со строкой проходит: ${withRow.text}`);
+  assert.equal(patches.length, 1, 'ровно один PATCH схемы');
+  assert.match(patches[0].url, /roles$/, 'правится база «Роли»');
+  assert.deepEqual(patches[0].body.properties['Функция'].select.options.map((o) => o.name).sort(),
+    ['Auditor','Coordinator','Executor','Maintainer','Reviewer'], 'существующие варианты сохранены, добавлен один');
+
+  // Строки нет — варианта не появляется. Maintainer при этом и не требуется:
+  // закулисной роли может не быть вовсе, и её вариант «на всякий случай» ломал
+  // бы включение любому проекту (D-075 п. 6).
+  currentSchemas = structuredClone(schemas);
+  currentSchemas.roles.properties['Функция'].select.options =
+    currentSchemas.roles.properties['Функция'].select.options.filter((o) => o.name !== 'Maintainer');
+  currentRoles = structuredClone(allRoles);
+  patches.length = 0;
+  const noRow = await run(settings);
+  assert.equal(noRow.ok, true, `без строки Maintainer не требуется: ${noRow.text}`);
+  assert.equal(patches.length, 0, 'ни одного PATCH: вариант без строки — право из воздуха');
+  assert.equal(currentSchemas.roles.properties['Функция'].select.options.some((o) => o.name === 'Maintainer'), false,
+    'вариант в схеме не появился');
+
+  // А обязательные варианты, которые несёт система, отсутствовать не могут.
+  currentSchemas = structuredClone(schemas);
+  currentSchemas.roles.properties['Функция'].select.options =
+    currentSchemas.roles.properties['Функция'].select.options.filter((o) => o.name !== 'Reviewer');
+  patches.length = 0;
+  const noReviewer = await run(settings);
+  assert.equal(noReviewer.ok, true, 'Reviewer дописывается по строке Warden');
+  assert.equal(patches.length, 1, 'ровно один PATCH');
+  assert.ok(patches[0].body.properties['Функция'].select.options.some((o) => o.name === 'Reviewer'));
+
+  // И повторный прогон после добавления варианта PATCH больше не нужен.
+  currentRoles = structuredClone(allRoles).concat([
+    {name:'Transport Maintainer', fn:'Maintainer', status:'Активна', id:'maint', url:'https://arena.ai/agent/maint'},
+  ]);
+  patches.length = 0;
+  assert.equal((await run(settings)).ok, true);
+  assert.equal(patches.length, 0, 'вариант уже есть — писать нечего');
+  currentRoles = structuredClone(allRoles);
+  currentSchemas = structuredClone(schemas);
+}

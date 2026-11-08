@@ -356,6 +356,33 @@
    * движок», а сами черновики в очереди не показывались вовсе. Теперь
    * Координатор видит свой задел и распоряжается им сам.
    */
+  /**
+   * Дефект адресата — один для любого состояния карточки (D-075 п. 2).
+   *
+   * 08.11 карточка в Ready с неактивным адресатом выглядела в промпте
+   * нормальной: список ролей читал только `draftLine` (`:1081`), а `readyLine`
+   * и `reworkLine` называли одно имя. Координатор узнавал о дефекте на выдаче,
+   * то есть в самом дорогом месте. Теперь один и тот же разбор работает у всех
+   * трёх списков, а слова — те же три случая, что в `blockedReason`.
+   */
+  function roleDefect(role, known = []) {
+    const name = String(role || "").trim();
+    if (!name) return "роль не задана";
+    const seen = new Map();
+    for (const item of known || []) {
+      if (typeof item === "string") seen.set(norm(item), { status: "Активна", url: "есть" });
+      else if (item && item.name) seen.set(norm(item.name), { status: item.status || "", url: item.url || "", fn: item.fn || "" });
+    }
+    if (!seen.size) return name;
+    const row = seen.get(norm(name));
+    if (!row) return `${name} — нет в «Ролях»`;
+    if ((row.status || "") !== "Активна") return `${name} — Статус «${row.status || "пуст"}»`;
+    if (!row.url) return `${name} — нет Agent URL`;
+    if (row.fn && !["Coordinator", "Executor", "Auditor", "Reviewer", "Maintainer"].includes(row.fn))
+      return `${name} — Функция «${row.fn}» не годится`;
+    return "";
+  }
+
   function draftLine(cards, known = []) {
     const rows = [...(cards || [])].sort((a, b) => {
       const sa = Number(a.properties?.["Sequence"]?.number ?? 0);
@@ -368,22 +395,10 @@
     // Статус «Ждёт»: общая фраза «роль не активна» прятала это, и по ней
     // нельзя было понять, чего именно не хватает. Строки принимаются двух
     // видов: имя (значит «активна») и строка базы «Роли» целиком.
-    const seen = new Map();
-    for (const item of known || []) {
-      if (typeof item === "string") seen.set(norm(item), { status: "Активна", url: "есть" });
-      else if (item && item.name) seen.set(norm(item.name), { status: item.status || "", url: item.url || "" });
-    }
-    const why = (role) => {
-      const row = seen.get(norm(role));
-      if (!row) return `${role} — нет в «Ролях»`;
-      if (row.status !== "Активна") return `${role} — Статус «${row.status || "пуст"}»`;
-      if (!row.url) return `${role} — нет Agent URL`;
-      return role;
-    };
     const who = (card) => {
       const role = taskRole(card);
-      if (!role) return "роль не задана";
-      return seen.size ? why(role) : role;
+      const defect = roleDefect(role, known);
+      return defect || role;
     };
     const shown = rows.slice(0, C.draftLineMax).map((card) => {
       const seq = card.properties?.["Sequence"]?.number;
@@ -414,7 +429,7 @@
       .sort()
       .join(",");
 
-  function readyLine(cards) {
+  function readyLine(cards, known = []) {
     const rows = [...(cards || [])].sort((a, b) => {
       const sa = Number(a.properties?.["Sequence"]?.number ?? 0);
       const sb = Number(b.properties?.["Sequence"]?.number ?? 0);
@@ -435,7 +450,10 @@
           : "",
         checkFail ? "Check=fail: результат не принят, сначала нужен Rework/разбор Warden" : "",
       ].filter(Boolean).join("; ");
-      return `${taskTitle(card)} (${taskRole(card) || "роль не задана"}, Sequence ${seq ?? "—"})${warn ? ` — ${warn}.` : ""}`;
+      const named = taskRole(card) || "";
+      const defect = roleDefect(named, known);
+      const who = defect || named || "роль не задана";
+      return `${taskTitle(card)} (${who}, Sequence ${seq ?? "—"})${warn ? ` — ${warn}.` : ""}`;
     });
     const more = rows.length > shown.length ? `; и ещё ${rows.length - shown.length}` : "";
     return `Готовы к выдаче: ${shown.join("; ")}${more}.`;
@@ -572,16 +590,18 @@
     return marks;
   };
 
-  function reworkLine(cards) {
+  function reworkLine(cards, known = []) {
     const rows = [...(cards || [])].sort((a, b) => {
       const sa = Number(a.properties?.["Sequence"]?.number ?? 0);
       const sb = Number(b.properties?.["Sequence"]?.number ?? 0);
       return sa - sb;
     });
     if (!rows.length) return "";
-    const shown = rows.slice(0, C.readyLineMax).map(
-      (card) => `${taskTitle(card)} (${taskRole(card) || "роль не задана"}) — причина: ${reworkCause(card)}`,
-    );
+    const shown = rows.slice(0, C.readyLineMax).map((card) => {
+      const named = taskRole(card) || "";
+      const who = roleDefect(named, known) || named || "роль не задана";
+      return `${taskTitle(card)} (${who}) — причина: ${reworkCause(card)}`;
+    });
     const more = rows.length > shown.length ? `; и ещё ${rows.length - shown.length}` : "";
     return (
       `На доработке (Rework): ${shown.join("; ")}${more}. ` +
@@ -977,6 +997,23 @@
         if (returned) log("Миссия возвращена, «Возврат» в «Итоге» есть — передаю на приёмку повторно.");
         return startReview(mission, fresh);
       }
+      // D-075 п. 4: до первой выдачи карточки миссии транспорт сверяет состав.
+      // Проверка стоит здесь — после разбора Submitted и до решения о выдаче:
+      // принять чужую работу некомплект не мешает, а выдать карточку роли,
+      // которой нет или которая не активна, не даёт. Раньше некомплект
+      // всплывал на самой отправке, то есть в самом дорогом месте.
+      const rosterCards = [...ready, ...(draft || [])];
+      // Вся база, а не только активные строки: по ней видно, чего именно не
+      // хватает — статуса, Agent URL или самой роли (D-075 п. 4).
+      const directoryNow = await roleRows().catch(() => []);
+      const recipientOptions = await recipientOptionNames().catch(() => []);
+      const roster = missionRoster(rosterCards, { directory: directoryNow, recipientOptions });
+      if (!roster.ok) {
+        const provisionPlan = provisionRosterRequest(roster.broken, provisionConfig(), provisionRequestState());
+        const gate = rosterGate(rosterCards, { directory: directoryNow, recipientOptions, provision: provisionPlan });
+        pause(gate.reason, { kind: "mission-roster", ref: mission.id, need: roster.broken.map((r) => r.name).join(", ") });
+        return true;
+      }
       const route = decisionRoute(decision.next, {
         roles: await roles(),
         directory: await roleRows().catch(() => []),
@@ -1105,7 +1142,7 @@
       kind: "plan", role: promptRole(role), mission: { id: mission.id, name: rt(mission.properties["Миссия"]) },
       turnId,
       note,
-      queue: { summary, ready: readyLine(queue.ready), rework: reworkLine(queue.rework), draft: drafts, answerLine, openLine: briefing.openLine, answersLine: briefing.answersLine },
+      queue: { summary, ready: readyLine(queue.ready, directory), rework: reworkLine(queue.rework, directory), draft: drafts, answerLine, openLine: briefing.openLine, answersLine: briefing.answersLine },
       delivery: { tier: "recovery" },
     });
     const fallbackText = recoveryEnvelope.ok ? recoveryEnvelope.text : summary;
@@ -1119,8 +1156,8 @@
         note,
         answerLine,
         drafts,
-        readyLine(queue.ready),
-        reworkLine(queue.rework),
+        readyLine(queue.ready, directory),
+        reworkLine(queue.rework, directory),
         briefing.openLine,
         briefing.answersLine,
       ),

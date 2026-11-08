@@ -38,6 +38,10 @@
     "handoff-kind": "transport",
     "orphan-dispatch": "transport",
     "orphan-review": "transport",
+    // По умолчанию — транспорт: чаще всего это потеря доставки (очередь и
+    // ожидание адресованы разным агентам). Если причина называет неактивную
+    // роль, роль без URL или отсутствие варианта «Кому», класс поднимается до
+    // master по тексту (HEAL_MASTER_TEXT) — править «Роли» Maintainer не вправе.
     "reviewer-task-pending": "transport",
     "reviewer-task-check": "transport",
     "dispatch-changed": "transport",
@@ -94,6 +98,12 @@
     provision: "master",
     "provision-no-admin": "master",
     "update-recovery": "master",
+    // D-075: нехватка роли — не поломка транспорта. Виды `reviewer-task-check`
+    // и `reviewer-task-pending` по умолчанию остаются за транспортом (потеря
+    // доставки), но когда причина называет неактивную роль, роль без URL или
+    // отсутствие варианта «Кому», их забирает Мастер: править «Роли»
+    // Maintainer не вправе (D-063, D-074). Признак — в HEAL_MASTER_TEXT.
+    "mission-roster": "master",
     // Пауза самовосстановления: ждём, что Мастер поставит новую сборку.
     "heal-await-update": "master",
     "heal-maintainer-done": "master",
@@ -115,18 +125,49 @@
       "ошибка сайта Arena: чинить нечего"],
   ];
 
+  /**
+   * Некомплект ролей словами паузы. Отдельно от HEAL_TEXT_RULES, потому что
+   * класс другой: там сбой Arena (`arena`), здесь решение Мастера (`master`).
+   *
+   * Почему текстом, а не видом паузы: `reviewer-task-check` ставится и на
+   * потерю доставки, и на «адресат не подтверждён среди активных». Это разные
+   * причины и разные адресаты разбора, а вид паузы в старой сборке уже стоит в
+   * журнале — по нему постфактум уже не различить. Признак берётся из причины.
+   */
+  const HEAL_MASTER_TEXT = [
+    [/Адресат рабочей очереди не найден среди активных|не найден среди активных Executor\/Auditor/i,
+      "roster-recipient", "адресат рабочей очереди не подтверждён среди активных"],
+    [/Статус|Agent URL|«Ролях»|нет варианта|вариантах «Кому»|роль не активна/i,
+      "roster-row", "роль или её строка не готовы к выдаче"],
+  ];
+
+  function healMasterMatch(kind, text) {
+    const label = String(kind || "");
+    if (label !== "reviewer-task-check" && label !== "reviewer-task-pending") return null;
+    const t = String(text || "");
+    for (const [re, reason, why] of HEAL_MASTER_TEXT) if (re.test(t)) return { reason, cls: "master", why };
+    return null;
+  }
+
   function healTextMatch(text) {
     const t = String(text || "");
     for (const [re, reason, why] of HEAL_TEXT_RULES) if (re.test(t)) return { reason, cls: "arena", why };
     return null;
   }
 
-  function healVerdict(kind, cls, why, unknown = false, reason = "") {
+  /**
+   * Вердикт. `by` — откуда взялся класс: `label` (вид паузы в таблице),
+   * `roster` (некомплект ролей в тексте причины) или `text` (капча, вход, 5xx).
+   * Без этого признака в журнале не видно, почему пауза ушла не туда, куда
+   * указывает её вид.
+   */
+  function healVerdict(kind, cls, why, unknown = false, reason = "", by = "label") {
     const info = HEAL_CLASS_INFO[cls] || HEAL_CLASS_INFO.master;
     return {
       rules: HEAL_RULES_VERSION,
       kind: String(kind || ""),
       reason: String(reason || ""),
+      by,
       cls: HEAL_CLASS_INFO[cls] ? cls : "master",
       why: String(why || ""),
       unknown: Boolean(unknown),
@@ -143,8 +184,12 @@
    */
   function classifyPause(kind, reason) {
     const key = String(kind || "").trim();
+    // Некомплект ролей проверяется раньше капчи и 5xx: текст паузы о роли может
+    // содержать что угодно («не активна»), но адресат разбора у него свой.
+    const byRoster = healMasterMatch(key, reason);
+    if (byRoster) return healVerdict(key, byRoster.cls, byRoster.why, false, byRoster.reason, "roster");
     const byText = healTextMatch(reason);
-    if (byText) return healVerdict(key, byText.cls, byText.why, false, byText.reason);
+    if (byText) return healVerdict(key, byText.cls, byText.why, false, byText.reason, "text");
     const cls = HEAL_PAUSE_CLASS[key];
     if (!cls) return healVerdict(key, "master", "вид остановки не распознан: не чиню наугад", true, key);
     return healVerdict(key, cls, HEAL_CLASS_INFO[cls].label, false, key);
