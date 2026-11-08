@@ -306,16 +306,26 @@
     refreshDecisions().catch(() => {});
   }
 
-  /** Свежие счётчики очереди: после решения Координатора старые уже неверны. */
-  async function queueOf(mission) {
-    await assertMissionBindings(mission);
+  // Свежие счётчики очереди: после решения Координатора старые уже неверны.
+  //
+  // `strict` — для хода планирования: там очередь и есть предмет решения, и
+  // карточка этой миссии без привязки действительно мешает выбрать карточку.
+  // По умолчанию чтение мягкое: карточка без привязки в другую миссию не
+  // повод останавливать приём уже полученного ответа и запись результата.
+  async function queueOf(mission, { strict = false } = {}) {
+    // Страж привязок — только у выбора очереди: приём готового ответа и запись
+    // результата не должны зависеть от чужих карточек. Вопрос «можно ли
+    // закрыть миссию» проверяется отдельно, в ветке принятия.
+    if (strict) await assertMissionBindings(mission);
+    const unbound = [];
+    const read = (state) => tasks(state, mission, { allowUnbound: !strict, unbound });
     const [submitted, running, ready, rework, draft, blocked] = await Promise.all([
-      tasks("Submitted", mission),
-      tasks("Running", mission),
-      tasks("Ready", mission),
-      tasks("Rework", mission),
-      tasks("Draft", mission),
-      tasks("Blocked", mission),
+      read("Submitted"),
+      read("Running"),
+      read("Ready"),
+      read("Rework"),
+      read("Draft"),
+      read("Blocked"),
     ]);
     // Rework запоминается ради причины в журнале: право на повторную выдачу
     // даёт указание Координатора, а следы прошлого ответа снимает `dispatchTask`
@@ -328,6 +338,9 @@
       rework,
       draft,
       blocked,
+      // Карточки этой миссии без Mission ID: их нельзя выдать, поэтому в счёт
+      // очереди они не идут, но и молчать о них нельзя.
+      unbound: [...new Map(unbound.map((row) => [row.id, row])).values()],
       summary:
         `${submitted.length} Submitted, ${running.length} Running, ${ready.length} Ready, ` +
         `${rework.length} Rework, ${draft.length} Draft, ${blocked.length} Blocked`,
@@ -676,8 +689,11 @@
       return true;
     }
 
-    await assertMissionBindings(mission);
     await releaseStalled(mission);
+    // Ход планирования читает очередь строго: без привязки карточку нельзя
+    // выдать, и `tasks` здесь честно останавливает шаг. Общего стража на входе
+    // нет: этот же код читает ответ Координатора на план, и пауза по чужой
+    // карточке не должна съедать уже полученный ответ (D-056).
     const submitted = await tasks("Submitted", mission);
     const running = await tasks("Running", mission);
     const ready = await tasks("Ready", mission);

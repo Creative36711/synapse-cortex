@@ -13,7 +13,7 @@ const cut = (from, to) => {
   assert(a >= 0 && b > a, `нет блока: ${from}`);
   return src.slice(a, b);
 };
-const questionBlock = cut('  const Q = {', '  /** Свежие счётчики очереди:');
+const questionBlock = cut('  const Q = {', '  // Свежие счётчики очереди:');
 const answerBlock = cut('  const answerQueue = () => {', '  async function dispatchTask(');
 const richText = (s) => String(s || '') ? [{ type: 'text', text: { content: String(s) } }] : [];
 const rt = (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || '').join('');

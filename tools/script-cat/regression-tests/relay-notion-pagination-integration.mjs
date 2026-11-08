@@ -12,7 +12,9 @@ function cut(a, b) {
   return src.slice(from, to);
 }
 const queryBlock = cut('  const query = async (', '  const patch =');
-const tasksBlock = cut('  async function tasks(state, mission) {', '  // ───────────────────────────── сообщения чата');
+const tasksBlock = cut('  async function tasks(state, mission, { allowUnbound = false, unbound = null } = {}) {', '  // ───────────────────────────── сообщения чата');
+// D-056: карточка без UUID считается «нашей» только если называет эту миссию.
+const namesBlock = cut('  function cardNamesMission(row, mission) {', '  /**\n   * Карточки, которые мешают');
 const reviewBlock = cut('  /** Принятые карточки списком:', '  /** Закрыть миссию.');
 const norm = (x) => String(x || '').replace(/-/g, '').toLowerCase();
 const rt = (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || '').join('');
@@ -62,11 +64,12 @@ function make({ mode = 'ok' } = {}) {
     return { results, has_more, next_cursor: has_more ? `cursor:${start + results.length}` : null };
   };
   const query = new Function('notion', `${queryBlock}\nreturn query;`)(notion);
-  const tasks = new Function('query', 'C', 'rt', 'norm', 'isUuid', 'cardMissionId', 'cardInMission', 'missionSkipSeen', 'taskTitle', 'firstLine', 'log',
-    `${tasksBlock}\nreturn tasks;`)(
+  const tasks = new Function('query', 'C', 'rt', 'norm', 'isUuid', 'cardMissionId', 'cardInMission', 'cardNamesMission', 'missionSkipSeen', 'taskTitle', 'firstLine', 'log',
+    `${namesBlock}\n${tasksBlock}\nreturn tasks;`)(
     query, { requests: 'request-db' }, rt, norm, (id) => /^[0-9a-f-]{36}$/i.test(String(id||'')),
     (row) => rt(row.properties['Mission ID']).trim(),
-    (row, m) => norm(rt(row.properties['Mission ID'])) === norm(m.id), new Set(), taskTitle,
+    (row, m) => norm(rt(row.properties['Mission ID'])) === norm(m.id),
+    (row, m) => rt(row.properties['Mission ID']).trim() === (rt(m.properties['Миссия']) || ''), new Set(), taskTitle,
     (s, n) => String(s).slice(0, n), (text) => logs.push(text),
   );
   const api = new Function('reviewerRole', 'missionRound', 'tasks', 'pause', 'uid', 'log', 'sendToRole',

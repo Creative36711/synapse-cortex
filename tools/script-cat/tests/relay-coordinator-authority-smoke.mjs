@@ -158,7 +158,7 @@ assert.match(readyLine([card('K-6', 'Executor Core', 60, 'fail')]), /Check=fail:
 }
 
 // ── 3. queueOf считает Draft ───────────────────────────────────────────────
-const qFrom = src.indexOf('  async function queueOf(mission) {');
+const qFrom = src.indexOf('  async function queueOf(mission, { strict = false } = {}) {');
 const qTo = src.indexOf('  function draftLine(cards, known = []) {');
 // 1.4.63: очередь запоминает карточки в Rework — по этой памяти транспорт
 // снимает следы прошлого ответа при повторной выдаче.
@@ -197,7 +197,7 @@ queueOf({ id: 'm1' }).then((queue) => {
 
   // ── 5. Подсказки на промах говорят про черновик, а не «создайте карточку» ─
   const routeFrom = src.indexOf('  function decisionRoute(next,');
-  const routeTo = src.indexOf('  /** Свежие счётчики очереди');
+  const routeTo = src.indexOf('  // Свежие счётчики очереди');
   const decisionRoute = new Function(
     'norm',
     `${src.slice(routeFrom, routeTo)}; return decisionRoute;`,

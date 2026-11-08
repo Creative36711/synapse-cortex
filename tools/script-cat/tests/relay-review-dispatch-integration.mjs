@@ -112,6 +112,8 @@ function harness({ reviewRequired = true } = {}) {
     const page = h.active && pages.get(h.active);
     return page && ['Активна', 'Возвращена'].includes(page.properties['Состояние']?.select?.name) ? clone(page) : null;
   };
+  // D-056: закрытие миссии спрашивает привязки отдельно — в фикстуре их нет.
+  const missionBindingBlockers = async () => h.bindingBlockers || [];
   const queueOf = async () => {
     const all = [pages.get(CARD), ...h.extraQueue];
     const by = (s) => all.filter((p) => state(p) === s).map(clone);
@@ -132,7 +134,7 @@ function harness({ reviewRequired = true } = {}) {
     norm: (x) => String(x || '').replace(/-/g, '').toLowerCase(), rt: propText, taskState: state,
     taskTitle: (p) => propText(p?.properties?.['Запрос']),
     richText: (v) => [{ type: 'text', text: { content: String(v) } }],
-    notion, patch, gateway, activeMission: currentMission, lastClosedMission: async () => clone(pages.get(MID)), queueOf,
+    notion, patch, gateway, activeMission: currentMission, lastClosedMission: async () => clone(pages.get(MID)), queueOf, missionBindingBlockers,
     messagesAfter: () => clone(h.replies), messages: () => clone(h.replies),
     roleFromPath: () => AGENT, isUserNode: () => false, nodeId: (n) => n.id, messageRaw: (n) => n.raw,
     roles: async () => [reviewer, coordinator], goTo: async (role) => calls.sends.push(role.name),
@@ -157,7 +159,7 @@ function harness({ reviewRequired = true } = {}) {
   };
   const create = new Function('env', `
     const { C, K, Date, GM_getValue, GM_setValue, norm, rt, taskState, taskTitle, richText,
-      notion, patch, gateway, activeMission, lastClosedMission, queueOf, messagesAfter, messages,
+      notion, patch, gateway, activeMission, lastClosedMission, queueOf, missionBindingBlockers, messagesAfter, messages,
       roleFromPath, isUserNode, nodeId, messageRaw, roles, goTo, log, pause, autoOn, autoSet,
       setStatus, missionKind, nowIso, oneLine, firstLine, questionInMarker, askQuestion,
       ensureMerged, prDeclined, prUrl, prRef, hasMergedClaim, prMergeConflict, rememberAnswerStamp, lastMergeCheck,

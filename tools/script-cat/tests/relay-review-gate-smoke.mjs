@@ -100,6 +100,7 @@ const api = new Function(
   'sendToRole',
   'requestPlan',
   'queueOf',
+  'missionBindingBlockers',
   'notion',
   'richText',
   'taskTitle',
@@ -145,6 +146,7 @@ ${block}
     return true;
   },
   async () => ({ submitted: [], running: [], ready: [], rework: [], draft: [], summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework, 0 Draft' }),
+  async () => [],
   async () => ({ properties: {} }),
   (value) => {
     const text = String(value == null ? '' : value);
