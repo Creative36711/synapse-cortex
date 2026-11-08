@@ -133,4 +133,25 @@ for (const [role, file] of Object.entries(roleDoc)) {
   }
 }
 
+// 8. D-076: дефект кода не выдаётся за сбой сети, и ход не теряется при сбое.
+{
+  const d076 = contract.d076;
+  assert.ok(d076, 'D-076 записан в контракт');
+  assert.match(d076.version || '', /^1\.14\.3$/, 'D-076 относится к сборке 1.14.3');
+  assert.match(d076.evidence?.probe || '', /relay-plan-recover-smoke/, 'проба названа');
+  assert.match(d076.fix || '', /planRecover/, 'снимок хода назван в контракте');
+  assert.match(d076.fix || '', /code-defect/, 'причина дефекта кода названа');
+  // Правило про код стоит первым: иначе «is not defined» съел бы более общий шаблон.
+  const heal = readFileSync(join(root, 'tools/script-cat/src/40-heal-core.js'), 'utf8');
+  const rules = heal.slice(heal.indexOf('const HEAL_TEXT_RULES = ['), heal.indexOf('const HEAL_TEXT_CLASS'));
+  const codeRule = rules.indexOf('ReferenceError');
+  assert.ok(codeRule > 0, 'правило про дефект кода есть');
+  assert.ok(codeRule < rules.indexOf('captcha'), 'и оно первое');
+  assert.match(heal, /"code-defect": "transport"/, 'дефект кода маршрутизируется в транспорт, а не в Arena');
+  // Решение записано словами, а не только в JSON.
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-076 \(1\.14\.3\)/, 'D-076 есть в журнале решений');
+  assert.match(decisions, /draft is not defined/, 'повод назван по журналу Мастера');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

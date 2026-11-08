@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.2
+// @version      1.14.3
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -74,7 +74,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "6ea880c66c0a8e1d",
+    buildFingerprint: "2f0a4d73424ea543",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -337,6 +337,12 @@
     ghToken: "cfn-github-token",
     ghAsk: "cfn-github-ask",
     lastResult: "cfn-last-result",
+    // Ответ Координатора, который уже получен и разобран, но ещё не применён
+    // (шаг Координатора снимает ожидание до применения решения, чтобы оно не
+    // применилось дважды). Если шаг сорвётся посередине, «Продолжить» найдёт
+    // ход живым и перечитает маркер из чата, а не спросит новый план — иначе
+    // задание уходило Координатору второй раз (08.11, дважды).
+    planRecover: "cfn-plan-recover",
     errSeen: "cfn-error-seen",
     step: "cfn-step-request",
     debug: "cfn-debug",
@@ -694,7 +700,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.2";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.3";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8472,6 +8478,9 @@
       pending: GM_getValue(K.pending, null),
       expect: GM_getValue(K.expect, null),
       last: GM_getValue(K.lastSend, null),
+      // Ход Координатора, чей ответ получен, но не применён (см. 25-legacy-adr):
+      // Мастер должен видеть его в «Снять ход?», а не узнавать о нём по паузе.
+      recover: GM_getValue(K.planRecover, null),
     };
   }
 
@@ -8489,6 +8498,9 @@
           (state.expect.sentAt ? "" : ", без отметки отправки"),
       );
     }
+    if (state.recover?.expect) {
+      parts.push(`ответ Координатора получен, но не применён (turn ${state.recover.expect.turnId || "?"})`);
+    }
     if (state.last) parts.push("защита от повторов");
     return parts.join("; ");
   }
@@ -8499,6 +8511,9 @@
     GM_setValue(K.pending, null);
     GM_setValue(K.expect, null);
     GM_setValue(K.lastSend, null);
+    // Снимок недоприменённого хода — часть хода: ↺ снимает его вместе с
+    // очередью и ожиданием, иначе «Продолжить» вернул бы снятое Мастером.
+    GM_setValue(K.planRecover, null);
     GM_setValue("cfn-plan-at", 0);
     GM_setValue(K.step, false);
     GM_setValue(K.stateV, SCRIPT_VERSION);
@@ -13388,6 +13403,13 @@
     const running = await tasks("Running", mission);
     const ready = await tasks("Ready", mission);
     const rework = await tasks("Rework", mission);
+    // Draft нужен гейту состава (D-075 п. 4): некомплект проверяется по всем
+    // карточкам, которые ещё не выданы, включая черновики. Без этого чтения
+    // `draft` в гейте не было объявлено вовсе, и ReferenceError улетал в общий
+    // catch — 09.11 так дважды подряд после маркера Координатора (08.11 00:49 и
+    // 01:00) цикл объявлял «временный сбой» и повторял отправку задания.
+    // Чтение мягкое: черновик не повод останавливать уже полученный ответ.
+    const draft = await tasks("Draft", mission).catch(() => []);
 
     if (expect && (expect.kind === "plan" || expect.kind === "reminder")) {
       const decision = messagesAfter(expect.watermark)
@@ -13473,6 +13495,14 @@
       const sameMission = !decision.mission_id || norm(decision.mission_id) === norm(mission.id);
       const gotTurn = String(decision.turn_id || "").trim();
       const sameTurn = !expect.turnId || !gotTurn || norm(gotTurn) === norm(expect.turnId);
+      // Ожидание снимается до применения решения: иначе сбой посередине
+      // применит его дважды. Но снимать его «в никуда» нельзя — 08.11 сбой
+      // «draft is not defined» случился сразу после найденного маркера, и ход
+      // остался без ожидания при живом ответе в чате: «Продолжить» не мог
+      // перечитать ничего, а «Шаг» спрашивал новый план, то есть отправлял
+      // задание Координатору второй раз. Кладём снимок хода рядом: если шаг
+      // сорвётся, восстановление вернёт ожидание (см. 28-cycle.js, catch).
+      GM_setValue(K.planRecover, { expect, missionId: mission.id, at: Date.now() });
       GM_setValue(K.expect, null);
       if (!sameMission) {
         pause(
@@ -13772,6 +13802,9 @@
       return false;
     }
     GM_setValue("cfn-plan-at", Date.now());
+    // Новый план отменяет снимок недоприменённого ответа: он относится к
+    // прошлому ходу, и восстанавливать его рядом с новым ожиданием нельзя.
+    GM_setValue(K.planRecover, null);
 
     const summary =
       queue.summary ||
@@ -16682,6 +16715,14 @@
    * HEAL_CLASS_INFO: иначе «капча» попала бы в классы как отдельная сущность.
    */
   const HEAL_TEXT_RULES = [
+    // Дефект собственного кода — не «сбой сети». 08.11 цикл дважды объявил
+    // «временный сбой транспорта или сети» с текстом «draft is not defined»:
+    // это ReferenceError в нашем же файле, и повтором отправки он не лечится —
+    // повторы лишь заново спрашивали Координатора, пока ход стоял. Такой сбой
+    // уходит Maintainer'у (он разбирает причину и предлагает дифф, D-027/D-074),
+    // а класс «временный» остаётся только у настоящих обрывов.
+    [/ReferenceError|TypeError|SyntaxError|is not defined|is not a function|Cannot read propert|Cannot access /i,
+      "code-defect", "дефект сборки: ошибка в коде транспорта, повтором не лечится"],
     [/captcha|recaptcha|security verification|подтвердите, что вы человек|капч/i, "captcha",
       "капча: без человека сообщение не уйдёт"],
     [/войдите|авторизац|session expired|sign[ -]?in|unauthorized|\b401\b/i, "auth",
@@ -16714,9 +16755,21 @@
     return null;
   }
 
+  /**
+   * Класс по тексту причины. У правил он разный: капча, вход и 5xx — сбой Arena
+   * (чинить нечего), а дефект собственного кода — транспорт, у него есть дифф и
+   * проба. Одно «arena» на все случаи отправляло бы ReferenceError в «сайт
+   * Arena виноват» и не звало Maintainer'а.
+   */
+  const HEAL_TEXT_CLASS = {
+    "code-defect": "transport",
+  };
+
   function healTextMatch(text) {
     const t = String(text || "");
-    for (const [re, reason, why] of HEAL_TEXT_RULES) if (re.test(t)) return { reason, cls: "arena", why };
+    for (const [re, reason, why] of HEAL_TEXT_RULES) {
+      if (re.test(t)) return { reason, cls: HEAL_TEXT_CLASS[reason] || "arena", why };
+    }
     return null;
   }
 
@@ -18330,9 +18383,52 @@
                 : e && e.relay === "notion" || networkish(raw)
                   ? "Notion не ответил: сеть или блокировка запроса. Запись не сделана."
               : "Шаг прервался на записи в Notion.";
+      // Шаг Координатора снимает ожидание ДО применения решения (чтобы решение не
+      // применилось дважды). Если шаг сорвётся между этими двумя моментами —
+      // 08.11 так было дважды, «draft is not defined» сразу после найденного
+      // маркера, — ответ уже лежит в чате, но не применён, а ожидания нет:
+      // «Продолжить» не перечитывал ничего, а следующий «Шаг» спрашивал новый
+      // план, то есть отправлял задание Координатору второй раз. Снимок хода
+      // возвращает ожидание, и обещание «перечитает ответ» снова правда.
+      // Возврат — только при пустом ожидании (живое главнее), только для свежего
+      // снимка и только если маркер правда есть в чате после его водяного знака:
+      // иначе к давно применённому ходу вернулось бы его же решение.
+      let recovered = false;
+      try {
+        if (!GM_getValue(K.expect, null)) {
+          const snap = GM_getValue(K.planRecover, null);
+          const snapFresh = snap && snap.expect && Number(snap.at) && Date.now() - Number(snap.at) < 15 * 60_000;
+          const snapHasReply = snapFresh && messagesAfter(snap.expect.watermark || "")
+            .some((m) => Boolean(parseMarker(m.raw, "CF_COORDINATOR_RESULT")));
+          if (snapFresh && snapHasReply) {
+            GM_setValue(K.expect, snap.expect);
+            GM_setValue(K.planRecover, null);
+            recovered = true;
+            // Троттлинг плана снимается: ответ уже в чате, ждать минуту незачем.
+            GM_setValue("cfn-plan-at", 0);
+            log(
+              `Ответ Координатора получен, но решение не применилось: ожидание хода восстановлено ` +
+                `(turn ${snap.expect.turnId || "?"}). «Продолжить» перечитает ответ, второй раз задание не уйдёт.`,
+              false,
+              { ntfy: "quiet", title: "Relay: ожидание восстановлено" },
+            );
+          }
+        }
+      } catch (recoverErr) {
+        // Сбой внутри восстановления не должен съедать паузу: причина важнее.
+        dbg("восстановление хода не удалось", recoverErr && recoverErr.message);
+      }
+      const stillWaiting = Boolean(GM_getValue(K.expect, null));
       pause(
-        `Цикл остановлен. ${plain} Ход не потерян: очередь и карточка на месте, ` +
-          `после «Продолжить» скрипт перечитает ответ.\nТехнически: ${raw}`,
+        `Цикл остановлен. ${plain} ` +
+          (recovered
+            ? "Ход не потерян: полученный ответ и ожидание восстановлены, после «Продолжить» скрипт перечитает ответ, второй раз задание не уйдёт."
+            : stillWaiting
+              ? "Ход не потерян: очередь и карточка на месте, после «Продолжить» скрипт перечитает ответ."
+              : "Ответ агента получен, но не применён, а ожидание хода уже снято: «Продолжить» его не " +
+                "перечитает и заново задание не отправит. Ход и карточки на месте — разберите причину " +
+                "и нажмите «Продолжить»: новый план будет запрошен только по вашему «Шаг».") +
+          `\nТехнически: ${raw}`,
         { kind: "error" },
       );
     } finally {
