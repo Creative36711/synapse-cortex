@@ -117,6 +117,14 @@
    * HEAL_CLASS_INFO: иначе «капча» попала бы в классы как отдельная сущность.
    */
   const HEAL_TEXT_RULES = [
+    // Дефект собственного кода — не «сбой сети». 08.11 цикл дважды объявил
+    // «временный сбой транспорта или сети» с текстом «draft is not defined»:
+    // это ReferenceError в нашем же файле, и повтором отправки он не лечится —
+    // повторы лишь заново спрашивали Координатора, пока ход стоял. Такой сбой
+    // уходит Maintainer'у (он разбирает причину и предлагает дифф, D-027/D-074),
+    // а класс «временный» остаётся только у настоящих обрывов.
+    [/ReferenceError|TypeError|SyntaxError|is not defined|is not a function|Cannot read propert|Cannot access /i,
+      "code-defect", "дефект сборки: ошибка в коде транспорта, повтором не лечится"],
     [/captcha|recaptcha|security verification|подтвердите, что вы человек|капч/i, "captcha",
       "капча: без человека сообщение не уйдёт"],
     [/войдите|авторизац|session expired|sign[ -]?in|unauthorized|\b401\b/i, "auth",
@@ -149,9 +157,21 @@
     return null;
   }
 
+  /**
+   * Класс по тексту причины. У правил он разный: капча, вход и 5xx — сбой Arena
+   * (чинить нечего), а дефект собственного кода — транспорт, у него есть дифф и
+   * проба. Одно «arena» на все случаи отправляло бы ReferenceError в «сайт
+   * Arena виноват» и не звало Maintainer'а.
+   */
+  const HEAL_TEXT_CLASS = {
+    "code-defect": "transport",
+  };
+
   function healTextMatch(text) {
     const t = String(text || "");
-    for (const [re, reason, why] of HEAL_TEXT_RULES) if (re.test(t)) return { reason, cls: "arena", why };
+    for (const [re, reason, why] of HEAL_TEXT_RULES) {
+      if (re.test(t)) return { reason, cls: HEAL_TEXT_CLASS[reason] || "arena", why };
+    }
     return null;
   }
 

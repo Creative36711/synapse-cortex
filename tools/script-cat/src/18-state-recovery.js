@@ -12,6 +12,9 @@
       pending: GM_getValue(K.pending, null),
       expect: GM_getValue(K.expect, null),
       last: GM_getValue(K.lastSend, null),
+      // Ход Координатора, чей ответ получен, но не применён (см. 25-legacy-adr):
+      // Мастер должен видеть его в «Снять ход?», а не узнавать о нём по паузе.
+      recover: GM_getValue(K.planRecover, null),
     };
   }
 
@@ -29,6 +32,9 @@
           (state.expect.sentAt ? "" : ", без отметки отправки"),
       );
     }
+    if (state.recover?.expect) {
+      parts.push(`ответ Координатора получен, но не применён (turn ${state.recover.expect.turnId || "?"})`);
+    }
     if (state.last) parts.push("защита от повторов");
     return parts.join("; ");
   }
@@ -39,6 +45,9 @@
     GM_setValue(K.pending, null);
     GM_setValue(K.expect, null);
     GM_setValue(K.lastSend, null);
+    // Снимок недоприменённого хода — часть хода: ↺ снимает его вместе с
+    // очередью и ожиданием, иначе «Продолжить» вернул бы снятое Мастером.
+    GM_setValue(K.planRecover, null);
     GM_setValue("cfn-plan-at", 0);
     GM_setValue(K.step, false);
     GM_setValue(K.stateV, SCRIPT_VERSION);

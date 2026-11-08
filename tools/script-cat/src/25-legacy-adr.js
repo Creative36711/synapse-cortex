@@ -718,6 +718,13 @@
     const running = await tasks("Running", mission);
     const ready = await tasks("Ready", mission);
     const rework = await tasks("Rework", mission);
+    // Draft нужен гейту состава (D-075 п. 4): некомплект проверяется по всем
+    // карточкам, которые ещё не выданы, включая черновики. Без этого чтения
+    // `draft` в гейте не было объявлено вовсе, и ReferenceError улетал в общий
+    // catch — 09.11 так дважды подряд после маркера Координатора (08.11 00:49 и
+    // 01:00) цикл объявлял «временный сбой» и повторял отправку задания.
+    // Чтение мягкое: черновик не повод останавливать уже полученный ответ.
+    const draft = await tasks("Draft", mission).catch(() => []);
 
     if (expect && (expect.kind === "plan" || expect.kind === "reminder")) {
       const decision = messagesAfter(expect.watermark)
@@ -803,6 +810,14 @@
       const sameMission = !decision.mission_id || norm(decision.mission_id) === norm(mission.id);
       const gotTurn = String(decision.turn_id || "").trim();
       const sameTurn = !expect.turnId || !gotTurn || norm(gotTurn) === norm(expect.turnId);
+      // Ожидание снимается до применения решения: иначе сбой посередине
+      // применит его дважды. Но снимать его «в никуда» нельзя — 08.11 сбой
+      // «draft is not defined» случился сразу после найденного маркера, и ход
+      // остался без ожидания при живом ответе в чате: «Продолжить» не мог
+      // перечитать ничего, а «Шаг» спрашивал новый план, то есть отправлял
+      // задание Координатору второй раз. Кладём снимок хода рядом: если шаг
+      // сорвётся, восстановление вернёт ожидание (см. 28-cycle.js, catch).
+      GM_setValue(K.planRecover, { expect, missionId: mission.id, at: Date.now() });
       GM_setValue(K.expect, null);
       if (!sameMission) {
         pause(
@@ -1102,6 +1117,9 @@
       return false;
     }
     GM_setValue("cfn-plan-at", Date.now());
+    // Новый план отменяет снимок недоприменённого ответа: он относится к
+    // прошлому ходу, и восстанавливать его рядом с новым ожиданием нельзя.
+    GM_setValue(K.planRecover, null);
 
     const summary =
       queue.summary ||
