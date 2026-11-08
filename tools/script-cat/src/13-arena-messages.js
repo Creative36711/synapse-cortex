@@ -335,6 +335,26 @@
         /* пробуем следующий вариант */
       }
     }
+    // Ступень 4: «почти JSON». Агент пишет по памяти и ставит одинарные
+    // кавычки, типографские кавычки вокруг ключа или запятую перед закрытием.
+    // Это всё ещё его ответ с его ID — отказываться от него из-за кавычки
+    // значит звать Мастера там, где работа уже сделана.
+    const loose = variants
+      .map((text) =>
+        text
+          .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+          .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+          .replace(/,\s*([}\]])/g, "$1")
+          .replace(/([{,]\s*)'([^'\\\n]{1,80})'(\s*:)/g, '$1"$2"$3')
+          .replace(/(:\s*)'([^'\\\n]*?)'(\s*[,}])/g, '$1"$2"$3'),
+      );
+    for (const text of loose) {
+      try {
+        return JSON.parse(text);
+      } catch {
+        /* следующий вариант */
+      }
+    }
     return null;
   }
 
@@ -367,6 +387,116 @@
   }
 
   /**
+   * «Лестница» чтения маркера (D-067).
+   *
+   * 07.11.2026, 16:56. Координатор ответил по делу, но последняя строка была
+   * JSON-ом без имени маркера:
+   *   {"next":"Contract Architect","question":{"id":"SYN3-ADR-V2-FRAMES-0",…}}
+   * Разбор искал только литерал `CF_COORDINATOR_RESULT`, не находил его — и
+   * цикл трижды просил «не хватило последней строки», хотя строка была. Агент
+   * повторял ровно тот же хвост, и через два напоминания шаг встал на паузу
+   * при полностью информативном ответе.
+   *
+   * Поэтому маркер ищется по ступеням, от строгой к мягкой:
+   *   1. точное имя + JSON (как было);
+   *   2. имя написано иначе — регистр, дефисы, подчёркивания, лишние пробелы;
+   *   3. имени нет, но JSON несёт характерный набор ключей этого маркера;
+   *   4. «почти JSON» — разбор в `markerJson`.
+   *
+   * Мягкие ступени ничего не разрешают сами по себе: идентичность (ID этой
+   * выдачи, mission_id этой миссии, next — существующая роль) по-прежнему
+   * проверяет вызывающий, и его отказ остаётся отказом. Поэтому ступени идут
+   * после строгой: разбор, а не доверчивость.
+   */
+  // Пары ключей — «подпись» маркера: по ней узнаём JSON без имени. Порядок
+  // важен: первым идёт более узкая подпись, иначе арбитраж с dispatch_id был бы
+  // принят за сдачу карточки.
+  const MARKER_STEPS = {
+    CF_ANSWER_RESULT: [["question_id"]],
+    CF_AGENT_PROVISION_RESULT: [["request_id"], ["jobs"]],
+    CF_ARBITER_RESULT: [["verdict", "action"], ["action", "fix"]],
+    CF_REVIEW_RESULT: [["verdict"]],
+    // У сдачи карточки нет вердикта: вердикт — это приёмка или арбитраж, и
+    // подписи ниже не пересекаются с ними именно поэтому (без этого вердикт с
+    // dispatch_id/run_id засчитывался бы как ответ исполнителя — проверено
+    // пробой relay-review-dispatch-integration).
+    CF_AGENT_RESULT: [["dispatch_id", "status"], ["dispatch_id", "run_id"], ["dispatch", "run"], ["run_id", "status"]],
+    CF_COORDINATOR_RESULT: [["next"]],
+  };
+  const MARKER_NAMES = Object.keys(MARKER_STEPS);
+
+  /** Похож ли объект на этот маркер: характерный набор ключей. */
+  const looksLikeMarker = (obj, name) => {
+    const o = obj && typeof obj === "object" && !Array.isArray(obj) ? obj : null;
+    const pairs = MARKER_STEPS[name] || [];
+    if (!o || !pairs.length) return false;
+    if (Object.keys(o).length > 14) return false;
+    return pairs.some((keys) => keys.every((k) => k in o));
+  };
+
+  /** Объект подходит хоть одному маркеру — и если да, то какому (по порядку). */
+  const markerOwner = (obj) => MARKER_NAMES.find((name) => looksLikeMarker(obj, name)) || "";
+
+  /**
+   * Последний настоящий JSON-объект текста: ответ мог быть без имени, но с JSON.
+   *
+   * Берём `{` только на нулевой глубине. Иначе «последняя скобка» оказывается
+   * вложенным объектом: у живого ответа Координатора
+   * `{"next":…,"question":{"id":…,"default":"A"}}` разбор доставал внутренний
+   * `question` — и вместо решения получался «JSON без next».
+   */
+  function lastJsonObject(text) {
+    const src = String(text || "");
+    const starts = [];
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < src.length; i += 1) {
+      const ch = src[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") {
+        if (depth === 0) starts.push(i);
+        depth += 1;
+      } else if (ch === "}") {
+        depth = Math.max(0, depth - 1);
+      }
+    }
+    for (let k = starts.length - 1; k >= 0; k -= 1) {
+      const raw = braceJson(src.slice(starts[k]));
+      const obj = markerJson(raw);
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) return { obj, raw };
+    }
+    return null;
+  }
+
+  /**
+   * Имя маркера в мягком написании: `cf-coordinator-result`, `CF COORDINATOR
+   * RESULT`, `CF_COORDINATOR_RESULT`. Возвращает позицию находки или -1.
+   *
+   * Ступень 2 нужна из-за живых случаев: агент «переписывает» имя по-своему и
+   * получает «маркера нет» при готовом решении.
+   */
+  function looseMarkerAt(text, name) {
+    const src = String(text || "");
+    const core = name.replace(/^CF_/, "");
+    const pattern = core.split("_").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s_-]*");
+    const rx = new RegExp(`CF[\\s_-]*${pattern}`, "gi");
+    let last = -1;
+    let m;
+    while ((m = rx.exec(src))) {
+      last = m.index;
+      if (m[0].length === 0) rx.lastIndex += 1;
+    }
+    return last;
+  }
+
+  /**
    * Почему последний разбор не сложился: по имени маркера храним причину и
    * начало отвергнутого JSON. Журналу это нужно, чтобы «маркер есть, но он
    * отвергнут как шаблон» не сливалось с «маркера нет» — разные беды и чинятся
@@ -379,6 +509,12 @@
       .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\u00a0/g, " ")
       .replace(/\r\n?/g, "\n");
+    if (!src.trim()) {
+      delete markerNotes[name];
+      return null;
+    }
+
+    // ── ступень 1: точное имя + JSON (прежнее поведение, без изменений) ──
     let from = src.length;
     let rejected = "";
     while (from > 0) {
@@ -393,20 +529,76 @@
       if (obj && !rejected) rejected = raw.replace(/\s+/g, " ").trim().slice(0, 160);
       from = at;
     }
-    if (rejected) markerNotes[name] = { reason: "placeholder", sample: rejected };
-    else delete markerNotes[name];
+    if (rejected) {
+      markerNotes[name] = { reason: "placeholder", sample: rejected, rung: 1 };
+      return null;
+    }
+
+    // ── ступень 2: имя в другом написании ──
+    const loose = looseMarkerAt(src, name);
+    if (loose >= 0) {
+      const raw = braceJson(src.slice(loose));
+      const obj = markerJson(raw);
+      if (obj && !isPlaceholderMarker(obj)) {
+        markerNotes[name] = { reason: "loose-name", rung: 2 };
+        return obj;
+      }
+    }
+
+    // ── ступень 3: имени нет, но JSON несёт ключи этого маркера ──
+    const tail = lastJsonObject(src);
+    if (tail && !isPlaceholderMarker(tail.obj)) {
+      const owner = markerOwner(tail.obj);
+      // JSON засчитывается только за своим маркером: подпись должна совпасть
+      // именно с ожидаемым. Чужой JSON (вердикт вместо сдачи, сдача вместо
+      // решения) — не ответ на это ожидание, и подменять его нельзя.
+      if (owner === name) {
+        markerNotes[name] = { reason: "bare-json", rung: 3 };
+        return tail.obj;
+      }
+      if (owner) {
+        markerNotes[name] = { reason: "foreign-json", owner, sample: JSON.stringify(tail.obj).slice(0, 160), rung: 3 };
+        return null;
+      }
+    }
+
+    delete markerNotes[name];
     return null;
   }
 
   /** Пояснение к «маркера нет», если маркер был, но его отверг разбор. */
   const markerRejectHint = (name) => {
     const note = markerNotes[name];
-    if (!note || note.reason !== "placeholder") return "";
-    return (
-      ` В ответе есть ${name}, но разбор счёл его шаблоном из задания` +
-      `${note.sample ? ` (${note.sample})` : ""} — это дефект разбора, а не ответ агента.`
-    );
+    if (!note) return "";
+    if (note.reason === "placeholder") {
+      return (
+        ` В ответе есть ${name}, но разбор счёл его шаблоном из задания` +
+        `${note.sample ? ` (${note.sample})` : ""} — это дефект разбора, а не ответ агента.`
+      );
+    }
+    if (note.reason === "foreign-json") {
+      return (
+        ` Последний JSON в ответе — ${note.owner || "другой маркер"}` +
+        `${note.sample ? ` (${note.sample})` : ""}: он не считается ответом на это ожидание.`
+      );
+    }
+    return "";
   };
+
+  /**
+   * Что чинить: короткая причина для напоминания.
+   *
+   * Напоминание «не хватило последней строки» бесполезно, если строка есть, а
+   * в ней нет имени: агент видит свой JSON и повторяет его же. Поэтому причина
+   * называется точно, и по ней собирается отдельный текст напоминания.
+   */
+  const MARKER_REJECT_LABELS = {
+    "bare-json": "no-name",
+    "loose-name": "loose-name",
+    "foreign-json": "foreign-json",
+    placeholder: "placeholder",
+  };
+  const markerRejectReason = (name) => MARKER_REJECT_LABELS[markerNotes[name]?.reason] || "";
 
   /** Короткая подпись элемента для журнала: без разметки и лишнего текста. */
   const shortLabel = (el) =>

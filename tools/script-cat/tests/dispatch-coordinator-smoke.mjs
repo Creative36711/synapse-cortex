@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 88, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan and D-056 unbound-binding suites remain in the suite');
+assert.equal(tests.length, 89, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan, D-056 unbound-binding and D-067 marker-ladder suites remain in the suite');
 for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
   assert.ok(tests.includes(added), `${added} suite present`);
 }
@@ -33,6 +33,7 @@ const currentContractCompanions = [
   'relay-reply-boundary-smoke.mjs',
   'relay-coordinator-turn-smoke.mjs',
   'relay-coordinator-marker-smoke.mjs',
+  'relay-marker-ladder-smoke.mjs',
   'relay-coordinator-authority-smoke.mjs',
   'relay-marker-id-smoke.mjs',
   'relay-roles-cache-smoke.mjs',

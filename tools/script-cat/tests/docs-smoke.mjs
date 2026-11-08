@@ -36,6 +36,11 @@ assert.equal(contract.d053?.budgetsRaised, false, 'D-053 не поднимал �
 assert.match(contract.d053?.protocolNote || '', /остаётся 1\.11/, 'D-053: версия контракта не менялась');
 assert.match(contract.d053?.fix || '', /escalateToWarden/, 'D-053: петля уходит арбитру');
 assert.match(contract.d053?.safety || '', /снимается только человеком/, 'D-053: паузу снимает только человек');
+// D-067 внутренний: формат маркера и бюджеты не менялись, чтение — мягче.
+assert.equal(contract.d067?.budgetsRaised, false, 'D-067 не поднимал бюджеты');
+assert.match(contract.d067?.protocolNote || '', /остаётся 1\.11/, 'D-067 транспорт-внутренний');
+assert.match(contract.d067?.fix || '', /no-name/, 'D-067: дефект назван по имени');
+assert.match(contract.d067?.safety || '', /не ослаблена|не подставляется/, 'D-067: идентичность не ослаблена');
 assert.equal(contract.markers?.CF_ARBITER_RESULT?.role, 'Reviewer', 'D-053: арбитр — роль приёмки');
 assert.deepEqual(contract.markers?.CF_ARBITER_RESULT?.required, ['dispatch_id', 'turn_id', 'verdict'],
   'D-053: маркер арбитра несёт ID этой карточки и решения');
