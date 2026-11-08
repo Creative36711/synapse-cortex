@@ -105,7 +105,10 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
     taskLogEntry: (card, role, payload, run) => `journal:${card.id}:${role.name}:${payload}:${run}`,
     executorPrompt: (card, role, payload, logId, runId) => `assignment:${card.id}:${role.name}:${payload}:${logId}:${runId}`,
     releaseUndelivered: async () => { throw new Error('unexpected rollback'); },
-    taskPreflight: async () => '', textHash: (text) => String(text), lastMessageId: () => '', messages: () => [], nodeId: (node) => node.id,
+    taskPreflight: async () => '',
+    driveFileIds: (value) => (String(value || '').match(/[A-Za-z0-9_-]{25,}/g) || []),
+    joinPayloadFiles: (parts) => parts.map((x) => String(x.text || '').trim()).filter(Boolean).join('\n\n'),
+    textHash: (text) => String(text), lastMessageId: () => '', messages: () => [], nodeId: (node) => node.id,
     dbg: () => {}, setStatus: () => {}, setTimeout: () => {}, tick: () => {},
     // D-045: транспорт ждёт подтверждения записей перед уходом со страницы.
     flushBeforeNavigate: async (keys) => { calls.flushes.push(clone(keys)); return true; },
@@ -118,7 +121,7 @@ function makeDispatch({ active = all, directory = all, freshCard = fixture(), di
       taskTitle, taskState, taskRole, taskTargetRepository, reworkSeen, profileSessionRepo, canonicalTargetRepository, profileRepoBranch,
       redispatchClearProps, redispatchWhy, noteRedispatch, REDISPATCH_LIMIT,
       answerStampKey, reworkKey, pause, log, uid, nowIso, taskLogEntry, executorPrompt,
-      releaseUndelivered, taskPreflight, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location,
+      releaseUndelivered, taskPreflight, driveFileIds, joinPayloadFiles, textHash, lastMessageId, messages, nodeId, dbg, setStatus, setTimeout, tick, location,
       flushBeforeNavigate, handoffKeys, recordPromptAttempt} = env;
     ${send}\n${dispatch}\nreturn { sendToRole, dispatchTask };`);
   return { ...make(env), storage, calls, freshCard };
@@ -171,13 +174,13 @@ for (const directory of [
 for (const role of [kernel, auditor]) {
   const freshCard = fixture(role.name);
   freshCard.properties['Output Drive File ID'] = rich('OLD-LOG');
-  freshCard.properties['Payload Drive File ID'] = rich('ACTUAL-PAYLOAD');
+  freshCard.properties['Payload Drive File ID'] = rich('ACTUALPAYLOADaaaaaaaaaaaaaaaaaaaa');
   const staleCard = fixture(role.name);
   staleCard.properties['Payload Drive File ID'] = rich('STALE-PAYLOAD');
   const h = makeDispatch({ freshCard });
   assert.equal(await h.dispatchTask(staleCard, role.name, { id: 'mission-1' }), true);
   assert.deepEqual(h.calls.roleReads, [{ fresh: true, requireFresh: true }]);
-  assert.equal(h.calls.gateway.find((c) => c.action === 'read').fileId, 'ACTUAL-PAYLOAD');
+  assert.equal(h.calls.gateway.find((c) => c.action === 'read').fileId, 'ACTUALPAYLOADaaaaaaaaaaaaaaaaaaaa');
   const create = h.calls.gateway.find((c) => c.action === 'createLog');
   assert.deepEqual(create.payload, { dispatchId: 'card-1', runId: 'run-new' });
   const append = h.calls.gateway.find((c) => c.action === 'append');

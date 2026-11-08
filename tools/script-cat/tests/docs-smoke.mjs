@@ -41,6 +41,12 @@ assert.equal(contract.d067?.budgetsRaised, false, 'D-067 не поднимал �
 assert.match(contract.d067?.protocolNote || '', /остаётся 1\.11/, 'D-067 транспорт-внутренний');
 assert.match(contract.d067?.fix || '', /no-name/, 'D-067: дефект назван по имени');
 assert.match(contract.d067?.safety || '', /не ослаблена|не подставляется/, 'D-067: идентичность не ослаблена');
+assert.equal(contract.d069?.budgetsRaised, false, 'D-069 не поднимал бюджеты');
+assert.match(contract.d069?.protocolNote || '', /остаётся 1\.11/, 'D-069 транспорт-внутренний');
+assert.match(contract.d069?.fix || '', /driveFileIds/, 'D-069: поле payload разбирается на id');
+assert.match(contract.d069?.fix || '', /joinPayloadFiles/, 'D-069: несколько файлов склеиваются с заголовком');
+assert.ok(/дослов/i.test(JSON.stringify(contract.d069?.safety || '')), 'D-069: одиночный файл остаётся дословным');
+assert.match(contract.d069?.evidence?.probe || '', /relay-payload-smoke/, 'D-069: проба названа');
 assert.equal(contract.d068?.budgetsRaised, false, 'D-068 не поднимал бюджеты');
 assert.match(contract.d068?.protocolNote || '', /остаётся 1\.11/, 'D-068 транспорт-внутренний');
 assert.match(contract.d068?.fix || '', /roleAddress|navigateTo/, 'D-068: обещание перехода исполняется');

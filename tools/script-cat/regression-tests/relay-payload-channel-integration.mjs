@@ -53,7 +53,7 @@ function makeHarness({ payloadId = '', fileText = '', saveFails = false } = {}) 
     'notion', 'taskState', 'taskRole', 'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue', 'pause', 'K',
     'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
-    'answerStampKey', 'reworkKey', 'taskPreflight',
+    'answerStampKey', 'reworkKey', 'taskPreflight', 'driveFileIds', 'joinPayloadFiles',
     `${src.slice(dFrom, dTo)}; return dispatchTask;`,
   )(
     async () => [{ id: 'agent-1', name: 'Spec Auditor', fn: 'Auditor', zone: 'docs/agents/**' }],
@@ -102,6 +102,9 @@ function makeHarness({ payloadId = '', fileText = '', saveFails = false } = {}) 
     (id) => `cfn-answer-stamp:${id}`,
     (id) => `cfn-rework:${id}`,
     async () => '',
+    // D-069: разбор поля payload — предмет отдельной пробы (relay-payload-smoke).
+    (value) => (String(value || '').match(/[A-Za-z0-9_-]{25,}/g) || []),
+    (parts) => parts.map((x) => String(x.text || '').trim()).filter(Boolean).join('\n\n'),
   );
   return { dispatchTask, card, calls, pauses };
 }
@@ -111,7 +114,7 @@ const sentPrompt = (h) => h.calls.find((c) => c.action === 'send')?.prompt;
 // ── 1. Большое задание → снимок savePayload + указатель, оракул inline ─────
 {
   const body = 'РАЗВЁРНУТОЕ ЗАДАНИЕ ИЗ PAYLOAD. '.repeat(200); // ~6400 символов
-  const h = makeHarness({ payloadId: 'PAYLOAD_FILE_1', fileText: body });
+  const h = makeHarness({ payloadId: 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa', fileText: body });
   const sent = await h.dispatchTask(h.card, 'Spec Auditor');
   assert.equal(sent, true, 'ход выдан');
   const save = h.calls.find((c) => c.action === 'savePayload');
@@ -125,20 +128,20 @@ const sentPrompt = (h) => h.calls.find((c) => c.action === 'send')?.prompt;
   assert.ok(p.text.includes('Оракул (как принимают)'), 'оракул остаётся inline');
   assert.ok(p.text.includes('Scope'), 'Scope остаётся inline');
   assert.ok(p.metrics.chars <= 5500, 'указатель в total-лимите Аудитора');
-  assert.ok(h.calls.some((c) => c.action === 'read' && c.fileId === 'PAYLOAD_FILE_1'), 'исходный файл прочитан');
+  assert.ok(h.calls.some((c) => c.action === 'read' && c.fileId === 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa'), 'исходный файл прочитан');
 }
 
 // ── 2. Отказ savePayload — явная ошибка, ход не уходит ────────────────────
 {
   const body = 'БОЛЬШОЕ ЗАДАНИЕ. '.repeat(200);
-  const h = makeHarness({ payloadId: 'PAYLOAD_FILE_1', fileText: body, saveFails: true });
+  const h = makeHarness({ payloadId: 'PAYLOADFILE1aaaaaaaaaaaaaaaaaaa', fileText: body, saveFails: true });
   await assert.rejects(() => h.dispatchTask(h.card, 'Spec Auditor'), /savePayload|шлюз Drive отказал/, 'отказ шлюза останавливает выдачу');
   assert.ok(!h.calls.some((c) => c.action === 'send'), 'исполнителю ничего не ушло');
 }
 
 // ── 3. Малое задание остаётся инлайном (full), снимок не создаётся ─────────
 {
-  const h = makeHarness({ payloadId: 'PAYLOAD_SMALL', fileText: 'короткое задание' });
+  const h = makeHarness({ payloadId: 'PAYLOADSMALLaaaaaaaaaaaaaaaaaaa', fileText: 'короткое задание' });
   const sent = await h.dispatchTask(h.card, 'Spec Auditor');
   assert.equal(sent, true);
   const p = sentPrompt(h);

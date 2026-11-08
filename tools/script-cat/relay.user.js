@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.19
+// @version      1.12.20
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -450,6 +450,40 @@
   const nowIso = () => new Date().toISOString();
   const rt = (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || "").join("");
 
+  /**
+   * D-069: в поле «Payload Drive File ID» Мастер вправе перечислить несколько
+   * файлов — «id1, id2 (имя.md)». Скрипт читал всю строку как один id и получал
+   * отказ шлюза «Некорректный Drive file ID», хотя файлы на месте. Разбираем
+   * строку на id: по одному на строку, через запятую/точку с запятой, либо
+   * просто несколько id подряд. Имя файла и пояснения в скобках — не id.
+   */
+  function driveFileIds(value) {
+    const text = String(value || "");
+    const tokens = text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    const out = [];
+    for (const token of tokens) {
+      const clean = token.replace(/^[(\[]|[)\]]$/g, "");
+      if (/^[A-Za-z0-9_-]{25,}$/.test(clean) && !out.includes(clean)) out.push(clean);
+      else if (/^https?:\/\//i.test(clean)) {
+        const id = clean.match(/\/d\/([A-Za-z0-9_-]{20,})/);
+        if (id && !out.includes(id[1])) out.push(id[1]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Склейка нескольких файлов задания: каждый начинается со своего заголовка,
+   * чтобы агент видел, где кончается один и начинается другой. Пустой файл не
+   * добавляет ни строки — «нет файла» и «файл пуст» не должны выглядеть по-разному.
+   */
+  function joinPayloadFiles(parts) {
+    const filled = parts.filter((p) => String(p.text || "").trim());
+    if (filled.length === 0) return "";
+    if (filled.length === 1) return String(filled[0].text || "").trim();
+    return filled.map((p, i) => `--- файл ${i + 1} из ${filled.length}: ${p.id} ---\n${String(p.text || "").trim()}`).join("\n\n");
+  }
+
   /** Локальный архив непригодных маркеров: не исправляем и не отправляем наружу. */
   function retainRejectedResult(expect, kind, replies) {
     try {
@@ -636,7 +670,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.19";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.20";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -11494,8 +11528,12 @@
         }
         if (handed) {
           log(
-            `Вопросов «Ждёт» без ответа, которые не передавались приёмке: ${handed} — поставил в очередь, ` +
-              "она ответит на ближайшем шаге.",
+            // D-069: здесь вопрос только попадает в локальную очередь приёмки —
+            // ход уходит отдельным шагом. Прежняя строка «поставил в очередь,
+            // она ответит на ближайшем шаге» рядом с «вопрос передан приёмке»
+            // читалась как вторая передача того же вопроса.
+            `Вопросов «Ждёт» без ответа, которые приёмке ещё не передавались: ${handed} — ` +
+              "поставил в очередь приёмки, ход уйдёт отдельным шагом.",
             false,
             { ntfy: "quiet", title: "Relay: вопрос передан приёмке" },
           );
@@ -14695,15 +14733,24 @@
     }
 
     const runId = uid();
-    const payloadId = rt(fresh.properties["Payload Drive File ID"]);
-    let payload = "";
-    if (payloadId) {
+    // 08.11, 18:34: поле «Payload Drive File ID» у B1 перечисляло два файла
+    // через запятую — и скрипт отправил шлюзу всю строку как один id, получив
+    // «Некорректный Drive file ID». Сеть и карточка были в порядке: отказ
+    // разбирался как сбой записи в Notion и ход вставал до утра. Теперь id
+    // разбираются по одному и читаются по очереди.
+    const payloadIds = driveFileIds(rt(fresh.properties["Payload Drive File ID"]));
+    const payloadId = payloadIds[0] || "";
+    const payloadParts = [];
+    for (const id of payloadIds) {
       try {
-        payload = (await gateway("read", payloadId)).content || "";
+        payloadParts.push({ id, text: (await gateway("read", id)).content || "" });
       } catch (e) {
-        throw new Error(`Payload не прочитан: ${e.message}`);
+        // Называет файл, а не только «Payload не прочитан»: в карточке их может
+        // быть несколько, и Мастеру важно знать, какой именно не открылся.
+        throw new Error(`Payload не прочитан (файл ${id}): ${e.message}`);
       }
     }
+    const payload = joinPayloadFiles(payloadParts);
     const previousLogId = rt(fresh.properties["Output Drive File ID"]);
     // D-034: снимок большого payload фиксируется до сборки сообщения. D-043:
     // сам промпт проверяется ДО журнала и Running. Иначе oversized-карточка
@@ -16852,6 +16899,13 @@
           : /битый id|valid uuid|path failed validation/i.test(raw)
         ? "Notion не принял адрес записи: в нём оказался битый id — обычно это " +
           "опечатка в строке-маркере ответа."
+        // D-069: файл задания в Drive — не запись в Notion. Раньше этот отказ
+        // попадал в последнюю ветку и звучал как «Шаг прервался на записи в
+        // Notion», хотя ни одной записи ещё не было.
+        : /^Payload не прочитан/.test(raw)
+          ? "Файл задания не прочитан из Drive: отправка не начиналась, карточка не тронута. " +
+            "Проверьте поле «Payload Drive File ID» (один или несколько id файлов из Arena/payloads) " +
+            "и нажмите «Продолжить»."
         : e && e.relay === "gateway"
           ? e.refused
             ? `Шлюз Drive ответил отказом: ${e.reason} Запись не сделана, в Диске ничего не менялось. ` +

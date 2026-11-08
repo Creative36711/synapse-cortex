@@ -88,6 +88,40 @@
   const nowIso = () => new Date().toISOString();
   const rt = (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || "").join("");
 
+  /**
+   * D-069: в поле «Payload Drive File ID» Мастер вправе перечислить несколько
+   * файлов — «id1, id2 (имя.md)». Скрипт читал всю строку как один id и получал
+   * отказ шлюза «Некорректный Drive file ID», хотя файлы на месте. Разбираем
+   * строку на id: по одному на строку, через запятую/точку с запятой, либо
+   * просто несколько id подряд. Имя файла и пояснения в скобках — не id.
+   */
+  function driveFileIds(value) {
+    const text = String(value || "");
+    const tokens = text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+    const out = [];
+    for (const token of tokens) {
+      const clean = token.replace(/^[(\[]|[)\]]$/g, "");
+      if (/^[A-Za-z0-9_-]{25,}$/.test(clean) && !out.includes(clean)) out.push(clean);
+      else if (/^https?:\/\//i.test(clean)) {
+        const id = clean.match(/\/d\/([A-Za-z0-9_-]{20,})/);
+        if (id && !out.includes(id[1])) out.push(id[1]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Склейка нескольких файлов задания: каждый начинается со своего заголовка,
+   * чтобы агент видел, где кончается один и начинается другой. Пустой файл не
+   * добавляет ни строки — «нет файла» и «файл пуст» не должны выглядеть по-разному.
+   */
+  function joinPayloadFiles(parts) {
+    const filled = parts.filter((p) => String(p.text || "").trim());
+    if (filled.length === 0) return "";
+    if (filled.length === 1) return String(filled[0].text || "").trim();
+    return filled.map((p, i) => `--- файл ${i + 1} из ${filled.length}: ${p.id} ---\n${String(p.text || "").trim()}`).join("\n\n");
+  }
+
   /** Локальный архив непригодных маркеров: не исправляем и не отправляем наружу. */
   function retainRejectedResult(expect, kind, replies) {
     try {
