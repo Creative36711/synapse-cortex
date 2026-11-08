@@ -639,16 +639,71 @@
     return "";
   }
 
+  /** Состояния, которые очередь умеет считать; прочие — «неизвестное состояние». */
+  const CARD_STATES = new Set(["Draft", "Ready", "Running", "Submitted", "Accepted", "Rework", "Blocked"]);
+
+  /** Пауза по привязке: её причина — карточка, а не «запись в Notion». */
+  function bindingError(message, ref) {
+    const error = new Error(message);
+    error.relay = "binding";
+    if (ref) error.ref = ref;
+    return error;
+  }
+
+  /**
+   * Карточка называет эту миссию — по «Миссии» (имя или UUID), а не по полю
+   * Mission ID. Нужно, чтобы отличить «карточка точно наша, но без привязки»
+   * от «карточка неизвестно чья».
+   */
+  function cardNamesMission(row, mission) {
+    const label = rt(row?.properties?.["Миссия"]).trim();
+    const wanted = rt(mission?.properties?.["Миссия"]).trim();
+    if (!label || !mission?.id) return false;
+    if (isUuid(label) && norm(label) === norm(mission.id)) return true;
+    return Boolean(wanted) && missionSame(label, wanted);
+  }
+
+  /**
+   * Карточки, которые мешают очереди именно этой миссии: они называют её по
+   * названию, но привязки нет (или она битая), либо состояние неизвестно.
+   *
+   * 22:57–06:12. Координатор создал S-13…S-16 без Mission ID и без «Миссии»,
+   * а `assertMissionBindings` валил любой шаг — включая приём уже полученного
+   * ответа Warden: миссия вернулась в круг 1, запись сделана, а план Координатору
+   * не ушёл, и цикл встал на паузе «Шаг прервался на записи в Notion». Карточки,
+   * которые эту миссию не называют, к её очереди доказательно не относятся:
+   * выдавать их всё равно нельзя (выдача требует Mission ID), поэтому поводом
+   * для паузы они не служат — о них пишется одна строка в журнал.
+   */
+  function bindingBlockers(rows, missions, mission) {
+    return rows.filter((row) => {
+      if (!cardNamesMission(row, mission)) return false;
+      return Boolean(cardBindingIssue(row, missions)) || !CARD_STATES.has(taskState(row));
+    });
+  }
+
+  /**
+   * Карточки, мешающие именно этой миссии: по названию они её называют, но
+   * привязки нет, или состояние неизвестно. Читаются отдельным запросом там,
+   * где от этого зависит решение (закрытие миссии, выбор очереди), — а не
+   * стражем на каждом шаге.
+   */
+  async function missionBindingBlockers(mission) {
+    if (!mission || !isUuid(mission.id)) return [];
+    const [missions, cards] = await Promise.all([query(C.missions), query(C.requests)]);
+    return bindingBlockers(cards, missions, mission);
+  }
+
   /** Не прячем записи с пустым состоянием или неизвестной привязкой. */
   async function assertMissionBindings(mission) {
     if (!mission || !isUuid(mission.id)) throw new Error("Нет однозначного UUID миссии.");
-    const [missions, cards] = await Promise.all([query(C.missions), query(C.requests)]);
-    const states = new Set(["Draft", "Ready", "Running", "Submitted", "Accepted", "Rework", "Blocked"]);
-    const problems = cards.filter((row) => cardBindingIssue(row, missions) || !states.has(taskState(row)));
+    const cards = await query(C.requests);
+    const problems = bindingBlockers(cards, await query(C.missions), mission);
     if (problems.length) {
       const examples = problems.slice(0, 8).map((row) => `${taskTitle(row) || "без названия"} (${row.id})`).join("; ");
-      throw new Error(`В «Запросах» ${problems.length} карточек с пустым/неизвестным Mission ID или состоянием: ${examples}. ` +
-        "Исправьте их по плану миграции; ни одну не скрываю и не изменяю.");
+      throw bindingError(`В «Запросах» ${problems.length} карточек с пустым/неизвестным Mission ID или состоянием, ` +
+        `и по названию они относятся к этой миссии: ${examples}. ` +
+        "Исправьте их по плану миграции; ни одну не скрываю и не изменяю.", mission.id);
     }
     return cards;
   }
@@ -656,7 +711,13 @@
   /** Сказать про карточки другой миссии один раз на набор, а не на каждый план. */
   const missionSkipSeen = new Set();
 
-  async function tasks(state, mission) {
+  /**
+   * `allowUnbound` — мягкое чтение: карточка этой миссии без привязки не валит
+   * шаг, а складывается в переданный `unbound` (свой на каждый вызов: очередь
+   * читается параллельно). Пауза из-за неё не встаёт — ход приёма уже
+   * полученного ответа важнее, — но и молчать о ней нельзя.
+   */
+  async function tasks(state, mission, { allowUnbound = false, unbound = null } = {}) {
     if (!mission || !isUuid(mission.id)) throw new Error("Очередь нельзя прочитать без однозначного UUID миссии.");
     const rows = await query(
       C.requests,
@@ -664,16 +725,34 @@
       [{ property: "Sequence", direction: "ascending" }],
     );
     // Непривязанные записи нельзя молча исключить: среди них может быть и
-    // карточка текущей миссии, в том числе Accepted для приёмки.
+    // карточка текущей миссии, в том числе Accepted для приёмки. Поэтому
+    // карточка, которая называет эту миссию, по-прежнему останавливает шаг:
+    // без UUID её нельзя ни выдать, ни принять. А карточка, которая эту
+    // миссию не называет, к очереди доказательно не относится — она не в
+    // очереди, но и паузы не требует (одна строка в журнал).
     const unresolved = rows.filter((row) => !isUuid(cardMissionId(row)));
-    if (unresolved.length) {
-      const examples = unresolved.slice(0, 8).map((row) => `${taskTitle(row) || "без названия"} (${row.id})`).join("; ");
-      throw new Error(`В «${state}» ${unresolved.length} карточек без корректного Mission ID: ${examples}. ` +
-        "Проверьте и перенесите привязки; историю и состояния карточек не меняю.");
+    const mine = unresolved.filter((row) => cardNamesMission(row, mission));
+    if (mine.length && !allowUnbound) {
+      const examples = mine.slice(0, 8).map((row) => `${taskTitle(row) || "без названия"} (${row.id})`).join("; ");
+      throw bindingError(`В «${state}» ${mine.length} карточек без корректного Mission ID, ` +
+        `и по названию они относятся к этой миссии: ${examples}. ` +
+        "Проверьте и перенесите привязки; историю и состояния карточек не меняю.", mission.id);
     }
+    if (allowUnbound && unbound) for (const row of mine) unbound.push(row);
     const wanted = rt(mission.properties["Миссия"]).trim();
     const skipped = rows.filter((row) => !cardInMission(row, mission));
     const kept = rows.filter((row) => cardInMission(row, mission));
+    if (unresolved.length) {
+      const key = `${state}|unbound|${unresolved.map((row) => row.id).join(",")}`;
+      if (!missionSkipSeen.has(key)) {
+        missionSkipSeen.add(key);
+        const list = unresolved.map((row) => `${taskTitle(row) || "без названия"} (${row.id})`).join("; ");
+        log(`В «${state}» ${unresolved.length} карточек без Mission ID — они не в очереди миссии ` +
+          `«${firstLine(wanted, 60)}», и я их не трогаю: ${list}. ` +
+          "Привяжите их через «Управление проектами → Проверить Mission ID карточек».", false,
+          { tone: "warn", ntfy: "quiet", title: "Relay: карточка без привязки" });
+      }
+    }
     if (skipped.length) {
       const key = `${state}|${skipped.map((row) => row.id).join(",")}`;
       if (!missionSkipSeen.has(key)) {
@@ -686,3 +765,4 @@
     }
     return kept;
   }
+

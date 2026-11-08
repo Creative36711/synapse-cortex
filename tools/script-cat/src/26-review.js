@@ -222,7 +222,25 @@
     if (verdict === "accept") {
       // Очередь могла измениться, пока Reviewer проверял миссию. Старый
       // вердикт не распространяется на новые или незакрытые карточки.
+      //
+      // Привязки читаются здесь, а не общим стражем на каждом шаге: вердикт уже
+      // получен и относится к прошлому состоянию очереди, поэтому пауза нужна
+      // не «по факту непривязанной карточки», а только когда без привязки
+      // нельзя решить, закрыта ли миссия.
       const fresh = await queueOf(mission);
+      const unbound = [...(fresh.unbound || []), ...(await missionBindingBlockers(mission).catch(() => []))];
+      if (unbound.length) {
+        const list = [...new Map(unbound.map((row) => [row.id, row])).values()]
+          .slice(0, 8).map((row) => `${taskTitle(row) || "без названия"} (${row.id})`).join("; ");
+        pause(
+          `Приёмка не приняла решение по привязке: в карточках этой миссии нет Mission ID — ${list}. ` +
+            "Пока непонятно, входят ли они в миссию, закрывать её нельзя: привяжите карточки " +
+            "«Управление проектами → Проверить Mission ID карточек» и нажмите «Продолжить». " +
+            "Ни одну карточку не скрываю и не меняю; ответ Reviewer не потерян.",
+          { kind: "review-unbound", ref: mission.id },
+        );
+        return true;
+      }
       const open = fresh.submitted.length + fresh.running.length + fresh.ready.length + fresh.rework.length + (fresh.blocked || []).length;
       if (open) {
         if (currentReview()) GM_setValue(K.expect, null); // старое принятие нельзя повторить после обработки новой работы

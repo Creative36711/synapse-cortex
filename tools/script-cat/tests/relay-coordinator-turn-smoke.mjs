@@ -68,7 +68,7 @@ assert.doesNotMatch(prompt, /drive\.google\.com\/file/, 'без Submitted стр
 
 // ── 2. Маршрутизация решения ───────────────────────────────────────────────
 const routeFrom = src.indexOf('  function decisionRoute(next,');
-const routeTo = src.indexOf('  /** Свежие счётчики очереди');
+const routeTo = src.indexOf('  // Свежие счётчики очереди');
 assert.ok(routeFrom > 0 && routeTo > routeFrom, 'decisionRoute на месте');
 const decisionRoute = new Function(
   'norm',

@@ -11,6 +11,7 @@ assert.match(src, /cardMissionId/, 'привязка очереди по UUID н
 const cut = (a, b) => { const i = src.indexOf(a), j = src.indexOf(b, i + a.length); assert(i >= 0 && j > i, a); return src.slice(i, j); };
 const uuid = cut('  const isUuid = ', '  /**');
 const binding = cut('  const cardMissionId = ', '  // ───────────────────────────── сообщения чата');
+const words = cut('  const MISSION_STOPWORDS = new Set([', '  /** Поле названия показывается человеку');
 const active = cut('  async function activeMission()', '  const missionKind');
 const migration = cut('  async function inspectMissionMigration()', '  function formatMissionMigration(');
 const preflight = cut('  async function taskPreflight(', '  async function dispatchTask(');
@@ -33,7 +34,7 @@ const C={ missions:'missions', requests:'requests' },
 const query=async (db, filter)=>db==='missions' ? (filter ? missions.filter(m=>['Активна','Возвращена'].includes(sel(m.properties['Состояние']))) : missions) : filter ? cards.filter(x=>taskState(x)===filter.select.equals) : cards;
 const notion=async (_method,path)=>{const row=cards.find(c=>c.id===path.slice(6));if(!row)throw Error('not found');return structuredClone(row)};
 const api=new Function('C','rt','sel','norm','taskTitle','taskState','query','notion','log',
-  `${uuid}\n${binding}\n${active}\n${migration}\n${preflight}\nreturn {cardInMission,cardBindingIssue,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight};`)
+  `${uuid}\n${words}\n${binding}\n${active}\n${migration}\n${preflight}\nreturn {cardInMission,cardBindingIssue,cardNamesMission,bindingBlockers,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight};`)
   (C,rt,sel,norm,taskTitle,taskState,query,notion,()=>{});
 assert.equal(api.cardInMission(cards[0], missions[0]), true);
 assert.equal(api.cardInMission(card(ID1,''), missions[0]), false, 'пустой ID не относится ко всем миссиям');
