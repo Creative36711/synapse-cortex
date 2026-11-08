@@ -145,7 +145,14 @@ assert.equal(parsedLines.options[0].length, 150); assert.equal(parsedLines.optio
 assert.equal(api.parseQuestion({ text: 'x'.repeat(12000), default:'оставить' }).fullText.length, 12000);
 assert.throws(() => api.parseQuestion({ text: 'x'.repeat(12001), default:'оставить' }), /не записан и не передан/);
 assert.throws(() => api.questionInMarker('x'.repeat(12001), 'оставить'), /не записан и не передан/);
-assert.throws(() => api.parseQuestion({ text:'тест', default:'x'.repeat(201) }), /по умолчанию длиннее/);
+// D-072: предела в 200 знаков больше нет — вариант по умолчанию это решение,
+// по которому идёт работа, и сокращать его нельзя. Боевой SYN-3 08.11 встал
+// именно на этом: полный вариант в 260 знаков объявили «слишком длинным».
+const longDefault = 'Одним PR Warden\'а: ТЗ SYN-3 1.5 (ярлык, строка V-2 1/60/120, сноска о неисполнимости 0), очередь 1.7, D-070 и страница миссии; до публикации гейт держу, параллельно перевыдаю B5 на Executor Core, а карточку B2 не выдаю до приёмки повтора B0 по V-2';
+assert.ok(longDefault.length > 200, 'боевой вариант длиннее прежнего предела');
+const longParsed = api.parseQuestion({ text: 'Публиковать ли одним PR?', default: longDefault });
+assert.equal(longParsed.fallback, longDefault, 'вариант сохранён целиком, без усечения');
+assert.throws(() => api.parseQuestion({ text:'тест', default:'x'.repeat(12001) }), /по умолчанию длиннее/);
 
 // Обычный вопрос — в прежний источник и старые поля, ссылка необязательна.
 const ordinary = api.parseQuestion({ text: 'Какой формат отчёта выбрать?', options: ['A', 'B'], default: 'A', hours: 24 });

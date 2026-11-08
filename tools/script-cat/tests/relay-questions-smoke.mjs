@@ -143,6 +143,21 @@ const props = (over = {}) => ({
   assert.deepEqual(api.expiredQuestions([], now), [], 'пусто — пусто');
 }
 
+// ── 3б. Длинный вариант по умолчанию не режется и не отвергается (D-072) ───
+// 08.11 боевой SYN-3 встал на пределе в 200 знаков: агент дал полный вариант
+// («Одним PR Warden'а: ТЗ SYN-3 1.5 …, очередь 1.7, D-070 и страница миссии…»),
+// а транспорт объявил его «слишком длинным» и приёмке не передал. Решение, по
+// которому идёт работа, сокращать нельзя.
+{
+  const longDefault = `${'Одним PR Warden\'а: ТЗ SYN-3 1.5, очередь 1.7, D-070. '.repeat(6)}конец`;
+  assert.ok(longDefault.length > 200, 'вариант длиннее прежнего предела');
+  const q = api.parseQuestion({ text: 'Публиковать ли одним PR?', default: longDefault });
+  assert.equal(q.fallback, longDefault, 'вариант сохранён целиком, без усечения и без отказа');
+  const props = api.questionProps(q, { roleName: 'Coordinator', mission: 'SYN-3' });
+  assert.equal(props['По умолчанию'].rich_text.map((x) => x.text.content).join(''), longDefault,
+    'в Notion уходит ровно тот же текст');
+}
+
 // ── 4. Строки для промпта ──────────────────────────────────────────────────
 {
   const open = [

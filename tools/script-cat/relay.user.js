@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.20
+// @version      1.12.21
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -60,6 +60,10 @@
     questionLineMax: 3, // сколько вопросов и ответов видно в одном промпте
     questionTextMax: 180, // столько влезает в заголовок «Вопрос» читаемо
     questionTextFull: 12000, // выше предела — явная пауза, не молчаливое усечение
+    // D-072: предела в 200 знаков больше нет. Вариант по умолчанию — это
+    // решение, по которому идёт работа, и сокращать его нельзя; ограничение
+    // осталось только физическое (questionTextFull) и проверяется в
+    // questionFallback. Поле хранится ради совместимости со старыми профилями.
     questionDefaultMax: 200,
     questionCheckMs: 600000, // как часто проверять сроки вопросов (10 минут)
     adrCheckMs: 600000, // как часто смотреть docs/decisions на proposed (10 минут)
@@ -670,7 +674,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.20";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.21";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9557,7 +9561,7 @@
     } });
 
     def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
-      'Вопрос — полем question в маркере {"text","options","default","hours"}; default обязателен (работа идёт по нему), ответ придёт строкой; ≤1 за ход. Опрос «можно?» в чате — остановка, не делай.' });
+      'Вопрос — полем question в маркере {"text","options","default","hours"}; default обязателен (работа идёт по нему), пиши его целиком — длина не ограничена; ответ придёт строкой; ≤1 за ход. Опрос «можно?» в чате — остановка, не делай.' });
 
     def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
       "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
@@ -11642,10 +11646,27 @@
     }
     return text;
   }
+  /**
+   * Полный текст варианта по умолчанию. Предела в 200 знаков больше нет.
+   *
+   * 08.11, 20:01 боевой SYN-3 встал на нём: агент дал полный и безобидный
+   * вариант — «Одним PR Warden'а: ТЗ SYN-3 1.5 (ярлык, строка V-2 1/60/120,
+   * сноска о неисполнимости 0), очередь 1.7, D-070 и страница миссии…» — а
+   * транспорт отказался его записывать: «Вопрос или вариант по умолчанию
+   * слишком длинный: ничего не усекал и приёмке не передал».
+   *
+   * D-072. Резать вариант нельзя: по нему идёт работа, и «сокращённый» вариант — это
+   * другое решение. Места в Notion хватает: поле «По умолчанию» — rich_text,
+   * длинный текст уезжает несколькими объектами (richText), а тело вопроса
+   * отдельно живёт в блоке страницы. Поэтому предел теперь только физический —
+   * `questionTextFull`, как у самого вопроса; выше него по-прежнему честная
+   * пауза, а не молчаливое усечение.
+   */
   function questionFallback(value) {
     const text = String(optionLabel(value) || "").replace(/\s+/g, " ").trim();
-    if (text.length > C.questionDefaultMax) {
-      const error = new Error(`Вариант по умолчанию длиннее ${C.questionDefaultMax} знаков: он не может быть применён без полного текста. Разберите ход вручную.`);
+    const limit = Number(C.questionTextFull) || 12000;
+    if (text.length > limit) {
+      const error = new Error(`Вариант по умолчанию длиннее ${limit} знаков: он не может быть применён без полного текста. Разберите ход вручную.`);
       error.relay = "question-too-long";
       throw error;
     }
