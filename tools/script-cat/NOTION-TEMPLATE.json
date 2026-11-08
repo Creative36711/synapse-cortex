@@ -37,6 +37,10 @@
               {
                 "name": "Reviewer",
                 "color": "blue"
+              },
+              {
+                "name": "Maintainer",
+                "color": "gray"
               }
             ]
           }

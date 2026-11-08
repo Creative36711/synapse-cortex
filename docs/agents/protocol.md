@@ -6,7 +6,8 @@
 `retry` (компактный повтор), `pilot` (эфемерный прогон SYN-P1),
 `provision` (административный запрос создания/замены Arena-агентов, не миссия и
 не рабочая карточка), `arbiter` (D-053 — разбор повторяющейся петли перевыдачи:
-не приёмка миссии и не новая карточка). Контракт: `protocolVersion 1.11` (1.1 — provisioning,
+не приёмка миссии и не новая карточка), `heal` (D-073 — передача поломки
+транспорта закулисному Maintainer'у: не карточка, не миссия, вне очереди). Контракт: `protocolVersion 1.11` (1.1 — provisioning,
 1.2 — drive-контракт Gateway 1.8.0/D-033, 1.3 — бюджет overhead и payload-канал
 D-034, 1.4 — прайм маркера Координатора и адрес артефактов D-035, 1.5 — хотфикс
 длинной зоны роли D-036, 1.6 — мультирепо-сторож ADR D-037, 1.7 — зона роли
@@ -38,6 +39,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 | continuation.arbiter | Reviewer | CF_ARBITER_RESULT | ≤700 |
 | continuation.pilot | pilot | нет | ≤250 |
 | admin.provision | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | ≤1800 |
+| heal.report | Maintainer (вне очереди) | нет (FIXED/NOTFIXED) | ≤900 |
 
 Total-лимиты: Executor ≤8000, Auditor ≤5500, Coordinator ≤7500, Review ≤7000,
 Answer ≤6000, reminder ≤900. Доставка: мягкий 6000, жёсткий 9000. Acceptance,

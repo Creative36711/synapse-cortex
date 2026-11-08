@@ -39,6 +39,17 @@
     setStatus();
     setup(false);
     setInterval(() => tick(false), C.tickMs);
+    // D-073: пульс для сторожа вне браузера. Сторож — отдельный процесс: он
+    // видит, что пульс кончился, хотя браузер жив, и зовёт Мастера. Раз в
+    // `heartbeatMs` (10 минут), а не каждый тик: это квота, а не диагностика хода.
+    const beat = () => {
+      if (typeof beatHeartbeat !== "function") return;
+      Promise.resolve()
+        .then(() => beatHeartbeat())
+        .catch((e) => console.warn("[Relay heartbeat]", (e && e.message) || e));
+    };
+    if (!GM_getValue(K.paused, "")) beat();
+    setInterval(beat, Math.max(60000, Number(C.heartbeatMs) || 600000));
     // Вернулись во вкладку — не ждём очередного тика: в фоне таймеры режутся,
     // и без этого следующая проверка могла бы случиться через минуту.
     document.addEventListener("visibilitychange", () => {

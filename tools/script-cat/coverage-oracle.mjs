@@ -68,7 +68,9 @@ export function buildCoverage({ blocksSource, profilesSource, contract }) {
 export const GIT_WRITE_BLOCKS = ['git.executor'];
 export const FULL_TASK_BLOCKS = ['task.assignment', 'task.acceptance', 'task.scope', 'task.invariants', 'task.intent', 'task.freedom'];
 export const NO_GIT_WRITE_PROFILES = ['delivery.compact', 'coordinator.recovery',
-  'continuation.dispatch', 'continuation.plan', 'continuation.review', 'continuation.answer', 'continuation.pilot'];
+  'continuation.dispatch', 'continuation.plan', 'continuation.review', 'continuation.answer', 'continuation.pilot',
+  // D-073: разбор транспорта ничего не делает руками — git-write блоков у него нет.
+  'heal.report'];
 
 export function assertPromptCoverage(input) {
   const cov = buildCoverage(input);
@@ -101,7 +103,7 @@ export function assertPromptCoverage(input) {
     assert.equal(gw.length, 0, `профиль ${pid} не должен содержать git-write блок: ${gw.join(', ')}`);
   }
   // 5. Continuation не несёт блоков полного задания/очереди/регламента.
-  for (const pid of ['continuation.dispatch', 'continuation.plan', 'continuation.review', 'continuation.answer']) {
+  for (const pid of ['continuation.dispatch', 'continuation.plan', 'continuation.review', 'continuation.answer', 'heal.report']) {
     const p = cov.profiles[pid];
     if (!p) continue;
     const ft = p.blocks.filter((bid) => FULL_TASK_BLOCKS.includes(bid));

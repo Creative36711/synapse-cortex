@@ -18,6 +18,7 @@
     "R-EVIDENCE": [
       "drive.artifacts",
       "evidence.rule",
+      "heal.protocol",
       "review.protocol",
       "task.acceptance"
     ],
@@ -158,6 +159,9 @@
       "R-SECRETS",
       "R-ZONES"
     ],
+    "heal.report": [
+      "R-EVIDENCE"
+    ],
     "pilot.synapse": [],
     "reminder.marker": [
       "R-MARKER"
@@ -239,6 +243,9 @@
     "executor.card": [
       "Executor"
     ],
+    "heal.report": [
+      "Maintainer"
+    ],
     "pilot.synapse": [
       "pilot"
     ],
@@ -271,6 +278,7 @@
     "executor.card": [
       "git.executor"
     ],
+    "heal.report": [],
     "pilot.synapse": [],
     "reminder.marker": [],
     "reviewer.answer": [],

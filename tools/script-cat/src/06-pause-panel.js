@@ -56,6 +56,10 @@
       turnId: context.turnId || "",
       tries: context.tries ?? null,
       wasAuto: autoOn(),
+      // D-073: какая сборка сломалась. По этому признаку гейт версии отличает
+      // «установлена новая сборка» от «тот же номер, тот же бандл».
+      version: SCRIPT_VERSION,
+      fingerprint: C.buildFingerprint || "",
     };
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
@@ -73,17 +77,25 @@
         cycleStopped: true,
         key: `pause:${info.kind}:${info.ref}:${info.runId}:${info.turnId}:${info.reason}`,
       });
-      setStatus();
-      return;
+    } else {
+      notifyNtfy(`Цикл остановлен и ждёт Мастера: ${info.reason}`, {
+        title: context.notifyTitle || "Relay: пауза",
+        priority: "5",
+        tags: "warning,rotating_light",
+        cycleStopped: true,
+      });
+      playAlert();
     }
-    notifyNtfy(`Цикл остановлен и ждёт Мастера: ${info.reason}`, {
-      title: context.notifyTitle || "Relay: пауза",
-      priority: "5",
-      tags: "warning,rotating_light",
-      cycleStopped: true,
-    });
-    playAlert();
     setStatus();
+    // D-073: разбор причины — последним шагом, когда состояние сохранено и Мастер
+    // уже уведомлён. Отказ разбора не оставляет цикл без причины: пауза стоит, а
+    // телеметрия и передача Maintainer'у — дополнительные шаги.
+    // `context.heal === false` — не разбирать (повтор внутри самого разбора).
+    if (context.heal !== false && typeof healAfterPause === "function") {
+      Promise.resolve()
+        .then(() => healAfterPause(info))
+        .catch((e) => log(`Разбор остановки не выполнен: ${(e && e.message) || e}`, true, { ntfy: false }));
+    }
   }
 
   /**
@@ -356,6 +368,13 @@
         lastReplySig: "",
         lastReplyAt: 0,
       });
+    }
+    // D-073: пауза снята — либо человеком, либо автопродолжением разбора.
+    // Незакрытая передача Maintainer'у снимается вместе с паузой: иначе
+    // следующая остановка считала бы, что разбор ещё идёт.
+    if (typeof healState === "function") {
+      const heal = healState();
+      if (heal.pending) saveHealState({ ...heal, pending: null, resumedAt: new Date().toISOString() });
     }
     log(`Пауза снята Мастером (${reason}). Продолжаю.`, false, { ntfy: "quiet" });
     if (GM_getValue(K.pending, null)) {

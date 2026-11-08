@@ -46,6 +46,14 @@ assert.match(contract.d072?.protocolNote || '', /остаётся 1\.11/, 'D-072
 assert.match(contract.d072?.fix || '', /questionTextFull/, 'D-072: предел только физический');
 assert.match(contract.d072?.fix || '', /questions\.protocol/, 'D-072: правило промпта обновлено');
 assert.ok(/усечен/i.test(JSON.stringify(contract.d072?.safety || '')), 'D-072: усечения нет');
+// D-073 внутренний по форме протокола: маркеры и профили команды не менялись.
+assert.equal(contract.d073?.budgetsRaised, false, 'D-073 не поднимал бюджеты');
+assert.match(contract.d073?.protocolNote || '', /остаётся 1\.11/, 'D-073 транспорт-внутренний');
+assert.match(contract.d073?.fix || '', /40-heal-core/, 'D-073: классы причины в чистом ядре');
+assert.match(contract.d073?.fix || '', /Maintainer/, 'D-073: поломка уходит Maintainer-у');
+assert.match(contract.d073?.fix || '', /buildFingerprint|отпечат/, 'D-073: продолжение по отпечатку сборки');
+assert.ok(/переписк/i.test(JSON.stringify(contract.d073?.safety || '')), 'D-073: переписка наружу не уходит');
+assert.match(contract.d073?.evidence?.probe || '', /heal-core-smoke/, 'D-073: проба названа');
 assert.equal(contract.d069?.budgetsRaised, false, 'D-069 не поднимал бюджеты');
 assert.match(contract.d069?.protocolNote || '', /остаётся 1\.11/, 'D-069 транспорт-внутренний');
 assert.match(contract.d069?.fix || '', /driveFileIds/, 'D-069: поле payload разбирается на id');
