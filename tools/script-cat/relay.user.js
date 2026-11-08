@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.12.21
+// @version      1.13.0
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -71,6 +71,10 @@
     // Краткий регламент вшивается сборкой из docs/regulation-digest.md: агент получает
     // правила вместе с заданием, а страница по pageUrl остаётся справочником для деталей.
     regulationDigest: "# Регламент · краткая версия (вход для агентов)\n\nВерсия 1.5 · 2026-11-03. Вход, а не весь регламент: полная версия — страница «Регламент команды\nSynapse» в Notion (ссылка в промпте), репозиторная копия — `docs/REGULATION.md`. При расхождении\nверна полная. Этот текст уже пришёл в твоём задании: страницу регламента открывать и листать\nне нужно.\n\n## 1. Роли (D-021, имена заморожены)\n\n| Роль | Функция | Репозиторий | Делает |\n|---|---|---|---|\n| **Мастер** | Owner | — | направление, доступы, лицензии, деньги, финальные ADR; секреты вводит только он |\n| **Warden** | Reviewer | cortex | ТЗ миссий, приёмка по оракулу (accept/rework/master), ответы на вопросы и ADR |\n| **Coordinator** | Coordinator | cortex | очередь `Draft → Ready`, нарезка карточек, «Итог»; код и PR не пишет |\n| **Executor Core** | Executor | только `synapse` | карточки ядра: CLI, валидатор, рантайм, примеры, локали, шрифты |\n| **Executor Platform** | Executor | cortex | платформа мастерской, backend, сервисы; в миссиях ядра не участвует |\n| **Contract Architect** | Executor | только `synapse` | контракты и ADR ядра: `GameSpec`, манифест модуля, коды ошибок; фичи не пишет |\n| **Spec Auditor** | Auditor | cortex | независимая проверка оракула и содержания ошибок; код не правит |\n| **Locale Auditor** | Auditor | только `synapse` | глоссарий, каталоги, i18n-проверки; переводов не пишет |\n\nСтарые имена (`Executor Cortex`, `Auditor`, `Architect`) — устарели.\n\n## 2. Репозитории и доступы (D-022)\n\nРабота идёт в двух репозиториях — это разделение, а не дубль:\n\n- **`Creative36711/synapse`** — открытое ядро (MIT): конструктор игр, CLI, рантайм, локали и\n  **инструменты агентов** (Godot, Blender, хромакей). Пишут только три роли ядра.\n- **`Creative36711/synapse-cortex`** — закрытая часть: транспорт ScriptCat, платформа мастерской,\n  коммерция, документы процесса. Пишут `Warden` и `Executor Platform`, читают `Coordinator` и\n  `Spec Auditor`; роли ядра его **не видят**.\n\nДоступы:\n\n- Роли ядра видят только `synapse`; роли cortex видят оба, но пишут только в cortex.\n- Требование для роли ядра — **текстом в карточке**: ссылка на файл в cortex бесполезна,\n  ссылка на cortex внутри `synapse` — дефект (INV-1).\n- Свой репозиторий и ветка — в техблоке задания. Нужен файл, которого не видишь, — ошибка\n  карточки: пиши в отчёт, ход не останавливай.\n- Согласованность ядра и платформы проверяет только Warden: он читает оба.\n\n## 3. Инструменты уже в репозитории — ставить с нуля не нужно\n\nГотовые сборки лежат в `Creative36711/synapse`: движок не скачивают и не компилируют, работает\nв песочнице без интернета, GPU и экрана.\n\n- `tools/godot/install.sh --check` — Godot 4.7.2 (2D+3D) + SwiftShader (Vulkan на CPU, офскрин,\n  скриншоты). Ставится в `/tmp/synapse-godot`; `/tmp` не переживает сессию — повтори в начале хода.\n- `tools/godot/agent_bridge/` — управление запущенной игрой из shell и скриншоты по шагам.\n- `tools/modeling/setup_bpy.sh --check` — Blender 4.5 без экрана (`bpy`): модели, GLB, Cycles.\n- `tools/media/setup.sh --check` — хромакей `#00FF00` для ассетов.\n\nИнструкция — `AGENTS.md` в корне репозитория: читать до первой правки. Пересборка движка\n(`build_from_source.sh`) — только отдельной карточкой.\n\n## 4. Зоны и гейты\n\n| Зона | Что можно |\n|---|---|\n| Своя | править всё, что проходит гейт |\n| Чужая | только читать; правка — карточкой владельцу |\n| Оракул | только дополнять; ослаблять нельзя никому, включая Warden и Coordinator |\n\n- `synapse/**` — пишут три роли ядра. Гейт: PR в `main`, merge после зелёного оракула карточки.\n- `synapse-cortex/**` — пишут Warden и Executor Platform; Coordinator и Spec Auditor читают.\n  Гейт: PR в `main` cortex, merge после приёмки Warden.\n- `tools/script-cat/**` — защищённая зона: только отдельной карточкой/миссией, не «под проект».\n- Секреты (токены Notion/GitHub, ключ шлюза, реестр) не попадают в чат, логи, документы и Git.\n\n## 5. Цикл хода\n\n1. Warden пишет ТЗ → строка в «Миссиях». 2. Coordinator: `Draft → Ready` и выдача хода.\n3. Transport пишет лог в Drive, карточка идёт `Running → Submitted`. 4. Исполнитель завершает\nотчёт маркером `CF_AGENT_RESULT` с реальными `dispatch_id`/`run_id`; `merged: true` — только после\nфактического merge. 5. Coordinator: `Accepted` или `Rework` с причиной. 6. `next: \"done\"` —\nпередача Warden. 7. Warden: `accept` / `rework` / `master`. 8. `master` — только когда без\nМастера физически нельзя.\n\nЗелёная карточка не заменяет финальный оракул миссии. Маркер не заменяет отчёт.\n\nФормат финальной строки всегда стоит в самом конце задания — читай его там, а не по памяти.\nНе восстанавливай маркер из старых миссий, чужих баз и Drive: формат из другого проекта хуже,\nчем честное «маркер не виден». Если строки формата нет — сдай отчёт и скажи об этом.\n\n## 6. Доказательство вместо отчёта\n\n`not run`, тайм-аут, зелёный CI и мок **не равны** pass. Карточка закрывается командой, кодом\nвозврата, артефактом и SHA. Визуальный критерий — агент сам открыл PNG и описал, что видит.\n\nОракул берётся из ТЗ миссии и поля Acceptance карточки: платформенные — `npm run verify` (успех =\nкод 0 и `# fail 0`), карточки ядра — команды из ТЗ (см. §3), i18n-проверки, прогон примера.\n\n## 7. Вопросы и ADR\n\nВопрос — только полем `question` в маркере, с вариантом по умолчанию (по нему работа идёт сразу).\nНеоднозначность решай сам: минимальное изменение + строка «Допущение: …» в отчёт. Изменение\nконтракта, оракула или границ продукта — предложение `ADR:` с тремя вариантами и `default:\n«оставить как есть»`; срок и дефолт решением не являются. Опрос «можно?» — остановка хода.\n\nБез Мастера не решается: лицензии и ToS, деньги и комиссии, платные серверы, исполнение\nпользовательского кода на платформе, целевая аудитория, доступы и аккаунты.\n\n## 8. Запреты фаз 0–4\n\nНе строить платежи, каталог, загрузку пакетов, аккаунты до их фаз. Не запускать пользовательский\nкод на платформе. Не обещать авторам долю от монетизации, не ограничивать экспорт игр, не вводить\nвиртуальную валюту и комиссию с внешних транзакций. Не разворачивать платную инфраструктуру без\nлимита. Не называть ядро open source без одобренной OSI лицензии. Не создавать пустые сервисы\n«под будущие фазы».\n\n## 9. Мультиязычность (не «потом»)\n\n8 локалей: `en` (по умолчанию, юридически аутентичен), `ru`, `zh-Hans`, `ja`, `pt-BR`, `de`, `fr`,\n`ko`. Пользовательский текст — только в каталогах перевода; диагностика — код + параметры, текст\nиз каталога. Смена локали не меняет правил игры. Нативных ревьюеров нет: перевод и проверка — силами\nИИ-агентов.",
+    // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
+    // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
+    // «работает новая версия, а не прежняя под новым номером» невозможна.
+    buildFingerprint: "93a5ab91332fd5c6",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -113,6 +117,16 @@
     arbiterLimit: 2,
     arbiterWindowHours: 6, // окно, в котором считаются перевыдачи карточки
     arbiterAttempts: 6, // сколько последних попыток выдачи показывать арбитру
+    // D-073: самовосстановление. Временный сбой транспорт переживает сам, но не
+    // бесконечно; поломку транспорта разбирает Maintainer. Пределы свои у каждого
+    // инцидента: второй такой же сбой за сутки — это новый инцидент, а не третий
+    // круг одной поломки.
+    healRetryMax: 2, // столько автопродолжений на один временный сбой, дальше Мастер
+    healBackoffMs: [30000, 120000], // выдержка перед автопродолжением (по номеру)
+    healMaintainerMax: 2, // столько раз один инцидент уходит Maintainer'у, дальше Мастер
+    healVersionTimeoutMs: 900000, // 15 минут ждём подтверждения новой сборки, дальше стоп
+    healTelemetryMaxBytes: 200000, // предел выгрузки (артефакт шлюза — 262144)
+    heartbeatMs: 600000, // сердцебиение для сторожа: 10 минут — свежесть без траты квоты
     retryWaits: [800, 2500, 6000], // выдержки перед повторами: 4 попытки, ~9 с
     linkProbeWaits: [5000, 15000], // зонды связи после обрыва: 5 и 15 с
     rolesCacheMs: 600000, // база «Роли» — настройка: кеш на 10 минут
@@ -341,6 +355,12 @@
     provision: "cfn-agent-provision-v1",
     provisionRequest: "cfn-agent-provision-request-v1",
     provisionLock: "cfn-agent-provision-lock",
+    // D-073: самовосстановление. Инцидент считается по ключу причины, поэтому
+    // счётчики автопродолжений и передач Maintainer'у живут вместе с отметкой
+    // «какая сборка сломалась» — иначе продолжение после переустановки не
+    // доказать, а предохранитель обнулялся бы при каждом переходе страницы.
+    heal: "cfn-heal-state",
+    heartbeat: "cfn-heartbeat",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.
@@ -674,7 +694,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.12.21";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.13.0";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1112,6 +1132,10 @@
       turnId: context.turnId || "",
       tries: context.tries ?? null,
       wasAuto: autoOn(),
+      // D-073: какая сборка сломалась. По этому признаку гейт версии отличает
+      // «установлена новая сборка» от «тот же номер, тот же бандл».
+      version: SCRIPT_VERSION,
+      fingerprint: C.buildFingerprint || "",
     };
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
@@ -1129,17 +1153,25 @@
         cycleStopped: true,
         key: `pause:${info.kind}:${info.ref}:${info.runId}:${info.turnId}:${info.reason}`,
       });
-      setStatus();
-      return;
+    } else {
+      notifyNtfy(`Цикл остановлен и ждёт Мастера: ${info.reason}`, {
+        title: context.notifyTitle || "Relay: пауза",
+        priority: "5",
+        tags: "warning,rotating_light",
+        cycleStopped: true,
+      });
+      playAlert();
     }
-    notifyNtfy(`Цикл остановлен и ждёт Мастера: ${info.reason}`, {
-      title: context.notifyTitle || "Relay: пауза",
-      priority: "5",
-      tags: "warning,rotating_light",
-      cycleStopped: true,
-    });
-    playAlert();
     setStatus();
+    // D-073: разбор причины — последним шагом, когда состояние сохранено и Мастер
+    // уже уведомлён. Отказ разбора не оставляет цикл без причины: пауза стоит, а
+    // телеметрия и передача Maintainer'у — дополнительные шаги.
+    // `context.heal === false` — не разбирать (повтор внутри самого разбора).
+    if (context.heal !== false && typeof healAfterPause === "function") {
+      Promise.resolve()
+        .then(() => healAfterPause(info))
+        .catch((e) => log(`Разбор остановки не выполнен: ${(e && e.message) || e}`, true, { ntfy: false }));
+    }
   }
 
   /**
@@ -1412,6 +1444,13 @@
         lastReplySig: "",
         lastReplyAt: 0,
       });
+    }
+    // D-073: пауза снята — либо человеком, либо автопродолжением разбора.
+    // Незакрытая передача Maintainer'у снимается вместе с паузой: иначе
+    // следующая остановка считала бы, что разбор ещё идёт.
+    if (typeof healState === "function") {
+      const heal = healState();
+      if (heal.pending) saveHealState({ ...heal, pending: null, resumedAt: new Date().toISOString() });
     }
     log(`Пауза снята Мастером (${reason}). Продолжаю.`, false, { ntfy: "quiet" });
     if (GM_getValue(K.pending, null)) {
@@ -2173,7 +2212,7 @@
     const headers = { Authorization: `Bearer ${settings.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" };
     const contracts = [
       ["Роли", C.roles, { "Роль": "title", "Функция": "select", "Статус": "select", "Agent URL": "url", "Зона записи": "rich_text", "Гейт": "rich_text", "Репозиторий": "rich_text" },
-        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer"], "Статус": ["Активна"] }],
+        { "Функция": ["Coordinator", "Executor", "Auditor", "Reviewer", "Maintainer"], "Статус": ["Активна"] }],
       ["Миссии", C.missions, { "Миссия": "title", "Состояние": "select", "Создана": "date", "Завершена": "date", "Возвращена": "date", "Круг": "number", "Замечания": "rich_text", "Итог": "rich_text", "ТЗ URL": "url" },
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
@@ -8392,6 +8431,14 @@
     const seen = String(GM_getValue(K.stateV, "") || "");
     if (seen === SCRIPT_VERSION) return "";
     GM_setValue(K.stateV, SCRIPT_VERSION);
+    // D-073: смена сборки — это и есть «восстановление» после остановки. Наружу
+    // уходит вторая точка телеметрии (первая — сама остановка), а предохранители
+    // инцидента не сбрасываются: новую сборку ещё нужно подтвердить.
+    if (typeof healAfterUpdate === "function" && seen) {
+      Promise.resolve()
+        .then(() => healAfterUpdate(seen))
+        .catch((e) => log(`Восстановление после обновления не отмечено: ${(e && e.message) || e}`, true, { ntfy: false }));
+    }
     const expect = GM_getValue(K.expect, null);
     const pending = GM_getValue(K.pending, null);
     if (!expect && !pending) return "";
@@ -9817,6 +9864,25 @@
       })))}` });
     def("provision.policy", { audience: ["Coordinator", "Reviewer"], render: (c) =>
       `Верни только одобренные jobs (не больше ${c.provision?.maxJobs ?? 3}). Пустой jobs допустим. role_page_id бери из списка, role_name и repo — точно из свежей строки. action только create или replace. Ответ заверши одним маркером CF_AGENT_PROVISION_RESULT.` });
+    // D-073: передача хода Maintainer'у. Это не карточка и не миссия: факты —
+    // инцидент, класс причины и сборка. Переписки в блоке нет: контекст
+    // собирает транспорт, а не чат.
+    def("heal.brief", { verbatim: true, audience: ["Maintainer"], render: (c) => {
+      const h = c.heal || {};
+      return [
+        `Инцидент транспорта: ${h.cls || h.kind || "остановка"} · ${h.why || ""}`,
+        `Вид паузы: ${h.kind || "пусто"}; карточка ${h.ref || "—"}; run ${h.runId || "—"}; ход ${h.turnId || "—"}.`,
+        `Сборка: ${h.version || "?"} @ ${h.fingerprint || "без отпечатка"}.`,
+        h.reason ? `Причина остановки: ${h.reason}` : "",
+        h.telemetry ? `Телеметрия: ${h.telemetry}` : "",
+      ].filter(Boolean).join("\n");
+    } });
+    def("heal.protocol", { ruleIds: ["R-EVIDENCE"], audience: ["Maintainer"], render: () => [
+      "Ты разбираешь поломку транспорта, а не работу по миссии. Ничего не коммить, не устанавливай и не меняй карточки: по D-027 результат — предложенный дифф, проба «до/после» и версия.",
+      "Первой строкой ответа — вердикт: FIXED <что именно исправлено и в какой сборке> либо NOTFIXED <почему не берёшься>. Без вердикта ход не продолжается.",
+      "Если чинить нечего (капча, вход в Arena, сбой сайта) — NOTFIXED и причина: это не поломка транспорта.",
+    ].join("\n") });
+
     def("marker.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MARKER"], render: (c) => [
       "Маркер — последней строкой. Команды archive/delete/activate/admin как отдельные команды запрещены.",
       `CF_AGENT_PROVISION_RESULT {"request_id":"${c.provision?.requestId}","jobs":[],"reason":"краткое обоснование"}`,
@@ -9966,6 +10032,27 @@
       budget: { overhead: 250 },
     });
 
+    // D-073: разбор поломки транспорта. Маркера нет осознанно: это не ход
+    // роли команды, а передача закулисному Maintainer'у со своим правилом
+    // ответа (первая строка — FIXED/NOTFIXED). Рабочие ходы по-прежнему
+    // требуют маркер: «приём без маркера» здесь не появляется.
+    def("heal.report", {
+      audience: ["Maintainer"], marker: null,
+      blocks: ["heal.brief", "heal.protocol"],
+      requiredFacts: ["role.name", "heal.kind"],
+      forbidden: ["identity.task", "identity.mission", "repo.target", "repo.boundary", "role.zone",
+        "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+        "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
+        "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
+        "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",
+        "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "drive.layout", "drive.artifacts",
+        "mission.returned", "plan.note", "coordinator.prime", "delivery.retry", "delivery.recovery",
+        "delivery.tool_limit", "reminder.marker", "arbiter.case", "arbiter.protocol", "pilot.brief", "pilot.stop",
+        "pilot.repo", "pilot.continue", "marker.agent", "marker.coordinator", "marker.review", "marker.answer",
+        "marker.arbiter", "marker.provision"],
+      budget: { overhead: 900 },
+    });
+
     // Provisioning: отдельный административный запрос, не миссия и не карточка.
     def("admin.provision", {
       audience: ["Coordinator", "Reviewer"], marker: "CF_AGENT_PROVISION_RESULT",
@@ -9983,6 +10070,8 @@
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
       if (kind === "provision") return "admin.provision";
+      // D-073: разбор транспорта — свой профиль без маркера, не dispatch и не review.
+      if (kind === "heal") return "heal.report";
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";
@@ -15249,6 +15338,8 @@
   // Notion (Agent Admin), а не по имени роли. Проектные имена не зашиты.
 
   const PROVISION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // D-073: Maintainer здесь осознанно нет — закулисный агент транспорта не
+  // создаётся через provisioning и не получает карточек (D-063/D-027).
   const PROVISION_FUNCTIONS = ["Coordinator", "Executor", "Auditor", "Auditory", "Reviewer"];
   const PROVISION_STATES = ["validated", "creating", "repo_selected", "bootstrap_sent", "url_captured",
     "renaming", "renamed", "notion_updated", "activating", "activated", "archiving_old", "done", "paused", "error"];
@@ -16250,6 +16341,890 @@
     }
   }
 
+  // ───────────────────────── самовосстановление: правила ─────────────────────────
+  // Остановка разбирается по причине, а не по тексту для Мастера: у каждого вида
+  // паузы есть класс и маршрут. Здесь только чистые функции — их исполняет проба
+  // (tests/heal-core-smoke.mjs), поэтому ни DOM, ни GM, ни сети в файле нет.
+  //
+  // Маршруты (D-073):
+  //  • momentary — временный сбой; транспорт продолжает сам, но не бесконечно
+  //    (C.healRetryMax и выдержка C.healBackoffMs); исчерпал — зовёт Мастера.
+  //  • transport — поломка транспорта; ход уходит Maintainer'у, у него свой
+  //    предохранитель C.healMaintainerMax; исчерпал — Мастер.
+  //  • arena — сбой сайта Arena (капча, авторизация, 5xx): чинить нечего, стоп.
+  //  • master — решает только человек (данные, роли, петли, оракул): стоп.
+  // Нераспознанный вид паузы не чинится наугад: он идёт Мастеру и помечается
+  // `unknown`, а проба требует, чтобы таблица покрывала все виды из кода.
+  const HEAL_RULES_VERSION = 1;
+
+  const HEAL_CLASS_INFO = {
+    momentary: { route: "retry", repair: "self", label: "временный сбой транспорта или сети" },
+    transport: { route: "maintainer", repair: "maintainer", label: "поломка транспорта" },
+    arena: { route: "master", repair: "none", label: "сбой сайта Arena: чинить нечего" },
+    master: { route: "master", repair: "none", label: "решает только Мастер" },
+  };
+
+  /**
+   * Вид паузы → класс причины. Список сверяется с кодом машинно: проба собирает
+   * все `kind:"…"` из `pause(...)` и падает, если вид паузы не назван здесь.
+   * Поэтому «нераспознанное» остаётся аварийным исходом, а не обычным путём.
+   */
+  const HEAL_PAUSE_CLASS = {
+    // Временное: повтор сами не портит ход — состояние уже сохранено.
+    nav: "momentary",
+    offline: "momentary",
+    step: "momentary",
+    "review-cards-read": "momentary",
+    error: "momentary",
+    // Транспорт: чинит Maintainer, у него есть дифф, проба и версия.
+    "prompt-compile": "transport",
+    "handoff-kind": "transport",
+    "orphan-dispatch": "transport",
+    "orphan-review": "transport",
+    "reviewer-task-pending": "transport",
+    "reviewer-task-check": "transport",
+    "dispatch-changed": "transport",
+    "delivery-state-lost": "transport",
+    send: "transport",
+    "answer-changed": "transport",
+    // Arena: капча, авторизация, ошибка страницы, отказ агента. Авторизация
+    // приходит текстом причины, поэтому своего вида паузы у неё нет: вид
+    // `auth` живёт только в healTextClass, а не в этой таблице.
+    captcha: "arena",
+    "arena-error": "arena",
+    "ui-error": "arena",
+    // Мастер: данные, роли, петли, оракул, штатные пределы.
+    "no-reply": "master",
+    "project-role-origin": "master",
+    "project-pr-boundary": "master",
+    "closed-with-running": "master",
+    "closed-unreviewed": "master",
+    "mission-change-running": "master",
+    "mission-change-answer": "master",
+    marker: "master",
+    "marker-mismatch": "master",
+    "poll-loop": "master",
+    "dispatch-mission": "master",
+    "review-needs-master": "master",
+    "review-empty": "master",
+    "review-marker": "master",
+    "review-nocoord": "master",
+    "review-no-mission": "master",
+    "review-unbound": "master",
+    "review-with-open": "master",
+    "rework-limit": "master",
+    "no-reviewer": "master",
+    "return-empty": "master",
+    "plan-shift": "master",
+    "plan-miss": "master",
+    "blocked-norole": "master",
+    "blocked-role": "master",
+    "done-with-open": "master",
+    "done-with-remarks": "master",
+    redispatch: "master",
+    "arbiter-limit": "master",
+    "arbiter-master": "master",
+    "arbiter-marker": "master",
+    "arbiter-nocoord": "master",
+    "arbiter-nomission": "master",
+    "answer-needs-master": "master",
+    "answer-marker": "master",
+    "answer-empty": "master",
+    "answer-nocoord": "master",
+    "tool-limit": "master",
+    "pilot-tool-limit": "master",
+    "pilot-timeout": "master",
+    provision: "master",
+    "provision-no-admin": "master",
+    "update-recovery": "master",
+    // Пауза самовосстановления: ждём, что Мастер поставит новую сборку.
+    "heal-await-update": "master",
+    "heal-maintainer-done": "master",
+    "heal-exhausted": "master",
+    "heal-no-maintainer": "master",
+  };
+
+  /**
+   * Причина паузы текстом сильнее ярлыка: капча и сессия — это Arena, а не
+   * «неизвестная остановка». Здесь ярлык — `reason`, а класс всегда один из
+   * HEAL_CLASS_INFO: иначе «капча» попала бы в классы как отдельная сущность.
+   */
+  const HEAL_TEXT_RULES = [
+    [/captcha|recaptcha|security verification|подтвердите, что вы человек|капч/i, "captcha",
+      "капча: без человека сообщение не уйдёт"],
+    [/войдите|авторизац|session expired|sign[ -]?in|unauthorized|\b401\b/i, "auth",
+      "сессия Arena: нужен вход человеком"],
+    [/HTTP 5\d\d|something went wrong|please try again|что-то пошло не так/i, "arena-error",
+      "ошибка сайта Arena: чинить нечего"],
+  ];
+
+  function healTextMatch(text) {
+    const t = String(text || "");
+    for (const [re, reason, why] of HEAL_TEXT_RULES) if (re.test(t)) return { reason, cls: "arena", why };
+    return null;
+  }
+
+  function healVerdict(kind, cls, why, unknown = false, reason = "") {
+    const info = HEAL_CLASS_INFO[cls] || HEAL_CLASS_INFO.master;
+    return {
+      rules: HEAL_RULES_VERSION,
+      kind: String(kind || ""),
+      reason: String(reason || ""),
+      cls: HEAL_CLASS_INFO[cls] ? cls : "master",
+      why: String(why || ""),
+      unknown: Boolean(unknown),
+      route: info.route,
+      repair: info.repair,
+      retry: info.route === "retry",
+      maintainer: info.route === "maintainer",
+    };
+  }
+
+  /**
+   * Классификатор остановки. Возвращает класс и маршрут, а не решение: решение
+   * принимает `decideHeal` с учётом счётчиков этого инцидента.
+   */
+  function classifyPause(kind, reason) {
+    const key = String(kind || "").trim();
+    const byText = healTextMatch(reason);
+    if (byText) return healVerdict(key, byText.cls, byText.why, false, byText.reason);
+    const cls = HEAL_PAUSE_CLASS[key];
+    if (!cls) return healVerdict(key, "master", "вид остановки не распознан: не чиню наугад", true, key);
+    return healVerdict(key, cls, HEAL_CLASS_INFO[cls].label, false, key);
+  }
+
+  /**
+   * Ключ инцидента. Цифры и id из текста причины вырезаются: «ждал 17 мин» и
+   * «ждал 18 мин» — один инцидент, а не два повода продолжать заново.
+   */
+  function healIncidentKey(info = {}) {
+    const core = String(info.reason || "")
+      // Сначала id (UUID и длинный hex вместе с подписью), потом просто числа:
+      // иначе «id <uuid>» превращается в «id #» и каждая новая выдача — новый
+      // инцидент, а предохранитель обнуляется сам собой.
+      .replace(/\b(?:id|шаг|ход|turn|run|dispatch|runId|turnId)\s*:?\s*[0-9a-f-]{8,}/gi, "#")
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "#")
+      .replace(/[0-9a-f]{16,}/gi, "#")
+      .replace(/\d+/g, "#")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    return [String(info.kind || ""), String(info.ref || ""), String(info.runId || ""),
+      String(info.turnId || ""), core].join("|");
+  }
+
+  const healBackoff = (retries, config = {}) => {
+    const list = Array.isArray(config.healBackoffMs) && config.healBackoffMs.length
+      ? config.healBackoffMs : [30000, 120000];
+    return Number(list[Math.min(Math.max(retries, 0), list.length - 1)]) || 30000;
+  };
+
+  /**
+   * Что делать дальше: продолжить сами, позвать Maintainer'а или остановиться.
+   * Предохранители считаются по инциденту, а не по циклу целиком: второй раз за
+   * сутки один и тот же сбой — это новый инцидент.
+   */
+  function decideHeal(verdict, counters = {}, config = {}) {
+    const retryMax = Number.isFinite(Number(config.healRetryMax)) ? Number(config.healRetryMax) : 2;
+    const maintMax = Number.isFinite(Number(config.healMaintainerMax)) ? Number(config.healMaintainerMax) : 2;
+    const retries = Math.max(0, Number(counters.retries) || 0);
+    const escalations = Math.max(0, Number(counters.escalations) || 0);
+    const v = verdict || healVerdict("", "master", "причина не названа");
+
+    if (v.route === "retry") {
+      if (retries < retryMax) {
+        return {
+          action: "retry", attempt: retries + 1, max: retryMax,
+          delayMs: healBackoff(retries, config),
+          why: `${v.why}: продолжаю сам (${retries + 1} из ${retryMax})`,
+        };
+      }
+      return {
+        action: "master",
+        why: `временный сбой повторился ${retries} раз(а) (предел ${retryMax}): продолжаю только по слову Мастера`,
+      };
+    }
+    if (v.route === "maintainer") {
+      if (escalations < maintMax) {
+        return {
+          action: "maintainer", attempt: escalations + 1, max: maintMax,
+          why: `${v.why}: передаю Maintainer'у (${escalations + 1} из ${maintMax})`,
+        };
+      }
+      return {
+        action: "master",
+        why: `Maintainer уже ${escalations} раз(а) разбирал этот инцидент (предел ${maintMax}): останавливаю цикл и зову Мастера`,
+      };
+    }
+    return { action: "master", why: v.why || "остановка без автоматического пути" };
+  }
+
+  // ───────────────────────── телеметрия: что уходит наружу ─────────────────────────
+  // Наружу уходит состав журнала попыток и структурный снимок страницы. Переписки
+  // и секретов там нет по построению: снимок считает элементы и длины, а не текст
+  // реплик, а строки проходят через healRedact.
+  const HEAL_SECRET_PATTERNS = [
+    [/ntn_[A-Za-z0-9]{10,}/g, "ntn_<скрыт>"],
+    [/secret_[A-Za-z0-9]{10,}/g, "secret_<скрыт>"],
+    [/github_pat_[A-Za-z0-9_]{10,}/g, "github_pat_<скрыт>"],
+    [/gh[pousr]_[A-Za-z0-9]{10,}/g, "gh_<скрыт>"],
+    [/sk-[A-Za-z0-9]{12,}/g, "sk-<скрыт>"],
+    [/[Bb]earer\s+[A-Za-z0-9._-]{8,}/g, "Bearer <скрыт>"],
+    [/([?&](?:key|token|secret|code|auth)=)[^&\s"']+/gi, "$1<скрыт>"],
+    [/[0-9a-f]{40,}/gi, "<hex>"],
+  ];
+
+  /** Строка без секретов и без query-строк: адрес остаётся, параметры — нет. */
+  function healRedact(value) {
+    let text = String(value == null ? "" : value);
+    for (const [re, to] of HEAL_SECRET_PATTERNS) text = text.replace(re, to);
+    text = text.replace(/(https?:\/\/[^\s"'<>]*?)\?[^\s"'<>]*/gi, "$1?<скрыто>");
+    return text;
+  }
+
+  /** Рекурсивная очистка: телеметрия — дерево, а не одна строка. */
+  function healRedactTree(value, depth = 0) {
+    if (depth > 6) return "<глубоко>";
+    if (typeof value === "string") return healRedact(value);
+    if (Array.isArray(value)) return value.slice(0, 200).map((x) => healRedactTree(x, depth + 1));
+    if (value && typeof value === "object") {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (/^(token|key|secret|password|authorization|cookie)$/i.test(k)) { out[k] = "<скрыт>"; continue; }
+        out[k] = healRedactTree(v, depth + 1);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  function healByteLength(value) {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    try {
+      return new TextEncoder().encode(String(text)).length;
+    } catch {
+      return String(text).length * 2;
+    }
+  }
+
+  /**
+   * Собрать payload телеметрии и уложить его в лимит артефакта. Режем только
+   * историю журнала и диагностику: сам инцидент и классификация остаются, иначе
+   * файл бесполезен для разбора.
+   */
+  function buildHealTelemetry(input = {}, maxBytes = 200000) {
+    const journal = Array.isArray(input.journal) ? input.journal.slice(-200) : [];
+    const payload = healRedactTree({
+      schema: "relay-heal/1",
+      phase: String(input.phase || "stop"),
+      at: String(input.at || ""),
+      script: { version: String(input.version || ""), fingerprint: String(input.fingerprint || "") },
+      profile: String(input.profile || ""),
+      incident: input.incident || {},
+      verdict: input.verdict || {},
+      page: input.snapshot || {},
+      journal,
+    });
+    const trimmed = [];
+    if (healByteLength(payload) > maxBytes) {
+      while (payload.journal.length && healByteLength(payload) > maxBytes) {
+        trimmed.push(payload.journal.shift());
+      }
+      if (trimmed.length) payload.journalDropped = trimmed.length;
+    }
+    if (healByteLength(payload) > maxBytes) {
+      payload.page = { truncated: true, url: payload.page?.url || "", path: payload.page?.path || "" };
+    }
+    if (healByteLength(payload) > maxBytes) payload.journal = [];
+    return { payload, bytes: healByteLength(payload), dropped: Number(payload.journalDropped) || 0, fits: healByteLength(payload) <= maxBytes };
+  }
+
+  /**
+   * Гейт версии: продолжать можно, только если работает сборка новее той, что
+   * сломалась. Отпечатка в метаданных ScriptCat нет (`sctl get` даёт version и
+   * updatedAt), поэтому признак двух: номер версии и вшитый сборкой отпечаток.
+   */
+  function decideVersionGate(input = {}) {
+    const paused = String(input.pausedVersion || "");
+    const now = String(input.nowVersion || "");
+    const pausedPrint = String(input.pausedFingerprint || "");
+    const nowPrint = String(input.nowFingerprint || "");
+    const waited = Number(input.waitedMs) || 0;
+    const timeout = Number(input.timeoutMs) || 900000;
+    if (input.cancelled === true) return { ok: false, stop: true, why: "подтверждение новой версии отменено" };
+    if (!now) return { ok: false, stop: true, why: "версия работающей сборки не прочитана" };
+    if (paused && now === paused) {
+      if (waited > timeout) return { ok: false, stop: true, why: `новая сборка не подтверждена за ${Math.round(timeout / 60000)} мин: работает прежняя ${now}` };
+      return { ok: false, stop: false, why: `работает прежняя сборка ${now}: продолжение закрыто до установки новой` };
+    }
+    if (!paused) return { ok: true, stop: false, why: `работает ${now}: сравнивать не с чем, версия названа` };
+    if (pausedPrint && nowPrint && pausedPrint === nowPrint) {
+      return { ok: false, stop: true, why: "номер версии сменился, а отпечаток сборки тот же: установлен старый бандл под новым номером" };
+    }
+    return { ok: true, stop: false, why: `работает новая сборка ${now}` };
+  }
+
+  /** Строка сердцебиения: её читает сторож вне браузера, секретов в ней нет. */
+  function heartbeatLine(input = {}) {
+    const state = input.state === "paused" ? "paused" : "running";
+    return ["hb", "1", String(input.version || ""), state, String(input.at || ""), String(input.fingerprint || ""), String(input.seq || 0)].join(" ");
+  }
+
+  function parseHeartbeat(text) {
+    const m = String(text || "").trim().match(/^hb\s+(\d+)\s+(\S*)\s+(running|paused)\s+(\S*)\s+(\S*)\s+(\d+)$/);
+    if (!m) return null;
+    return { schema: Number(m[1]), version: m[2], state: m[3], at: m[4], fingerprint: m[5], seq: Number(m[6]) || 0 };
+  }
+
+  // ───────────────────────── самовосстановление: шаги ─────────────────────────
+  // Правила (класс, маршрут, предохранители, гейт версии, телеметрия) живут в
+  // 40-heal-core.js и проверяются чистым исполнением. Здесь только то, что нельзя
+  // проверить без сети и DOM: выгрузка наружу, разговор с Maintainer'ом и
+  // продолжение хода. Ни один шаг этого файла не ослабляет оракул: «приём без
+  // маркера» и штатные остановки (вопрос, план, пилот, приёмка, предел доработок)
+  // в маршрут восстановления не попадают вовсе — у них класс `master`.
+
+  const heartbeatKey = () => K.heartbeat;
+
+  /** Состояние самовосстановления: счётчики по инциденту + какая сборка сломалась. */
+  function healState() {
+    const raw = GM_getValue(K.heal, null);
+    const state = raw && typeof raw === "object" ? raw : {};
+    return {
+      ...state,
+      incident: state.incident && typeof state.incident === "object" ? state.incident : {},
+    };
+  }
+
+  function saveHealState(next) {
+    // Больше 20 инцидентов не храним: это счётчики, а не история.
+    const incidents = Object.entries(next.incident || {}).slice(-20);
+    GM_setValue(K.heal, { ...next, incident: Object.fromEntries(incidents) });
+  }
+
+  /** Счётчики этого инцидента; заодно продлеваем его в конце списка. */
+  function healCounters(key) {
+    const state = healState();
+    const found = state.incident[key] || {};
+    const counters = {
+      retries: Math.max(0, Number(found.retries) || 0),
+      escalations: Math.max(0, Number(found.escalations) || 0),
+      firstAt: found.firstAt || nowIso(),
+      lastAt: found.lastAt || "",
+    };
+    state.incident = { ...state.incident, [key]: counters };
+    saveHealState(state);
+    return counters;
+  }
+
+  function healBump(key, field) {
+    const state = healState();
+    const found = state.incident[key] || { retries: 0, escalations: 0, firstAt: nowIso() };
+    found[field] = Math.max(0, Number(found[field]) || 0) + 1;
+    found.lastAt = nowIso();
+    state.incident = { ...state.incident, [key]: found };
+    saveHealState(state);
+    return found;
+  }
+
+  /** Журнал попыток доставки как состав (без текста промптов). */
+  function healJournal() {
+    const raw = GM_getValue("cfn-prompt-journal-v1", []);
+    return Array.isArray(raw) ? raw.slice(-200) : [];
+  }
+
+  /**
+   * Структурный снимок страницы.
+   *
+   * Это не переписка: считаются элементы, длины и признаки состояния. Тексты
+   * реплик не выгружаются — только их количество, id последнего и длина.
+   */
+  function healPageSnapshot() {
+    const count = (sel) => {
+      try { return document.querySelectorAll(sel).length; } catch { return 0; }
+    };
+    const editor = (() => { try { return composer(); } catch { return null; } })();
+    const last = (() => { try { return lastMessageId() || ""; } catch { return ""; } })();
+    const msgs = (() => { try { return messages(); } catch { return []; } })();
+    const tails = msgs.slice(-3).map((node) => {
+      const text = (() => { try { return messageText(node); } catch { return ""; } })();
+      return { id: String(node.id || "").replace("chat-message-", ""), chars: String(text || "").length };
+    });
+    return healRedactTree({
+      url: location.href,
+      path: location.pathname,
+      origin: location.origin,
+      roleFromPath: (() => { try { return roleFromPath() || ""; } catch { return ""; } })(),
+      title: document.title,
+      readyState: String(document.readyState || ""),
+      messages: msgs.length,
+      lastMessageId: last,
+      tail: tails,
+      editor: {
+        found: Boolean(editor),
+        covered: editor ? (() => { try { return elementCovered(editor); } catch { return null; } })() : null,
+        textLength: editor ? (() => { try { return composerText(editor).length; } catch { return 0; } })() : 0,
+      },
+      generating: (() => { try { return generating(); } catch { return false; } })(),
+      busy: (() => { try { return busyReason()?.kind || ""; } catch { return ""; } })(),
+      counts: {
+        buttons: count("button, [role=\"button\"]"),
+        alerts: count("[role=\"alert\"]"),
+        statuses: count("[role=\"status\"]"),
+        transcripts: count("[data-agent-transcript-message=\"true\"]"),
+        userMessages: count("[data-user-message-layout=\"true\"]"),
+        prose: count(".prose"),
+        textarea: count("textarea"),
+        contenteditable: count("[contenteditable=\"true\"]"),
+        dialogs: count("[role=\"dialog\"]"),
+      },
+      captcha: (() => { try { return Boolean(captchaDialog()); } catch { return false; } })(),
+      skipCard: (() => { try { return Boolean(skipCardButton()); } catch { return false; } })(),
+      panels: (() => { try { return completionPanels().length; } catch { return 0; } })(),
+      diagnostics: (() => { try { return composerDiagnostics(); } catch { return null; } })(),
+    });
+  }
+
+  /** Имя выгрузки по схеме D-031: <МИССИЯ>__<КАРТОЧКА>__<вид>__<дата|SHA>. */
+  function healArtifactName(info = {}, at = new Date()) {
+    const mission = (() => {
+      try {
+        const row = GM_getValue(K.rolesCache, null);
+        const rows = Array.isArray(row) ? row : row?.rows || [];
+        const path = roleFromPath();
+        const hit = rows.find((r) => norm(r.id) === norm(path));
+        return hit?.id || "";
+      } catch { return ""; }
+    })();
+    const card = String(info.ref || "").trim();
+    const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+    const day = `${at.getUTCFullYear()}-${String(at.getUTCMonth() + 1).padStart(2, "0")}-${String(at.getUTCDate()).padStart(2, "0")}`;
+    const kind = String(info.kind || "pause").replace(/[^A-Za-z0-9-]/g, "").slice(0, 24) || "pause";
+    const tag = isUuid(card) ? card : `turn-${kind}`;
+    // Миссию в имени передаём только когда она похожа на D-031; иначе шлюз
+    // откажет по имени, а телеметрия не должна теряться из-за формата.
+    if (mission && /^[A-Za-z][A-Za-z0-9]{0,15}-[A-Za-z0-9][A-Za-z0-9-]{0,15}$/.test(mission) && isUuid(card)) {
+      return { name: `${mission}__${tag}__logs__${day}.json`, subdir: mission };
+    }
+    return { name: `manual__${String(C.driveFolder || "project").toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 20) || "project"}__heal-${kind}__${day}.json`, subdir: "" };
+  }
+
+  /**
+   * Выгрузка наружу: Drive (шлюз проекта) и GitHub (если есть токен).
+   *
+   * Идемпотентно: повтор с тем же содержимым — `duplicate`, а не второй файл.
+   * Отказ выгрузки не меняет решение по ходу: он попадает в журнал.
+   */
+  async function healUpload(payload, info = {}) {
+    const text = JSON.stringify(payload, null, 2);
+    const out = { drive: null, github: null, bytes: healByteLength(text) };
+    const name = healArtifactName(info);
+    try {
+      const saved = await gateway("saveArtifact", "", {
+        name: name.name, content: text, encoding: "utf8", ...(name.subdir ? { subdir: name.subdir } : {}),
+      });
+      out.drive = { ok: true, fileId: String(saved?.fileId || ""), name: name.name, duplicate: Boolean(saved?.duplicate) };
+    } catch (e) {
+      out.drive = { ok: false, name: name.name, error: String((e && e.message) || e).slice(0, 200) };
+    }
+    const token = GM_getValue(K.ghToken, "");
+    const repo = String(C.repo || "");
+    if (!token || !repo) {
+      out.github = { ok: false, skipped: !token ? "нет GitHub-токена" : "нет репозитория проекта" };
+    } else {
+      try {
+        const path = `telemetry/${name.name.replace(/\.json$/, "")}__${String(payload.script?.fingerprint || "") || "nofp"}.json`;
+        const res = await request("PUT", `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}`,
+          githubHeaders(token),
+          {
+            message: `telemetry: ${info.kind || "pause"} ${info.ref || ""}`.slice(0, 120),
+            content: (() => {
+              // btoa не берёт кириллицу: сначала байты UTF-8.
+              const bytes = new TextEncoder().encode(text);
+              let bin = "";
+              for (const byte of bytes) bin += String.fromCharCode(byte);
+              return btoa(bin);
+            })(),
+          });
+        out.github = { ok: true, path, sha: String(res?.content?.sha || "") };
+      } catch (e) {
+        out.github = { ok: false, path: "", error: String((e && e.message) || e).slice(0, 200) };
+      }
+    }
+    return out;
+  }
+
+  /** Полный цикл выгрузки: собрать (с усечением под лимит) и отправить. */
+  async function healPublish(phase, info, verdict) {
+    const built = buildHealTelemetry({
+      phase,
+      at: nowIso(),
+      version: SCRIPT_VERSION,
+      fingerprint: C.buildFingerprint || "",
+      profile: String(C.projectName || ""),
+      incident: {
+        kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
+        turnId: String(info.turnId || ""), reason: String(info.reason || "").slice(0, 600),
+        tries: info.tries ?? null, at: nowIso(),
+      },
+      verdict: verdict || {},
+      snapshot: healPageSnapshot(),
+      journal: healJournal(),
+    }, Number(C.healTelemetryMaxBytes) || 200000);
+    const sent = await healUpload(built.payload, info);
+    GM_setValue("cfn-heal-last-upload", { at: nowIso(), phase, ...sent, dropped: built.dropped });
+    return { built, sent };
+  }
+
+  /**
+   * Сердцебиение для сторожа вне браузера.
+   *
+   * Канал — ntfy, тот же сервер, что уже разрешён в `@connect`; отдельный топик
+   * `<топик проекта>-hb`, чтобы пульс не звонил в телефон и не мешал истории
+   * обычного топика. Сторож (`tools/relay-watchdog.mjs`) — отдельный процесс: он
+   * читает пульс с сервера и не умирает вместе с браузером. GitHub-коммит на
+   * каждый пульс не годится: это сотня коммитов в сутки.
+   */
+  async function beatHeartbeat() {
+    const state = healState();
+    const seq = Number(state.beatSeq || 0) + 1;
+    const line = heartbeatLine({
+      version: SCRIPT_VERSION,
+      fingerprint: C.buildFingerprint || "",
+      state: isPaused() ? "paused" : "running",
+      at: nowIso(),
+      seq,
+    });
+    saveHealState({ ...state, beatSeq: seq, lastBeatAt: nowIso(), lastBeatLine: line });
+    GM_setValue(heartbeatKey(), { at: Date.now(), line, seq });
+    const base = normalizeNtfyTopic(GM_getValue(K.ntfyTopic, ""));
+    if (!base) return { ok: false, skipped: "топик ntfy не задан" };
+    try {
+      await ntfyPublish(`${base}-hb`, GM_getValue(K.ntfyToken, ""), {
+        message: line, title: "Relay heartbeat", priority: 1, tags: "white_small_square",
+      });
+      return { ok: true, seq };
+    } catch (e) {
+      // Пульс — диагностика, а не работа: его пропажа не останавливает цикл.
+      return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+    }
+  }
+
+  /** Maintainer — закулисная роль транспорта: карточек не берёт, работает вне очереди. */
+  async function maintainerRole() {
+    let list = [];
+    try {
+      list = await roles();
+    } catch (e) {
+      log(`База «Роли» не ответила при поиске Maintainer'а: ${e.message}`, true, { ntfy: "quiet" });
+      return { role: null, why: `список ролей не прочитан: ${e.message}` };
+    }
+    const hit = list.find((r) => r.fn === "Maintainer" && r.url) || null;
+    if (!hit) return { role: null, why: "в базе «Роли» нет активной роли с функцией Maintainer" };
+    return { role: hit, why: "" };
+  }
+
+  /**
+   * Диагноз для Maintainer'а: факты инцидента, а не текст для Мастера.
+   *
+   * В промпт идут: класс и маршрут, причина паузы, структурный снимок, хвост
+   * журнала попыток, версия и отпечаток сборки. Переписки здесь нет.
+   */
+  function healDiagnosis(info, verdict, decision, upload) {
+    const built = buildHealTelemetry({
+      phase: "maintainer",
+      at: nowIso(),
+      version: SCRIPT_VERSION,
+      fingerprint: C.buildFingerprint || "",
+      profile: String(C.projectName || ""),
+      incident: {
+        kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
+        turnId: String(info.turnId || ""), reason: String(info.reason || "").slice(0, 400),
+      },
+      verdict: { ...verdict, decision },
+      snapshot: healPageSnapshot(),
+      journal: healJournal().slice(-12),
+    }, 8000);
+    const where = [
+      upload?.drive?.ok ? `Drive ${upload.drive.name} (id ${upload.drive.fileId || "не получен"})` : "",
+      upload?.github?.ok ? `GitHub ${upload.github.path}` : "",
+    ].filter(Boolean).join("; ");
+    return [
+      `ИНЦИДЕНТ ТРАНСПОРТА · класс ${verdict.cls} · ${verdict.why}.`,
+      `Остановка: «${String(info.reason || "").slice(0, 300)}»`,
+      `Вид паузы: ${info.kind || "пусто"}; карточка ${info.ref || "—"}; run ${info.runId || "—"}; ход ${info.turnId || "—"}.`,
+      `Разбор ${decision.attempt} из ${decision.max}. Сборка ${SCRIPT_VERSION} @ ${C.buildFingerprint || "без отпечатка"}.`,
+      where ? `Полная телеметрия: ${where}.` : "Полная телеметрия наружу не ушла — вложение ниже.",
+      "СНИМОК СТРАНИЦЫ И ЖУРНАЛ ПОПЫТОК (без переписки и секретов):",
+      JSON.stringify(built.payload, null, 2),
+      "",
+      "Правило ответа: первой строкой FIXED <что именно исправлено и в какой сборке> либо NOTFIXED <почему не берёшься>.",
+      "По D-027 ты предлагаешь дифф и пробу; коммит и установку делает Мастер. Без вердикта ход не продолжается.",
+    ].join("\n");
+  }
+
+  /**
+   * Отправить Maintainer'у передачу, дождавшись подтверждённой доставки.
+   *
+   * `sendToRole` кладёт ход в очередь; сама отправка происходит на его странице
+   * (`consumePending`). Поэтому здесь ждём подтверждения ограниченное время, а
+   * «не подтвердили» — это честный отказ, а не повод продолжать: без ответа
+   * Maintainer'а чинить наугад нельзя.
+   */
+  async function sendMaintainerTurn(role, text, turnId, info) {
+    const queued = await sendToRole(role, text, "heal", String(info.ref || turnId), {
+      turnId,
+      title: `транспорт: ${info.kind || "остановка"}`,
+      heal: { kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || "") },
+    });
+    if (!queued) return { ok: false, why: "передача не поставлена в очередь" };
+    const ready = await maintainerTurnReady(role, turnId, 45000);
+    if (!ready.ok) return { ok: false, why: ready.why };
+    return { ok: true, role, turnId };
+  }
+
+  /**
+   * Ожидание готовности передачи Maintainer'у.
+   *
+   * Три состояния различаются честно:
+   *  • ход доставлен (`verified`) — передача состоялась;
+   *  • очередь ушла и ровно этот ход стал ожиданием — состоялась;
+   *  • очередь ещё ждёт — ждём, но не дольше предела.
+   */
+  function maintainerTurnReady(role, turnId, timeoutMs) {
+    const limit = Math.max(3000, Number(timeoutMs) || 45000);
+    const started = Date.now();
+    const deadline = started + limit;
+    return new Promise((resolve) => {
+      const step = () => {
+        const expect = GM_getValue(K.expect, null);
+        const pending = GM_getValue(K.pending, null);
+        const mine = expect && expect.kind === "heal" && norm(expect.turnId) === norm(turnId);
+        if (mine && (expect.verified === true || !pending)) {
+          resolve({ ok: true });
+          return;
+        }
+        if (!expect && !pending && Date.now() - started > 5000) {
+          resolve({ ok: false, why: "очередь и ожидание пусты: передача не подтверждена" });
+          return;
+        }
+        if (Date.now() > deadline) {
+          resolve({ ok: false, why: `доставка Maintainer'у «${role.name}» не подтверждена за ${Math.round(limit / 1000)} с` });
+          return;
+        }
+        setTimeout(step, 500);
+      };
+      step();
+    });
+  }
+
+  /**
+   * Передать ход Maintainer'у и дождаться его ответа.
+   *
+   * Возвращает { ok, resumed, decision, verdict }. «Ответ не пришёл» — не повод
+   * продолжать наугад: вызывающий ставит паузу, а не чинит сам.
+   */
+  async function escalateToMaintainer(info, verdict, decision) {
+    const found = await maintainerRole();
+    if (!found.role) return { ok: false, why: found.why };
+    const role = found.role;
+    const upload = GM_getValue("cfn-heal-last-upload", null) || {};
+    const turnId = uid();
+    const text = healDiagnosis(info, verdict, decision, upload);
+    const sent = await sendMaintainerTurn(role, text, turnId, info);
+    if (!sent.ok) return sent;
+    log(
+      `Ход передаю Maintainer'у «${role.name}» (разбор ${decision.attempt} из ${decision.max}): ${verdict.why}.`,
+      true,
+      { ntfy: "quiet", title: "Relay: разбор транспорта" },
+    );
+    return { ok: true, role, turnId };
+  }
+
+  /**
+   * Ответ Maintainer'а по нашей передаче.
+   *
+   * Профиль `heal.report` без маркера: решение читается по правилу «первая строка
+   * — вердикт». Так «приём без маркера» не появляется: у этой передачи правило
+   * ответа своё и без маркера, а у рабочих ходов маркер по-прежнему обязателен.
+   */
+  async function healStep(role, expect, manual = false) {
+    if (!expect || expect.kind !== "heal") {
+      pause("Это не ход разбора транспорта: решение не применяю.",
+        { kind: "handoff-kind", ref: expect?.ref || "" });
+      return true;
+    }
+    const live = GM_getValue(K.expect, null);
+    if (!live || live.kind !== "heal" || norm(live.turnId) !== norm(expect.turnId)) {
+      pause("Ожидание разбора транспорта изменилось: чужой ход не перезаписываю.", {
+        kind: "marker-mismatch", ref: expect.ref || "",
+      });
+      return true;
+    }
+    const page = pageReady(expect);
+    if (!page.ok && !manual) return true;
+    const replies = messagesAfter(expect.watermark);
+    const last = replies.filter((m) => m.ended && String(m.text || "").trim()).at(-1);
+    if (!last) {
+      if (manual) log(`${role.name} ещё не ответил по разбору транспорта — подождите.`, true);
+      return true;
+    }
+    const verdict = healReportVerdict(last.text);
+    const state = healState();
+    const pending = state.pending || {};
+    const info = {
+      kind: pending.kind || expect.heal?.kind || "", ref: expect.ref || "",
+      runId: pending.runId || expect.heal?.runId || "", turnId: expect.turnId || "",
+      reason: pending.reason || "",
+    };
+    // Передача закончилась: ожидание и очередь снимаются до применения решения,
+    // иначе повторный тик применит его дважды.
+    GM_setValue(K.expect, null);
+    GM_setValue(K.pending, null);
+    if (verdict.kind === "fixed") {
+      const gate = decideVersionGate({
+        pausedVersion: state.pausedVersion || "",
+        nowVersion: SCRIPT_VERSION,
+        pausedFingerprint: state.pausedFingerprint || "",
+        nowFingerprint: C.buildFingerprint || "",
+        waitedMs: Date.now() - Number(state.pausedAt || 0),
+        timeoutMs: Number(C.healVersionTimeoutMs) || 900000,
+      });
+      if (!gate.ok) {
+        const key = healIncidentKey(info);
+        healBump(key, "escalations");
+        pause(
+          `Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
+            "Продолжение закрыто до установки новой сборки: установите её и нажмите «Продолжить».",
+          { kind: "heal-await-update", ref: info.ref, runId: info.runId, turnId: info.turnId },
+        );
+        return true;
+      }
+      log(`Maintainer «${role.name}»: поломка исправлена. ${gate.why}. Продолжаю ход с прежним ожиданием.`, true,
+        { ntfy: "quiet", title: "Relay: транспорт исправлен" });
+      saveHealState({ ...healState(), pending: null, resolvedAt: nowIso(), resolvedBy: "maintainer" });
+      resume("исправлено Maintainer'ом");
+      return true;
+    }
+    saveHealState({ ...healState(), pending: null });
+    pause(
+      `Maintainer «${role.name}» не смог исправить поломку: ${verdict.reason || "причина не названа"}. ` +
+        "Цикл остановлен, ход не потерян: карточка и очередь на месте. Телеметрия выгружена — " +
+        "посмотрите её и решите вручную.",
+      { kind: "heal-maintainer-done", ref: info.ref, runId: info.runId, turnId: info.turnId },
+    );
+    return true;
+  }
+
+  /**
+   * Вердикт Maintainer'а: первая содержательная строка начинается с
+   * `FIXED`/`NOTFIXED`. Форма другая, чем у маркера, поэтому и разбор другой;
+   * это не ослабление: у рабочих ходов маркер остаётся обязательным.
+   */
+  function healReportVerdict(text) {
+    const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (const line of lines.slice(0, 8)) {
+      const m = line.match(/^(FIXED|NOTFIXED)\b[\s:—-]*(.*)$/i);
+      if (!m) continue;
+      const reason = m[2].replace(/^[—:,\-\s]+/, "").slice(0, 600);
+      const kind = m[1].toUpperCase() === "FIXED" ? "fixed" : "notfixed";
+      if (kind === "fixed" && !reason) return { kind: "notfixed", reason: "FIXED без объяснения: что именно исправлено — не названо" };
+      return { kind, reason };
+    }
+    return { kind: "notfixed", reason: "ответ без вердикта FIXED или NOTFIXED" };
+  }
+
+  /**
+   * Разбор остановки: классификация → предохранитель → действие.
+   *
+   * Вызывается из `pause()` уже ПОСЛЕ того, как состояние сохранено и Мастер
+   * уведомлён: даже полный отказ этого шага не должен оставлять цикл без причины.
+   */
+  async function healAfterPause(info) {
+    const verdict = classifyPause(info.kind, info.reason);
+    const key = healIncidentKey(info);
+    const counters = healCounters(key);
+    const decision = decideHeal(verdict, counters, C);
+    saveHealState({
+      ...healState(),
+      last: { kind: verdict.kind, cls: verdict.cls, route: verdict.route, why: verdict.why, at: nowIso() },
+      pausedVersion: String(info.version || SCRIPT_VERSION),
+      pausedFingerprint: String(info.fingerprint ?? C.buildFingerprint ?? ""),
+      pausedAt: Date.now(),
+    });
+    // Телеметрия — на остановке и на восстановлении, не каждый тик: квота Drive и
+    // GitHub не бесконечная, а пауза уже означает «ход встал».
+    let upload = null;
+    try {
+      upload = await healPublish("stop", info, { ...verdict, decision });
+    } catch (e) {
+      log(`Телеметрия остановки не выгружена: ${e.message}`, true, { ntfy: false });
+    }
+
+    if (verdict.cls === "momentary" && decision.action === "retry") {
+      healBump(key, "retries");
+      log(
+        `${decision.why}. Продолжу сам через ${Math.round(decision.delayMs / 1000)} с: ` +
+          "состояние хода сохранено, оракул не трогается.",
+        false,
+        { ntfy: "quiet", title: "Relay: временный сбой" },
+      );
+      setTimeout(() => {
+        if (!isPaused() || String(GM_getValue(K.paused, "")) !== String(info.reason)) return;
+        resume(`временный сбой: автопродолжение ${decision.attempt} из ${decision.max}`);
+      }, Math.max(1000, decision.delayMs));
+      return { verdict, decision, retried: true };
+    }
+
+    if (verdict.cls === "transport" && decision.action === "maintainer") {
+      saveHealState({
+        ...healState(),
+        pending: {
+          kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
+          reason: String(info.reason || ""), cls: verdict.cls, at: nowIso(),
+        },
+      });
+      const sent = await escalateToMaintainer(info, verdict, decision);
+      if (!sent.ok) {
+        // Доставка до Maintainer'а не сработала — это тот самый случай «сломана
+        // сама доставка»: не повторяем вслепую, зовём Мастера прямым путём.
+        healBump(key, "escalations");
+        pause(
+          `${decision.why}, но передать ход не удалось: ${sent.why}. ` +
+            "Это поломка самой доставки — разбирает Мастер. Телеметрия выгружена, ход не потерян.",
+          { kind: "heal-no-maintainer", ref: info.ref, runId: info.runId, turnId: info.turnId, quiet: true },
+        );
+        return { verdict, decision, escalated: false, why: sent.why };
+      }
+      return { verdict, decision, escalated: true };
+    }
+
+    // Всё остальное — стоп и Мастер: чинить нечего или предохранитель исчерпан.
+    const tail = decision.action === "master" && verdict.route !== "master" ? ` ${decision.why}.` : "";
+    const why = verdict.unknown
+      ? "Вид остановки не распознан: чинить наугад нельзя."
+      : verdict.cls === "arena" ? "Это сбой сайта Arena: транспорту чинить нечего."
+        : "Автоматического пути нет.";
+    if (decision.action === "master" && verdict.route !== "master") {
+      pause(`${why}${tail} Телеметрия выгружена: состав журнала и структурный снимок страницы.`,
+        { kind: "heal-exhausted", ref: info.ref, runId: info.runId, turnId: info.turnId, quiet: true });
+    }
+    return { verdict, decision, stopped: true };
+  }
+
+  /** Восстановление после установки новой сборки: выгрузка и сброс предохранителей. */
+  async function healAfterUpdate(fromVersion) {
+    try {
+      await healPublish("recovered", {
+        kind: "update-recovery", ref: "", runId: "", turnId: "",
+        reason: `сборка ${fromVersion || "неизвестной версии"} заменена на ${SCRIPT_VERSION} @ ${C.buildFingerprint || "без отпечатка"}`,
+      }, { cls: "master", route: "master", why: "установлена новая сборка" });
+    } catch (e) {
+      log(`Телеметрия восстановления не выгружена: ${e.message}`, true, { ntfy: false });
+    }
+    saveHealState({ ...healState(), pending: null, recoveredAt: nowIso(), recoveredFrom: String(fromVersion || "") });
+  }
+
   // ───────────────────────────── цикл ─────────────────────────────
   let busy = false;
   /** Сколько раз подряд шаг снимали с блокировки по тишине. */
@@ -16866,6 +17841,10 @@
         // У Reviewer тоже бывают карточки. Их вердикт — ответ по карточке,
         // а не назначенная отдельно приёмка миссии.
         await submitExecutor(me, expect, fromToggle);
+      } else if (expect?.kind === "heal") {
+        // D-073: ответ Maintainer'а разбирается до любой другой ветки — иначе
+        // передача транспорта попала бы в чужую роль по функции адресата.
+        await healStep(me, expect, fromToggle);
       } else if (me.fn === "Coordinator") {
         await coordinatorStep(me, expect, fromToggle);
       } else if (me.fn === "Reviewer" && expect) {
@@ -17004,6 +17983,17 @@
     setStatus();
     setup(false);
     setInterval(() => tick(false), C.tickMs);
+    // D-073: пульс для сторожа вне браузера. Сторож — отдельный процесс: он
+    // видит, что пульс кончился, хотя браузер жив, и зовёт Мастера. Раз в
+    // `heartbeatMs` (10 минут), а не каждый тик: это квота, а не диагностика хода.
+    const beat = () => {
+      if (typeof beatHeartbeat !== "function") return;
+      Promise.resolve()
+        .then(() => beatHeartbeat())
+        .catch((e) => console.warn("[Relay heartbeat]", (e && e.message) || e));
+    };
+    if (!GM_getValue(K.paused, "")) beat();
+    setInterval(beat, Math.max(60000, Number(C.heartbeatMs) || 600000));
     // Вернулись во вкладку — не ждём очередного тика: в фоне таймеры режутся,
     // и без этого следующая проверка могла бы случиться через минуту.
     document.addEventListener("visibilitychange", () => {

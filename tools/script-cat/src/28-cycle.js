@@ -614,6 +614,10 @@
         // У Reviewer тоже бывают карточки. Их вердикт — ответ по карточке,
         // а не назначенная отдельно приёмка миссии.
         await submitExecutor(me, expect, fromToggle);
+      } else if (expect?.kind === "heal") {
+        // D-073: ответ Maintainer'а разбирается до любой другой ветки — иначе
+        // передача транспорта попала бы в чужую роль по функции адресата.
+        await healStep(me, expect, fromToggle);
       } else if (me.fn === "Coordinator") {
         await coordinatorStep(me, expect, fromToggle);
       } else if (me.fn === "Reviewer" && expect) {

@@ -221,6 +221,12 @@
     provision: "cfn-agent-provision-v1",
     provisionRequest: "cfn-agent-provision-request-v1",
     provisionLock: "cfn-agent-provision-lock",
+    // D-073: самовосстановление. Инцидент считается по ключу причины, поэтому
+    // счётчики автопродолжений и передач Maintainer'у живут вместе с отметкой
+    // «какая сборка сломалась» — иначе продолжение после переустановки не
+    // доказать, а предохранитель обнулялся бы при каждом переходе страницы.
+    heal: "cfn-heal-state",
+    heartbeat: "cfn-heartbeat",
   };
 
   // sessionStorage также разделён; выбранный ID хранится отдельно на вкладку.

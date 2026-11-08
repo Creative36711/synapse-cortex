@@ -4,6 +4,8 @@
   // Notion (Agent Admin), а не по имени роли. Проектные имена не зашиты.
 
   const PROVISION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    // D-073: Maintainer здесь осознанно нет — закулисный агент транспорта не
+  // создаётся через provisioning и не получает карточек (D-063/D-027).
   const PROVISION_FUNCTIONS = ["Coordinator", "Executor", "Auditor", "Auditory", "Reviewer"];
   const PROVISION_STATES = ["validated", "creating", "repo_selected", "bootstrap_sent", "url_captured",
     "renaming", "renamed", "notion_updated", "activating", "activated", "archiving_old", "done", "paused", "error"];

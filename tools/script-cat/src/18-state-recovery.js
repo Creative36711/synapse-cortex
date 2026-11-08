@@ -50,6 +50,14 @@
     const seen = String(GM_getValue(K.stateV, "") || "");
     if (seen === SCRIPT_VERSION) return "";
     GM_setValue(K.stateV, SCRIPT_VERSION);
+    // D-073: смена сборки — это и есть «восстановление» после остановки. Наружу
+    // уходит вторая точка телеметрии (первая — сама остановка), а предохранители
+    // инцидента не сбрасываются: новую сборку ещё нужно подтвердить.
+    if (typeof healAfterUpdate === "function" && seen) {
+      Promise.resolve()
+        .then(() => healAfterUpdate(seen))
+        .catch((e) => log(`Восстановление после обновления не отмечено: ${(e && e.message) || e}`, true, { ntfy: false }));
+    }
     const expect = GM_getValue(K.expect, null);
     const pending = GM_getValue(K.pending, null);
     if (!expect && !pending) return "";

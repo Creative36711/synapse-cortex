@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { assertUserscriptVersionContract } from './version-oracle.mjs';
 import { assertDigestVersionMatches, inlineDigest, normalizeDigest } from './regulation-oracle.mjs';
 import { assertPromptCoverage } from './coverage-oracle.mjs';
+import { buildFingerprint, inlineFingerprint } from './fingerprint-oracle.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const header = '00-header.js';
@@ -19,6 +20,7 @@ const parts = [
   '20-technical-context.js', '21-prompts.js', '22-executor.js', '23-coordinator.js', '24-feedback.js',
   '25-legacy-adr.js', '26-review.js', '26b-arbiter.js', '27-review-answers.js', 'pilot-transport.js', '30-tool-limit.js',
   '31-provision-core.js', '32-provision-dom.js', '33-provision-flow.js', '34-provision-ui.js',
+  '40-heal-core.js', '41-heal.js',
   '28-cycle.js', '29-boot.js',
 ];
 const read = (name) => readFile(join(here, 'src', name), 'utf8');
@@ -36,11 +38,13 @@ const findDocs = () => {
 const docs = findDocs();
 const digest = normalizeDigest(await readFile(join(docs, 'regulation-digest.md'), 'utf8'));
 assertDigestVersionMatches(digest, await readFile(join(docs, 'REGULATION.md'), 'utf8'));
-const source = inlineDigest(
-  (await read(header)) + '\n((GM_getValue, GM_setValue) => {\n  "use strict";\n\n' +
-    (await Promise.all(parts.map(read))).join('\n') + '})(GM_getValue, GM_setValue);\n',
-  digest,
-);
+// D-073: отпечаток считается по источнику ДО подстановки самого отпечатка и
+// регламента — иначе он зависел бы от собственного значения. Номер версии и
+// отпечаток независимы: номер говорит «какой выпуск», отпечаток — «какая сборка».
+const rawSource = (await read(header)) + '\n((GM_getValue, GM_setValue) => {\n  "use strict";\n\n' +
+  (await Promise.all(parts.map(read))).join('\n') + '})(GM_getValue, GM_setValue);\n';
+const fingerprint = buildFingerprint(rawSource);
+const source = inlineFingerprint(inlineDigest(rawSource, digest), fingerprint);
 assertUserscriptVersionContract(source);
 
 // Coverage-оракул: ruleId → block → profiles. Падает, если правило регламента

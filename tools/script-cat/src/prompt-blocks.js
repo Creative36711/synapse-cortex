@@ -342,6 +342,25 @@
       })))}` });
     def("provision.policy", { audience: ["Coordinator", "Reviewer"], render: (c) =>
       `Верни только одобренные jobs (не больше ${c.provision?.maxJobs ?? 3}). Пустой jobs допустим. role_page_id бери из списка, role_name и repo — точно из свежей строки. action только create или replace. Ответ заверши одним маркером CF_AGENT_PROVISION_RESULT.` });
+    // D-073: передача хода Maintainer'у. Это не карточка и не миссия: факты —
+    // инцидент, класс причины и сборка. Переписки в блоке нет: контекст
+    // собирает транспорт, а не чат.
+    def("heal.brief", { verbatim: true, audience: ["Maintainer"], render: (c) => {
+      const h = c.heal || {};
+      return [
+        `Инцидент транспорта: ${h.cls || h.kind || "остановка"} · ${h.why || ""}`,
+        `Вид паузы: ${h.kind || "пусто"}; карточка ${h.ref || "—"}; run ${h.runId || "—"}; ход ${h.turnId || "—"}.`,
+        `Сборка: ${h.version || "?"} @ ${h.fingerprint || "без отпечатка"}.`,
+        h.reason ? `Причина остановки: ${h.reason}` : "",
+        h.telemetry ? `Телеметрия: ${h.telemetry}` : "",
+      ].filter(Boolean).join("\n");
+    } });
+    def("heal.protocol", { ruleIds: ["R-EVIDENCE"], audience: ["Maintainer"], render: () => [
+      "Ты разбираешь поломку транспорта, а не работу по миссии. Ничего не коммить, не устанавливай и не меняй карточки: по D-027 результат — предложенный дифф, проба «до/после» и версия.",
+      "Первой строкой ответа — вердикт: FIXED <что именно исправлено и в какой сборке> либо NOTFIXED <почему не берёшься>. Без вердикта ход не продолжается.",
+      "Если чинить нечего (капча, вход в Arena, сбой сайта) — NOTFIXED и причина: это не поломка транспорта.",
+    ].join("\n") });
+
     def("marker.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MARKER"], render: (c) => [
       "Маркер — последней строкой. Команды archive/delete/activate/admin как отдельные команды запрещены.",
       `CF_AGENT_PROVISION_RESULT {"request_id":"${c.provision?.requestId}","jobs":[],"reason":"краткое обоснование"}`,

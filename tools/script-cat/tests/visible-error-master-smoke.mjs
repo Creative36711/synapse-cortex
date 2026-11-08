@@ -139,8 +139,10 @@ const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = fal
 const pauseStart = source.indexOf('  function pause(reason, context = {}) {');
 const pauseEnd = source.indexOf('\n\n  /**', pauseStart);
 assert.ok(pauseStart > 0 && pauseEnd > pauseStart, 'pause function is present');
+// D-073: пауза помнит сборку (version/fingerprint) и запускает разбор причины.
 const pauseFn = new Function(
   'K', 'GM_setValue', 'autoOn', 'log', 'notifyNtfy', 'playAlert', 'setStatus',
+  'SCRIPT_VERSION', 'C', 'healAfterPause',
   `${source.slice(pauseStart, pauseEnd)}\nreturn pause;`,
 );
 {
@@ -158,12 +160,16 @@ const pauseFn = new Function(
     (...args) => calls.notify.push(args),
     () => { calls.alert += 1; },
     () => { calls.status += 1; },
+    '1.13.0',
+    { buildFingerprint: 'abc123' },
+    () => {},
   );
   pause('Arena rejected the live run', { kind: 'arena-error', ref: 'message-5', runId: 'run-5' });
   assert.equal(store.get(keys.paused), 'Arena rejected the live run');
   assert.deepEqual(store.get(keys.pause), {
     kind: 'arena-error', reason: 'Arena rejected the live run', at: store.get(keys.pause).at,
     ref: 'message-5', runId: 'run-5', turnId: '', tries: null, wasAuto: true,
+    version: '1.13.0', fingerprint: 'abc123',
   });
   assert.equal(calls.notify[0][1].priority, '5', 'Master pause is urgent');
   assert.equal(calls.notify[0][1].cycleStopped, true, 'a real pause marks the cycle stopped');
@@ -177,7 +183,7 @@ const pauseFn = new Function(
   const store = new Map();
   const notifications = [];
   let alerts = 0;
-  const pause = pauseFn(keys, (key, value) => store.set(key, value), () => false, () => {}, (...args) => notifications.push(args), () => { alerts += 1; }, () => {});
+  const pause = pauseFn(keys, (key, value) => store.set(key, value), () => false, () => {}, (...args) => notifications.push(args), () => { alerts += 1; }, () => {}, '1.13.0', { buildFingerprint: 'abc123' }, () => {});
   pause('Reviewer will decide this', { quiet: true, kind: 'reviewer', notifyTitle: 'Relay: review' });
   assert.equal(notifications[0][1].priority, '2', 'quiet pause does not become a loud Master alert');
   assert.equal(notifications[0][1].cycleStopped, true, 'quiet pause is still an essential stop');

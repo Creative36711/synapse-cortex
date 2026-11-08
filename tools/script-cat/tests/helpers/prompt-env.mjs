@@ -7,11 +7,21 @@ import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(here, '..', '..', 'src');
+// D-073: правила самовосстановления — чистое ядро, исполняется пробами.
 const files = ['prompt-marker-registry.js', 'prompt-blocks.js', 'prompt-profiles.js', 'prompt-compiler.js'];
+const healFiles = ['40-heal-core.js'];
 const source = files.map((f) => readFileSync(join(srcDir, f), 'utf8')).join('\n');
 
 export const promptApi = new Function(`${source}\nreturn { PromptCompiler, PROMPT_PROFILES, PROMPT_BLOCKS, PROMPT_MARKER_REGISTRY };`)();
 export const { PromptCompiler, PROMPT_PROFILES, PROMPT_BLOCKS, PROMPT_MARKER_REGISTRY } = promptApi;
+
+// Чистое ядро самовосстановления: классификация остановок, предохранители,
+// телеметрия, гейт версии. Без DOM, без GM, без сети — поэтому исполняется здесь.
+const healSource = healFiles.map((f) => readFileSync(join(srcDir, f), 'utf8')).join('\n');
+export const healApi = new Function(`${healSource}\nreturn {
+  HEAL_RULES_VERSION, HEAL_CLASS_INFO, HEAL_PAUSE_CLASS, healVerdict, classifyPause,
+  healIncidentKey, healBackoff, decideHeal, healRedact, healRedactTree, healByteLength,
+  buildHealTelemetry, decideVersionGate, heartbeatLine, parseHeartbeat };`)();
 
 export const UUID = {
   dispatch: 'a709d6df-4698-4a98-b111-90d22de42894',

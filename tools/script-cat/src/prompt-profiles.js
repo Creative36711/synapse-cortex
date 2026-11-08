@@ -139,6 +139,27 @@
       budget: { overhead: 250 },
     });
 
+    // D-073: разбор поломки транспорта. Маркера нет осознанно: это не ход
+    // роли команды, а передача закулисному Maintainer'у со своим правилом
+    // ответа (первая строка — FIXED/NOTFIXED). Рабочие ходы по-прежнему
+    // требуют маркер: «приём без маркера» здесь не появляется.
+    def("heal.report", {
+      audience: ["Maintainer"], marker: null,
+      blocks: ["heal.brief", "heal.protocol"],
+      requiredFacts: ["role.name", "heal.kind"],
+      forbidden: ["identity.task", "identity.mission", "repo.target", "repo.boundary", "role.zone",
+        "authority.core", "authority.executor", "authority.auditor", "authority.coordinator", "authority.reviewer",
+        "git.executor", "git.auditor", "evidence.rule", "card.fields", "task.intent", "task.invariants",
+        "task.acceptance", "task.scope", "task.freedom", "task.assignment", "queue.snapshot", "queue.coordinator",
+        "answers.delta", "review.evidence", "review.protocol", "answer.question", "answer.protocol", "answer.resume",
+        "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "drive.layout", "drive.artifacts",
+        "mission.returned", "plan.note", "coordinator.prime", "delivery.retry", "delivery.recovery",
+        "delivery.tool_limit", "reminder.marker", "arbiter.case", "arbiter.protocol", "pilot.brief", "pilot.stop",
+        "pilot.repo", "pilot.continue", "marker.agent", "marker.coordinator", "marker.review", "marker.answer",
+        "marker.arbiter", "marker.provision"],
+      budget: { overhead: 900 },
+    });
+
     // Provisioning: отдельный административный запрос, не миссия и не карточка.
     def("admin.provision", {
       audience: ["Coordinator", "Reviewer"], marker: "CF_AGENT_PROVISION_RESULT",
@@ -156,6 +177,8 @@
     // Выбор профиля по kind + role.fn + tier.
     const select = (kind, fn, tier) => {
       if (kind === "provision") return "admin.provision";
+      // D-073: разбор транспорта — свой профиль без маркера, не dispatch и не review.
+      if (kind === "heal") return "heal.report";
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";
