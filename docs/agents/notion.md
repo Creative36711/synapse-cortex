@@ -13,7 +13,7 @@
 | Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check | ScriptCat | вписывать вручную «для порядка» |
 | Намерение, Инварианты, Acceptance, Scope, Кому, Sequence | Coordinator | менять оракул миссии без ADR/решения |
 | Draft → Ready, разбор Submitted, Accepted/Rework | Coordinator | выдавать Reviewer обычную рабочую карточку |
-| роли, Agent URL, доступы, проект | Мастер | создавать/менять роли самовольно |
+| роли, Agent URL, доступы, проект | Мастер | создавать/менять роли самовольно (исключение — разовое поручение Мастера записать вариант `Функция = Maintainer` и строку `Transport Maintainer`, D-074) |
 | вердикт миссии и ответ на вопрос | Warden | править код/карточки вместо вердикта |
 
 ## Статусы
