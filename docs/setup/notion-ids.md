@@ -1,6 +1,8 @@
 # Настройка: ID баз Notion, профиль ScriptCat, Drive Gateway
 
 Создано Warden 2026-11-02. Здесь только идентификаторы ресурсов, **никаких секретов**.
+Ссылки на страницы — только `https://app.notion.com/p/<page_id>` или голый `page_id`;
+публичные адреса `notion.site` не используются (правило — `docs/agents/notion.md`).
 
 ## 1. Notion
 
