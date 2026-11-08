@@ -251,7 +251,15 @@ function main() {
     return 0;
   }
   const result = buildOnce(args);
-  if (args.json) console.log(JSON.stringify(result.report || { error: result.error }, null, 2));
+  // `--json` — машинный вывод и ничего больше: раньше человеческая строка шла в
+  // тот же stdout, и разобрать его как JSON было нельзя. Теперь она в stderr,
+  // а при `--json` ещё и помечена, чтобы не путаться с ошибкой запуска.
+  if (args.json) {
+    console.log(JSON.stringify(result.report || { error: result.error }, null, 2));
+    if (!result.ok) console.error(`сборка не допущена: ${result.error}`);
+    else console.error(`сборка допущена: ${result.report.bundle.version} @ ${result.report.bundle.fingerprint}`);
+    return result.code;
+  }
   if (!result.ok) console.error(`сборка не допущена: ${result.error}`);
   else console.log(`сборка допущена: ${result.report.bundle.version} @ ${result.report.bundle.fingerprint}, ` +
     `${result.report.bundle.bytes} Б, sha256 ${result.report.bundle.sha256.slice(0, 12)}`);

@@ -45,15 +45,20 @@ const card = (over) => ({
   },
 });
 
+// D-075 п. 2: reworkLine называет дефект адресата тем же разбором, что
+// черновики и Ready, поэтому в песочницу идёт и roleDefect.
+const defect = sliceBetween('  function roleDefect(role, known = []) {', '  function draftLine(cards, known = []) {');
 const api = new Function(
-  'C', 'rt', 'taskTitle', 'taskRole',
-  `${block}
+  'C', 'rt', 'taskTitle', 'taskRole', 'norm',
+  `${defect}
+   ${block}
    return { reworkCause, staleMarks, reworkLine };`,
 )(
   { readyLineMax: 6 },
   (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || '').join(''),
   (c) => (c.properties?.['Запрос']?.title || []).map((x) => x.plain_text).join(''),
   (c) => c.properties?.['Кому']?.select?.name || '',
+  (x) => String(x || '').replace(/-/g, '').toLowerCase(),
 );
 
 // ── 1. Причина Rework и следы прошлого ответа ──────────────────────────────
@@ -94,7 +99,7 @@ assert.equal(api.reworkLine(null), '', 'null тоже пустой');
 
 // ── 5. Ready со следами прошлого ответа предупреждает заранее ──────────────
 {
-  const readyBlock = sliceBetween('  function readyLine(cards) {', '  /**\n   * Rework — статус');
+  const readyBlock = sliceBetween('  function readyLine(cards, known = []) {', '  /**\n   * Rework — статус');
   assert.match(readyBlock, /остались \$\{stale\.join/, 'readyLine называет следы');
   assert.match(readyBlock, /следы снимет транспорт после разрешённого возврата/, 'следы снимаются только после разрешённого возврата');
   assert.match(readyBlock, /это повторная работа/, 'отвеченная карточка в Ready названа повторной работой');
@@ -112,7 +117,7 @@ assert.match(coord, /Accepted\/Rework\/Ready — ты/, 'Ready — право К
 assert.doesNotMatch(coord, /чисти «Submitted At», «PR», «Run ID», иначе выдача откажет/, 'прежняя просьба чистить коннектором убрана');
 
 // ── 7. Строка Rework доходит до Координатора ───────────────────────────────
-assert.match(src, /reworkLine\(queue\.rework\)/, 'reworkLine вызывается при запросе плана');
+assert.match(src, /reworkLine\(queue\.rework, directory\)/, 'reworkLine вызывается при запросе плана вместе со списком ролей (D-075 п. 2)');
 assert.match(src, /function coordinatorPrompt\([\s\S]*?rework = "",/, 'промпт принимает строку Rework');
 
 console.log('OK: relay 1.4.63 — Rework не запирает карточку: причина в промпте, путь назад назван, следы снимает транспорт');

@@ -87,6 +87,23 @@
     }
   }
 
+  /**
+   * Варианты select «Запросы → Кому» — одним списком имён.
+   *
+   * Нужны гейту укомплектованности (D-075 п. 4): рабочая роль без варианта
+   * «Кому» не может получить карточку, даже если строка «Роли» в порядке.
+   * Кеш здесь не нужен: список вариантов меняется только вместе со схемой, а
+   * читается один раз на план — ошибка чтения не должна останавливать выдачу,
+   * поэтому вызывающий ловит её сам (`catch`).
+   */
+  async function recipientOptionNames() {
+    const source = await request("GET", `https://api.notion.com/v1/data_sources/${C.requests}`,
+      { Authorization: `Bearer ${C.notion}`, "Notion-Version": C.notionV, "Content-Type": "application/json" });
+    const options = source?.properties?.["Кому"]?.select?.options;
+    if (!Array.isArray(options)) return [];
+    return options.map((option) => String(option.name || "")).filter(Boolean);
+  }
+
   /** Свежий список ролей: сбросить кеш и перечитать. */
   async function rolesFresh() {
     GM_setValue(K.rolesCache, null);

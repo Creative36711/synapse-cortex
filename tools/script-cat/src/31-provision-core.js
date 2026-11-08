@@ -140,6 +140,57 @@
     return { candidates: candidates.slice(0, cfg.agentProvisionMaxJobs), rejected };
   }
 
+  /**
+   * Чего не хватает составу миссии и кто это делает.
+   *
+   * D-075 п. 3: сигнал на создание агента — `Agent State = запрошен`, и ставит
+   * его Coordinator: у него постоянное право на оболочку неадминской строки.
+   * `Статус = Ждёт` сигналом не является: по D-008 и D-052 роли нарочно ждут
+   * своей фазы, и автосоздание по статусу наплодило бы агентов отложенным ролям.
+   *
+   * Функция ничего не пишет и никого не создаёт: она отвечает, что именно
+   * предстоит и в каком режиме. Право записи строки — у Coordinator, доступы
+   * (`Статус`, `Agent URL`, `Agent Admin`) — у Мастера, создание агента —
+   * у контура после одобрения админ-роли.
+   */
+  function provisionRosterRequest(roles = [], cfg = provisionConfig(), state = null) {
+    const enabled = Boolean(cfg && cfg.agentProvisionEnabled);
+    const create = [];
+    const fill = [];
+    const blocked = [];
+    for (const role of roles || []) {
+      const name = String(role?.name || "").trim();
+      if (!name) continue;
+      const gaps = Array.isArray(role.gaps) ? role.gaps : [];
+      if (gaps.some((gap) => /нет в «Ролях»/.test(gap))) {
+        // Строки нет вовсе: сначала Coordinator создаёт оболочку и ставит
+        // сигнал, только потом контур (если включён) создаёт агента.
+        create.push({ name, why: "роли нет в «Ролях»", signal: enabled ? "Agent State = запрошен" : "" });
+        if (!enabled) blocked.push({ name, why: "контур создания выключен: строку и сигнал ставит Coordinator, агента создаёт Мастер" });
+        continue;
+      }
+      // Строка есть, но не готова: агента создавать не нужно — дозаполнить.
+      fill.push({ name, gaps });
+    }
+    const requested = (state && Array.isArray(state.candidates) ? state.candidates : [])
+      .map((c) => String(c.roleName || "")).filter(Boolean);
+    return {
+      enabled,
+      signal: "Agent State = запрошен",
+      signalOwner: "Coordinator",
+      create,
+      fill,
+      blocked,
+      requested: requested.length > 0,
+      requestedNames: requested,
+      // Ни одна строка не создаётся молча: без включённого контура создание
+      // агента и доступы остаются Мастеру, с включённым — спросит одобрение.
+      reason: !create.length ? "некомплект только в существующих строках: агента создавать не нужно"
+        : enabled ? "Coordinator создаёт строку и ставит «Agent State = запрошен» — дальше контур спросит одобрение админ-роли"
+          : "контур выключен: строку создаёт Coordinator, агента — Мастер",
+    };
+  }
+
   /** Активная админ-роль: предпочтительно Coordinator, иначе Reviewer. */
   function provisionAdminRole(rows) {
     const admins = (rows || []).filter((r) => r.agentAdmin === true && r.status === "Активна" &&

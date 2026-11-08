@@ -54,6 +54,13 @@ assert.match(contract.d073?.fix || '', /Maintainer/, 'D-073: поломка ух
 assert.match(contract.d073?.fix || '', /buildFingerprint|отпечат/, 'D-073: продолжение по отпечатку сборки');
 assert.ok(/переписк/i.test(JSON.stringify(contract.d073?.safety || '')), 'D-073: переписка наружу не уходит');
 assert.match(contract.d073?.evidence?.probe || '', /heal-core-smoke/, 'D-073: проба названа');
+// D-075 внутренний по форме протокола: вид паузы и блок промпта аддитивны.
+assert.equal(contract.d075?.budgetsRaised, false, 'D-075 не поднимал бюджеты');
+assert.match(contract.d075?.protocolNote || '', /остаётся 1\.11/, 'D-075 транспорт-внутренний');
+assert.match(contract.d075?.fix || '', /42-roster/, 'D-075: правила состава в отдельном ядре');
+assert.match(contract.d075?.fix || '', /mission-roster/, 'D-075: гейт назван по виду паузы');
+assert.ok(/master/.test(JSON.stringify(contract.d075?.safety || '')), 'D-075: некомплект — класс master');
+assert.match(contract.d075?.evidence?.probe || '', /mission-roster-smoke/, 'D-075: проба названа');
 assert.equal(contract.d069?.budgetsRaised, false, 'D-069 не поднимал бюджеты');
 assert.match(contract.d069?.protocolNote || '', /остаётся 1\.11/, 'D-069 транспорт-внутренний');
 assert.match(contract.d069?.fix || '', /driveFileIds/, 'D-069: поле payload разбирается на id');

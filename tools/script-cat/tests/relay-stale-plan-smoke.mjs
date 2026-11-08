@@ -24,7 +24,7 @@ const cut = (from, to) => {
 };
 
 // ── 1. Отпечаток Ready ─────────────────────────────────────────────────────
-const readyKeySrc = cut('  const readyKeyOf = (cards) =>', '  function readyLine(cards) {');
+const readyKeySrc = cut('  const readyKeyOf = (cards) =>', '  function readyLine(cards, known = []) {');
 const { readyKeyOf } = new Function(`${readyKeySrc}\nreturn { readyKeyOf };`)();
 
 const card = (id, seq) => ({ id, properties: { Sequence: { number: seq } } });

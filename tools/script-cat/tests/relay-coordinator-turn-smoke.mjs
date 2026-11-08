@@ -170,7 +170,7 @@ assert.match(rp, /if \(manual\) log\(`Шаг не выполнен: план з�
 assert.match(rp, /const answerLine = answerLogLine\(queue\.submitted\);/, 'журнал последнего ответа передаётся Координатору');
 assert.match(
   rp,
-  /readyLine\(queue\.ready\),\s*reworkLine\(queue\.rework\),\s*briefing\.openLine,\s*briefing\.answersLine,?/,
+  /readyLine\(queue\.ready, directory\),\s*reworkLine\(queue\.rework, directory\),\s*briefing\.openLine,\s*briefing\.answersLine,?/,
   'строка доходит до промпта вместе со списком черновиков и вопросами',
 );
 assert.match(rp, /const drafts = draftLine\(queue\.draft \|\| \[\], directory\);/, 'черновики попадают в промпт списком');
