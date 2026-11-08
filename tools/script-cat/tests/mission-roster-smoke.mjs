@@ -223,9 +223,9 @@ const ACTIVE = [
   const blocks = readFileSync(join(srcDir, 'prompt-blocks.js'), 'utf8');
   const queueLine = blocks.slice(blocks.indexOf('def("queue.coordinator"'));
   const body = queueLine.slice(0, queueLine.indexOf('\n    def('));
-  assert.match(body, /Состав ролей сверяй до первой выдачи/, 'обязанность записана в блоке очереди Координатора');
+  assert.match(body, /Состав ролей сверяй до выдачи/, 'обязанность записана в блоке очереди Координатора');
   assert.match(body, /Agent State = запрошен/, 'и сигнал на создание назван там же');
-  assert.match(body, /Статус и Agent URL — Мастер/, 'и граница прав не размыта');
+  assert.match(body, /Статус\/Agent URL — Мастер/, 'и граница прав не размыта');
   // Файл роли Координатора говорит то же самое словами (D-075 п. 2).
   const role = readFileSync(join(here, '..', '..', '..', 'docs', 'agents', 'roles', 'coordinator.md'), 'utf8');
   assert.match(role, /Укомплектованность миссии/, 'в роли Координатора есть раздел об укомплектованности');

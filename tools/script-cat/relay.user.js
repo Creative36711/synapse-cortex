@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.0
+// @version      1.14.1
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -74,7 +74,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "45a2fa47f7d2d414",
+    buildFingerprint: "ea1c115565bf6a2e",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -694,7 +694,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.0";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.1";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9614,7 +9614,15 @@
       `Адресат: ${c.role?.name} (${c.role?.fn}).`,
     ].join("\n") });
 
-    def("identity.mission", { render: (c) => [
+    // Имя миссии, её id, ссылка на ТЗ и номер круга — данные Мастера, а не
+    // инструкции. 08.11 в 00:24 боевой SYN-3 встал ровно здесь: один URL ТЗ
+    // (?pvs=4, 256 знаков) плюс длинное имя миссии дали 292 из 3200, и промпт не
+    // собрался, хотя правила Координатора были целы. Бюджет overhead по D-034
+    // защищает от раздувания инструкций, а не от длины данных; тот же приём уже
+    // применён к зоне роли (D-036/D-038: «зона — verbatim-факт»). Общий предел
+    // при этом не отменён: `delivery.hardLimit` считает весь текст целиком,
+    // поэтому переезд фактов в verbatim ничего не ослабляет.
+    def("identity.mission", { verbatim: true, render: (c) => [
       `Миссия: ${c.mission?.name || c.mission?.id}.`,
       `mission_id: ${c.mission?.id}`,
       c.turnId ? `turn_id: ${c.turnId}` : "",
@@ -9709,7 +9717,7 @@
     def("queue.drafts", { verbatim: true, render: (c) => c.queue?.draft || "" });
 
     def("queue.coordinator", { ruleIds: ["R-QUEUE", "R-NO-REVIEWER-DISPATCH"], audience: ["Coordinator"], render: () =>
-      "Очередь: Running ставит транспорт и сам вернёт в Ready без хода — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID той же миссии, Accepted, без Check=fail. Rework — для той же карточки: Rework + та же карточка в Ready (тот же Sequence), новую не создавай. Новая карточка — только если находка шире старой (новый оракул, другой Scope). Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи молча. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто после хода — незаконченный ход. Выполнено — «Итог» + next:\"done\" (передача приёмке). Состав ролей сверяй до первой выдачи: причина в скобках карточки («нет в «Ролях»», «Статус «Ждёт»», «нет Agent URL») — не выдадут. Строку роли правишь ты, Статус и Agent URL — Мастер; создание агента — Agent State = запрошен." });
+      "Running ставит транспорт и вернёт в Ready сам — не перевыдавай. Running/Submitted — движок; Accepted/Rework/Ready — ты. Черновики правь под оракул, выдавай сам. Дубль номера правь, не создавай. Dependency — UUID этой миссии, Accepted, без Check=fail. Rework — для той же карточки: Rework + та же карточка в Ready (тот же Sequence), новую не создавай. Новая карточка — только если находка шире старой (новый оракул, другой Scope). Check=fail НЕ ставь Rework+Ready одним ответом (жди снимка и разбора Warden). Ready с меньшим Sequence не обходи. Scope покрывает артефакты оракула. Reviewer карточку не выдавай. Ход: Submitted→Accepted/Rework + выдай Ready/Draft; пусто — не ход. Выполнено — «Итог» + next:\"done\". Состав ролей сверяй до выдачи: причина в скобках («нет в «Ролях»», «Ждёт», «нет Agent URL») — не выдадут. Строку правишь ты, Статус/Agent URL — Мастер, агента создаёт Agent State = запрошен." });
 
     def("review.evidence", { verbatim: true, render: (c) => [
       c.queue?.acceptedCount != null ? `Принятых карточек: ${c.queue.acceptedCount}.` : "",
@@ -10429,10 +10437,18 @@
   function compileOrPause(request, label) {
     const result = PromptCompiler.compile(request);
     if (result.ok) return result;
+    // Перерасход бюджета — это поломка профиля/блоков, а не данных Мастера:
+    // такой разбор уходит Maintainer'у (D-073). Текст паузы говорит правду о
+    // том, что произошло, и не обещает Мастеру ручную правку, которой от него
+    // не требуется: 08.11 в 00:24 боевой цикл встал на budget_exceeded и
+    // простоял до утра, хотя чинить должен был транспорт.
+    const budget = result.error.code === "budget_exceeded";
     pause(
       `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
         `${budgetBreakdownLine(result.error)}` +
-        "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+        (budget
+          ? "Отправка не выполнялась. Это поломка профиля промпта, а не фактов миссии: транспорт передаёт разбор Maintainer'у и продолжит сам, если разбор не потребует Мастера."
+          : "Отправка не выполнялась; исправьте факты или профиль — транспорт передаёт разбор Maintainer'у."),
       { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
     );
     return null;

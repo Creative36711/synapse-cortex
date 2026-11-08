@@ -61,6 +61,7 @@ assert.match(contract.d075?.fix || '', /42-roster/, 'D-075: правила со�
 assert.match(contract.d075?.fix || '', /mission-roster/, 'D-075: гейт назван по виду паузы');
 assert.ok(/master/.test(JSON.stringify(contract.d075?.safety || '')), 'D-075: некомплект — класс master');
 assert.match(contract.d075?.evidence?.probe || '', /mission-roster-smoke/, 'D-075: проба названа');
+assert.match(contract.d075?.fix || '', /verbatim/, 'D-075: факты миссии не съедают бюджет инструкций');
 assert.equal(contract.d069?.budgetsRaised, false, 'D-069 не поднимал бюджеты');
 assert.match(contract.d069?.protocolNote || '', /остаётся 1\.11/, 'D-069 транспорт-внутренний');
 assert.match(contract.d069?.fix || '', /driveFileIds/, 'D-069: поле payload разбирается на id');

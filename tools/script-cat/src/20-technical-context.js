@@ -70,10 +70,18 @@
   function compileOrPause(request, label) {
     const result = PromptCompiler.compile(request);
     if (result.ok) return result;
+    // Перерасход бюджета — это поломка профиля/блоков, а не данных Мастера:
+    // такой разбор уходит Maintainer'у (D-073). Текст паузы говорит правду о
+    // том, что произошло, и не обещает Мастеру ручную правку, которой от него
+    // не требуется: 08.11 в 00:24 боевой цикл встал на budget_exceeded и
+    // простоял до утра, хотя чинить должен был транспорт.
+    const budget = result.error.code === "budget_exceeded";
     pause(
       `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
         `${budgetBreakdownLine(result.error)}` +
-        "Отправка не выполнялась; исправьте факты/профиль и нажмите «Продолжить».",
+        (budget
+          ? "Отправка не выполнялась. Это поломка профиля промпта, а не фактов миссии: транспорт передаёт разбор Maintainer'у и продолжит сам, если разбор не потребует Мастера."
+          : "Отправка не выполнялась; исправьте факты или профиль — транспорт передаёт разбор Maintainer'у."),
       { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
     );
     return null;
