@@ -75,10 +75,12 @@ assert.match(
 );
 // D-080: ход уходит приёмке только когда вопрос держит ход (`gate`/`need`).
 // Обычный вопрос записывается, а план идёт по своему next.
+// D-091: и уходит он `return true` — гейт-вопрос это и есть решение хода,
+// next в нём не читается. Под `blocked` этой ветки нет: там свой разбор.
 assert.match(
   src,
-  /if \(askedRow && \(askedRow\.gate === true \|\| askedRow\.need\)\) \{\s*\n\s*const item = answerQueue\(\)\.find\(\(row\) => row\.id === askedRow\.id\);\s*\n\s*if \(item && \(await startAnswer\(mission, item\)\)\) return true;/,
-  'ход уходит приёмке только по gate, иначе next применяется',
+  /if \(!blocked && askedRow && \(askedRow\.gate === true \|\| askedRow\.need\)\) \{\s*\n\s*const item = [\s\S]{0,300}?if \(item && \(await startAnswer\(mission, item\)\)\) \{[\s\S]{0,600}?return true;/,
+  'ход уходит приёмке только по gate и этим завершается, иначе next применяется',
 );
 assert.match(src, /ход идёт дальше по /, 'и в журнале сказано, что ход продолжается');
 assert.match(

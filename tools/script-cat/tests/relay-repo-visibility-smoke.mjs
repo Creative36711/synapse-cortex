@@ -97,7 +97,7 @@ assert.match(upload, /contents\/\$\{encodeURI\(path\)\}/, 'путь пишетс
 }
 
 // ── 6. Версия и решения ─────────────────────────────────────────────────────
-assert.match(src, /@version\s+1\.14\.1[6-9]/, 'сборка не старее 1.14.16');
+assert.match(src, /@version\s+1\.14\.(?:1[6-9]|2[0-9])/, 'сборка не старее 1.14.16');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-086/, 'решение D-086 в журнале');
 assert.match(decisions, /synapse-cortex[\s\S]{0,200}приватн|приватн[\s\S]{0,200}synapse-cortex/,
