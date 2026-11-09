@@ -239,4 +239,25 @@ for (const [role, file] of Object.entries(roleDoc)) {
 }
 
 
+// 13. D-081: остановка вопроса обязана пережить запись в строку.
+{
+  const d081 = contract.d081;
+  assert.ok(d081, 'D-081 записан в контракт');
+  assert.match(d081.version || '', /^1\.14\.9$/, 'D-081 относится к сборке 1.14.9');
+  assert.match(d081.evidence?.probe || '', /relay-question-gate-persist-smoke/, 'проба названа');
+  assert.match(d081.summary || '', /Warden/, 'адресат назван');
+  const safety = (d081.safety || []).join(' ');
+  assert.match(safety, /важнее любого ожидания/, 'порядок проверок зафиксирован');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-081 \(1\.14\.9\)/, 'D-081 есть в журнале решений');
+  assert.match(decisions, /FIXED: вопрос, помеченный агентом как остановка/, 'разбор бага начинается с FIXED');
+  assert.match(decisions, /Наша, транспорта/, 'чья сторона названа');
+  // Кириллица и \b: шаблон, который не мог совпасть.
+  assert.match(decisions, /ASCII/, 'причина с границей слова записана');
+  const feedback = readFileSync(join(root, 'tools/script-cat/src/24-feedback.js'), 'utf8');
+  assert.match(feedback, /ждёт ответа\/i\.test\(blocks\)/, 'отметка читается без \\b');
+  assert.doesNotMatch(feedback, /\\bждёт ответа/, 'шаблона с \\b больше нет');
+}
+
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');
