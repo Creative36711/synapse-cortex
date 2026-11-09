@@ -169,6 +169,9 @@ const pauseFn = new Function(
   assert.deepEqual(store.get(keys.pause), {
     kind: 'arena-error', reason: 'Arena rejected the live run', at: store.get(keys.pause).at,
     ref: 'message-5', runId: 'run-5', turnId: '', tries: null, wasAuto: true,
+    // D-084: пауза несёт дефект ответа (null — дефекта нет), он переживает
+    // перезагрузку и попадает в разбор транспорта.
+    defect: null,
     version: '1.13.0', fingerprint: 'abc123',
   });
   assert.equal(calls.notify[0][1].priority, '5', 'Master pause is urgent');

@@ -66,7 +66,12 @@
     "closed-unreviewed": "master",
     "mission-change-running": "master",
     "mission-change-answer": "master",
-    marker: "master",
+    // D-084: «ответ без маркера после всех напоминаний» — дефект разбора или
+    // доставки, а не решение человека. Мастер в таких случаях не понадобился
+    // ни разу (09.11: маркер CF_ANSWER_RESULT был виден в тексте Warden, а
+    // транспорт дважды отрапортовал «без маркера»). Ход уходит Maintainer'у, у
+    // него дифф и проба; предохранитель C.healMaintainerMax остаётся.
+    marker: "transport",
     "marker-mismatch": "master",
     "poll-loop": "master",
     "dispatch-mission": "master",
@@ -235,8 +240,13 @@
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 120);
+    // D-084: дефект маркера — часть ключа. «Нет отчёта» и «нет dispatch_id»
+    // чинятся разными правками и не должны считаться одним инцидентом, иначе
+    // предохранитель Maintainer'а сгорал бы на чужой поломке.
+    const defect = info.defect && (info.defect.kind || info.defect.marker)
+      ? `${info.defect.kind || ""}/${info.defect.marker || ""}` : "";
     return [String(info.kind || ""), String(info.ref || ""), String(info.runId || ""),
-      String(info.turnId || ""), core].join("|");
+      String(info.turnId || ""), core, defect].join("|");
   }
 
   const healBackoff = (retries, config = {}) => {

@@ -90,7 +90,7 @@ assert.match(missingFn, /tries/, 'счётчик попыток хранится
   const calls = [];
   const missing = new Function(
     'stillWorking', 'pageReady', 'messagesAfter', 'dbg', 'tail', 'markerRejectHint', 'markerStep',
-    'log', 'sendToRole', 'markerReminder', 'C', 'retainRejectedResult', 'pause',
+    'log', 'sendToRole', 'markerReminder', 'C', 'retainRejectedResult', 'pause', 'markerDefectHint',
     `${missingFn}\nreturn markerMissing;`,
   )(
     () => false, () => ({ ok: true }), () => [{ id: 'm1', raw: 'отчёт', text: 'отчёт', ended: true }],
@@ -98,6 +98,8 @@ assert.match(missingFn, /tries/, 'счётчик попыток хранится
     () => {}, async (...args) => calls.push(args), () => 'напоминание', { markerReminders: 2 },
     (expect, kind, replies) => { calls.push({expect,kind,replies}); return true; },
     (message, context) => calls.push({message,context}),
+    // D-084: пауза называет дефект словами разбора, а не «проверьте страницу».
+    (why, defect, markerName) => (defect === 'thin' ? `в ${markerName} нет отчёта` : `имени ${markerName} нет`),
   );
   const role = { name: 'Tools' };
   const base = { kind: 'dispatch', ref: 'card', runId: 'run', sentAt: 10_000, tries: 0 };

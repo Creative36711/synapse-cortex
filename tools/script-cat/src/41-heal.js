@@ -274,6 +274,14 @@
       incident: {
         kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
         turnId: String(info.turnId || ""), reason: String(info.reason || "").slice(0, 400),
+        // D-084: что именно не сошлось в ответе агента (дефект маркера, имя
+        // маркера, хвост текста). Без этого разбор начинается с нуля, хотя
+        // ответ уже прочитан транспортом.
+        defect: info.defect ? {
+          kind: String(info.defect.kind || ""), hint: String(info.defect.hint || "").slice(0, 300),
+          marker: String(info.defect.marker || ""), role: String(info.defect.role || ""),
+          tail: healRedact(String(info.defect.tail || "")).slice(0, 400),
+        } : null,
       },
       verdict: { ...verdict, decision },
       snapshot: healPageSnapshot(),
@@ -287,6 +295,10 @@
       `ИНЦИДЕНТ ТРАНСПОРТА · класс ${verdict.cls} · ${verdict.why}.`,
       `Остановка: «${String(info.reason || "").slice(0, 300)}»`,
       `Вид паузы: ${info.kind || "пусто"}; карточка ${info.ref || "—"}; run ${info.runId || "—"}; ход ${info.turnId || "—"}.`,
+      info.defect
+        ? `Маркер «${info.defect.marker || "?"}» от «${info.defect.role || "?"}»: ${info.defect.hint || "чего не хватило — не названо"}. ` +
+            "Хвост ответа — в телеметрии ниже; копия всего ответа сохранена локально."
+        : "Маркер разбирать не пришлось: причина названа видом остановки.",
       `Разбор ${decision.attempt} из ${decision.max}. Сборка ${SCRIPT_VERSION} @ ${C.buildFingerprint || "без отпечатка"}.`,
       where ? `Полная телеметрия: ${where}.` : "Полная телеметрия наружу не ушла — вложение ниже.",
       "СНИМОК СТРАНИЦЫ И ЖУРНАЛ ПОПЫТОК (без переписки и секретов):",
@@ -309,7 +321,10 @@
     const queued = await sendToRole(role, text, "heal", String(info.ref || turnId), {
       turnId,
       title: `транспорт: ${info.kind || "остановка"}`,
-      heal: { kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || "") },
+      heal: {
+        kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
+        ...(info.defect ? { defect: info.defect } : {}),
+      },
     });
     if (!queued) return { ok: false, why: "передача не поставлена в очередь" };
     const ready = await maintainerTurnReady(role, turnId, 45000);
@@ -410,6 +425,9 @@
       kind: pending.kind || expect.heal?.kind || "", ref: expect.ref || "",
       runId: pending.runId || expect.heal?.runId || "", turnId: expect.turnId || "",
       reason: pending.reason || "",
+      // D-084: дефект маркера переживает передачу. Иначе разбор «исправлено»
+      // нечем проверить: Maintainer не знает, что именно не сошлось.
+      defect: pending.defect || expect.heal?.defect || null,
     };
     // Передача закончилась: ожидание и очередь снимаются до применения решения,
     // иначе повторный тик применит его дважды.
@@ -425,12 +443,15 @@
         timeoutMs: Number(C.healVersionTimeoutMs) || 900000,
       });
       if (!gate.ok) {
-        const key = healIncidentKey(info);
-        healBump(key, "escalations");
         pause(
           `Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
             "Продолжение закрыто до установки новой сборки: установите её и нажмите «Продолжить».",
-          { kind: "heal-await-update", ref: info.ref, runId: info.runId, turnId: info.turnId },
+          {
+            kind: "heal-await-update", ref: info.ref, runId: info.runId, turnId: info.turnId,
+            // Дефект переезжает в следующую остановку: после установки сборки
+            // разбор должен видеть тот же ответ, а не пустую паузу.
+            heal: info.defect ? { defect: info.defect } : undefined,
+          },
         );
         return true;
       }
@@ -445,7 +466,14 @@
       `Maintainer «${role.name}» не смог исправить поломку: ${verdict.reason || "причина не названа"}. ` +
         "Цикл остановлен, ход не потерян: карточка и очередь на месте. Телеметрия выгружена — " +
         "посмотрите её и решите вручную.",
-      { kind: "heal-maintainer-done", ref: info.ref, runId: info.runId, turnId: info.turnId },
+      {
+        kind: "heal-maintainer-done", ref: info.ref, runId: info.runId, turnId: info.turnId,
+        // Сюда цикл доходит уже после разбора: Мастеру звонить не нужно, он
+        // увидит остановку в панели. Телефонный звонок остаётся только там, где
+        // без человека физически нельзя.
+        quiet: true,
+        heal: info.defect ? { defect: info.defect } : undefined,
+      },
     );
     return true;
   }
@@ -516,6 +544,7 @@
         pending: {
           kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
           reason: String(info.reason || ""), cls: verdict.cls, at: nowIso(),
+          defect: info.defect || null,
         },
       });
       const sent = await escalateToMaintainer(info, verdict, decision);
@@ -530,6 +559,11 @@
         );
         return { verdict, decision, escalated: false, why: sent.why };
       }
+      // D-084: шаг передачи считается здесь, а не в ветке «доставка не удалась».
+      // Иначе один и тот же дефект маркера уходил бы транспортy бесконечно:
+      // каждое «FIXED» без новой сборки ставило heal-await-update, а после
+      // «Продолжить» счётчик оставался нулевым.
+      healBump(key, "escalations");
       return { verdict, decision, escalated: true };
     }
 
