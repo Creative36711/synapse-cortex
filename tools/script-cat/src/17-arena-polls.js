@@ -764,11 +764,23 @@
       // проверки, а до агента она не доходит. Признак «отправлено» в это
       // время — ложь, из-за которой 11:56:47 задание считалось ушедшим.
       if (captchaDialog()) return "";
-      // Текст в поле ввода — veto: пока он там, отправки не было, какую бы
-      // реплику ни нашлось в транскрипте.
-      if (!composerHolds(key, text)) {
-        const sent = userSaysSince(key, known, since);
-        if (sent) return sent;
+      // Текст в поле ввода — сильный признак, но не доказательство.
+      //
+      // D-090: 09.11 21:01 клик по Send прошёл, сообщение появилось в чате
+      // (6 → 8, своих 4), а поле сохранило черновик. Прежнее правило считало
+      // «поле держит текст» отменой доставки, поэтому отправка не признавалась:
+      // ход уходил на повтор, повтор вставлял текст снова — и Мастер видел
+      // «текст возвращается в поле ввода» на каждом круге.
+      //
+      // Различает эти два случая не счётчик, а совпадение: если наша реплика
+      // в чате содержит ровно тот же текст, что лежит в поле, то клик подал
+      // этот текст в отправку, а поле — неубранный черновик (его чистит
+      // `accepted`). Если же в поле другой текст, отправки нашей реплики не
+      // было — тогда veto остаётся.
+      const holds = composerHolds(key, text);
+      const sent = userSaysSince(key, known, since);
+      if (sent && (!holds || sameSubmission(sent, key, text))) {
+        return holds ? { ...sent, draftLeft: true } : sent;
       }
       if (Date.now() >= deadline) return "";
       await sleep(300);
@@ -793,6 +805,24 @@
     const probe = flat(key || "").trim() || flat(text || "").slice(0, 60);
     if (!probe) return false;
     return body.includes(probe);
+  }
+
+  /**
+   * Реплика в чате — это отправка именно того текста, что лежит в поле?
+   *
+   * Сравниваем не «похоже», а вхождением отличительной строки задания в текст
+   * реплики и в текст поля: обе стороны — один и тот же промпт. Пробелы схлопнуты,
+   * потому что редактор Arena перерисовывает разметку.
+   */
+  function sameSubmission(found, key, text) {
+    if (!found) return false;
+    const node = userMessages().find((item) => String(item.id || "").replace("chat-message-", "") === String(found.id));
+    if (!node) return false;
+    const mine = flat(composerText(composer()));
+    const bubble = flat(node.textContent || "");
+    const probe = flat(key || "").trim() || flat(text || "").slice(0, 60);
+    if (!probe) return false;
+    return mine.includes(probe) && bubble.includes(probe);
   }
 
   /**
@@ -884,8 +914,13 @@
      * редакторе и ждёт, пока его кликнут второй раз. Поэтому чистим сами.
      */
     const accepted = (found) => {
-      let holds = composerHolds(key, text);
-      if (holds) {
+      // D-090: признак «черновик остался» приходит из самой находки — он посчитан
+      // в момент, когда реплика в чате совпала с полем. Повторный замер здесь
+      // бесполезен: Arena дорисовывает редактор, и поле может опустеть между
+      // проверками. Убираем черновик в любом случае, но журнал и итог берём из
+      // того замера.
+      let holds = found && found.draftLeft === true ? composerHolds(key, text) : false;
+      if (holds || (found && found.draftLeft === true)) {
         dbg("Send: новое сообщение есть, а текст ещё в поле", { id: found.id });
         // Новое сообщение — доказательство доставки; черновик после неё
         // принадлежит нам, а не Arena: убираем его тем же путём, каким чистим
@@ -1005,7 +1040,17 @@
       btn = latest;
       if (captchaDialog()) return blocked();
       dbg(`Send: клик ${attempt}`, () => debugSendButton(live));
-      btn.click();
+      // D-090: 21:01 клик прошёл, сообщение появилось, а поле сохранило текст.
+      // Нужно знать, доставлен ли клик вообще: если Arena перехватывает событие
+      // (кнопка в этот момент `disabled` или накрыта слоем), клик уходит в никуда,
+      // и это надо назвать в причине, а не гадать по полю.
+      let dispatched = false;
+      try {
+        btn.click();
+        dispatched = true;
+      } catch (e) {
+        dbg("Send: click выбросил исключение", { error: String(e?.message || e), attempt });
+      }
       clicked += 1;
 
       let via = await waitSent(key, known, C.sendVerifyMs, text, since);
@@ -1033,6 +1078,9 @@
         // об этом в журнале».
         if (composerHolds(key, text)) {
           const fresh = userSaysSince(key, known, since);
+          // D-090: реплика содержит тот же текст, что в поле, — клик сработал,
+          // а поле осталось черновиком. Это доставка, а не «текст вернулся».
+          if (fresh && sameSubmission(fresh, key, text)) return accepted({ ...fresh, draftLeft: true });
           if (fresh && fresh.id === via.id) return accepted(fresh);
           why.push(`клик ${attempt}: текст остался в поле ввода`);
           dbg("Send: текст в поле после клика — отправки не было", { attempt });
@@ -1069,6 +1117,8 @@
       `своих ${userMessages().length}`,
       `панелей ${completionPanels().length}`,
       ...(dialog ? ["поверх чата открыт диалог Arena"] : []),
+      `кнопка ${button ? (button.disabled ? "disabled" : "активна") : "нет"}`,
+      `отпечаток ${String(textHash(text))}`,
       ...why,
     ].join(", ");
     const report = domReport();

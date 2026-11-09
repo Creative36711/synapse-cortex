@@ -1479,5 +1479,30 @@
       "сбой чтения списка не блокирует ответ",
       "пауза остаётся transport"
     ]
+  },
+  "d090": {
+    "version": "1.14.19",
+    "title": "Черновик в поле ввода не отменяет настоящую доставку",
+    "date": "2026-11-09",
+    "decision": [
+      "17-arena-polls.sameSubmission",
+      "17-arena-polls.waitSent",
+      "17-arena-polls.deliver"
+    ],
+    "incident": {
+      "at": "2026-11-09T21:01:41Z",
+      "kind": "send",
+      "cls": "transport",
+      "reason": "клик прошёл, сообщение в чате, поле сохранило черновик"
+    },
+    "evidence": {
+      "probe": "tests/relay-draft-return-smoke.mjs",
+      "suites": 110
+    },
+    "safety": [
+      "капча сильнее любого признака",
+      "старая реплика доставкой не считается",
+      "двойная отправка запрещена"
+    ]
   }
 }

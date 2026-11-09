@@ -66,10 +66,11 @@ assert.equal(
 // Только сама `waitSent`: `composerHolds` объявлена ниже в том же файле и
 // перекрыла бы подставную функцию, если резать блок вместе с ней.
 const waitOnly = cut('  async function waitSent(', '  /**\n   * Текст задания всё ещё в поле ввода?');
-function waitSentWith({ fresh = false, holdsText = '', captcha = false } = {}) {
+function waitSentWith({ fresh = false, holdsText = '', captcha = false, same = true } = {}) {
   const fn = new Function(
     'userSaysSince',
     'composerHolds',
+    'sameSubmission',
     'captchaDialog',
     'sleep',
     'Date',
@@ -78,6 +79,7 @@ function waitSentWith({ fresh = false, holdsText = '', captcha = false } = {}) {
   const run = fn(
     () => (fresh ? { id: 'm-new', at: 0 } : null),
     () => Boolean(holdsText),
+    () => same,
     () => (captcha ? {} : null),
     async () => {},
     Date,
@@ -88,10 +90,23 @@ function waitSentWith({ fresh = false, holdsText = '', captcha = false } = {}) {
 const sent = await waitSentWith({ fresh: true });
 assert.equal(sent && sent.id, 'm-new', 'новое сообщение — доставка, и видно, какое именно');
 assert.equal(await waitSentWith({}), '', 'ничего нового в чате — доставки нет');
+// D-090: «поле держит текст» само по себе больше не отменяет доставку. Решает
+// совпадение: если реплика в чате — тот же текст, что в поле, это наш клик и
+// неубранный черновик (чистится в `accepted`); если текст разный — отправки нет.
 assert.equal(
-  await waitSentWith({ fresh: true, holdsText: 'Задание 5.4 …' }),
+  (await waitSentWith({ fresh: true, holdsText: 'Задание 5.4 …', same: true }))?.id,
+  'm-new',
+  'тот же текст в чате и в поле — доставка с черновиком (инцидент 21:01)',
+);
+assert.equal(
+  (await waitSentWith({ fresh: true, holdsText: 'Задание 5.4 …', same: false }))?.id,
+  undefined,
+  'в чате чужая старая реплика, в поле наш текст — отправки не было',
+);
+assert.equal(
+  await waitSentWith({ fresh: false, holdsText: 'Задание 5.4 …' }),
   '',
-  'текст остался в поле — не доставка',
+  'поле держит текст и новой реплики нет — не доставка',
 );
 assert.equal(await waitSentWith({ fresh: true, captcha: true }), '', 'капча отменяет и настоящий признак');
 
