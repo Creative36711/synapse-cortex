@@ -86,14 +86,18 @@ for (const sel of ['.recaptcha-v2-container', 'iframe[title="reCAPTCHA"]', 'ifra
 
 // ── 2. При капче доставка не подтверждается ────────────────────────────────
 const waitSrc = cut('  async function waitSent(', '  /**\n   * Текст задания всё ещё в поле ввода?');
-function waitSentWith({ captcha, fresh = false, holds = false }) {
+// D-090: «поле держит текст» само по себе не veto — решает совпадение текста
+// реплики и поля. По умолчанию в пробе они совпадают (`same = true`), потому что
+// проверяется влияние капчи, а не расхождение текстов.
+function waitSentWith({ captcha, fresh = false, holds = false, same = true }) {
   const fn = new Function(
-    'userSaysSince', 'composerHolds', 'captchaDialog', 'sleep', 'Date',
+    'userSaysSince', 'composerHolds', 'sameSubmission', 'captchaDialog', 'sleep', 'Date',
     `${waitSrc}\nreturn waitSent;`,
   );
   const run = fn(
     () => (fresh ? { id: 'm1', at: 0 } : null),
     () => holds,
+    () => same,
     () => (captcha ? {} : null),
     async () => {},
     Date,
@@ -113,9 +117,14 @@ assert.equal(
   'старое сообщение и счётчик доставкой не считаются',
 );
 assert.equal(
-  await waitSentWith({ captcha: false, fresh: true, holds: true }),
+  (await waitSentWith({ captcha: false, fresh: true, holds: true, same: true }))?.id,
+  'm1',
+  'тот же текст в чате и в поле — доставка с неубранным черновиком',
+);
+assert.equal(
+  await waitSentWith({ captcha: false, fresh: true, holds: true, same: false }),
   '',
-  'текст остался в поле ввода — отправки не было, даже если реплика видна',
+  'в чате другой текст, в поле наш — отправки не было, даже если реплика видна',
 );
 
 // ── 3. Проверки в самой отправке ───────────────────────────────────────────

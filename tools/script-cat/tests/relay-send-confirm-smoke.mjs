@@ -123,12 +123,17 @@ assert.ok(!/composerLeft/.test(deliverSrc), 'старый признак «по�
 assert.ok(!/if \(after > before \|\|/.test(deliverSrc), 'старый счётчик сообщений больше не решает');
 
 const verifySrc = cut('  async function waitSent(', '  /** Enter в поле ввода');
-assert.match(verifySrc, /if \(!composerHolds\(key, text\)\)/, 'текст в поле отменяет доставку');
+// D-090: «поле держит текст» перестало быть одиночным veto. Отменяет доставку
+// только расхождение: в поле наш текст, а новой реплики с этим текстом нет.
+assert.match(verifySrc, /const holds = composerHolds\(key, text\);/, 'поле всё ещё проверяется');
+assert.match(verifySrc, /if \(sent && \(!holds \|\| sameSubmission\(sent, key, text\)\)\)/,
+  'совпадение текста в чате и в поле считается доставкой, расхождение — veto');
 assert.match(
   verifySrc,
-  /const sent = userSaysSince\(key, known, since\);\s*if \(sent\) return sent;/,
+  /const sent = userSaysSince\(key, known, since\);/,
   'доставка — новое своё сообщение в чате',
 );
+assert.match(verifySrc, /if \(sent && \(!holds \|\| sameSubmission/, 'и это сообщение уходит в результат');
 assert.ok(!/"count"/.test(verifySrc), 'счётчик сообщений больше не подтверждает доставку');
 assert.ok(!/"generating"/.test(verifySrc), 'пустое поле с кнопкой Stop больше не подтверждает доставку');
 assert.match(verifySrc, /function composerHolds\(key, text\)/, 'проверка «текст остался в поле» на месте');
