@@ -38,14 +38,20 @@ let pauseAnswerPatch = null, failBodyPatch = false, lostBodyResponse = false, lo
 const pagedBlockIds = new Set();
 const get = (key, fallback) => store.has(key) ? copy(store.get(key)) : fallback;
 const set = (key, value) => store.set(key, copy(value));
-const statusesOf = (filter) => (filter?.or || []).map((condition) => condition.select.equals);
+// D-082: транспорт читает открытые строки вместе с пустым «Статусом»
+// (`select: { is_empty: true }`): строку, созданную руками, никто не подписал.
+// Notion возвращает такие строки, и мок обязан отвечать так же — иначе
+// песочница тихо расходится с боевым чтением.
+const statusesOf = (filter) => (filter?.or || []).map((condition) =>
+  condition.select?.is_empty ? '' : condition.select?.equals);
 const query = async (id, filter) => {
   assert.equal(id, ds, 'обе разновидности читают один источник');
   if (failQuery) throw new Error('Notion 503');
   const statuses = statusesOf(filter);
-  const snapshot = copy(db.filter((row) => statuses.includes(sel(row.properties['Статус']))));
-  const gate = statuses.length === 1 && statuses[0] === 'Ждёт' ? pauseWaitQuery :
-    statuses.length === 3 ? pauseDedupeQuery : null;
+  const named = statuses.filter((name) => name !== '');
+  const snapshot = copy(db.filter((row) => statuses.includes(sel(row.properties['Статус']) || '')));
+  const gate = named.length === 1 && named[0] === 'Ждёт' ? pauseWaitQuery :
+    named.length === 3 ? pauseDedupeQuery : null;
   if (gate) {
     if (gate === pauseWaitQuery) pauseWaitQuery = null;
     if (gate === pauseDedupeQuery) pauseDedupeQuery = null;

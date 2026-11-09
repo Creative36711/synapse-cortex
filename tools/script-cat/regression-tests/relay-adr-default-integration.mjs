@@ -71,6 +71,9 @@ const unanswered = question('missing', 'Предложение docs/decisions/NA
     'activeMission', 'rt', 'missionSame', 'expiredQuestions', 'closeExpired', 'GM_getValue',
     'answerHandoffKey', 'handWaitingRow', 'questionFromRow', 'log', 'qText', 'qFallback',
     'GM_setValue', 'notifyNewQuestions', 'questionRevision', 'mergeQuestionChanges', 'questionClosedAfter', 'pruneQuestionSeen',
+    // D-082: строка без «Статуса» подписывается транспортом, поэтому песочнице
+    // нужны те же свободные имена, что в бандле: sel, patch и oneLine.
+    'sel', 'patch', 'oneLine',
     `${refresh}\nreturn refreshQuestions;`,
   )(
     async () => {}, () => {}, () => ({ at: 0, rows: [] }), { questionCheckMs: 100 }, () => {},
@@ -80,6 +83,7 @@ const unanswered = question('missing', 'Предложение docs/decisions/NA
     (id) => `handoff:${id}`, (row) => adopted.push(row.id), (row) => ({ text: rt(row.properties['Вопрос']) }),
     () => {}, (row) => rt(row.properties['Вопрос']), (row) => rt(row.properties['По умолчанию']),
     (key, value) => output.set(key, value), () => {}, 0, (rows) => rows, () => false, () => {},
+    sel, async (id) => { patched.push(id); }, (value) => String(value || ''),
   );
   const open = await run({ force: true });
   // D-080: закрывать по сроку нечего, поэтому и «не удалось закрыть» не бывает:

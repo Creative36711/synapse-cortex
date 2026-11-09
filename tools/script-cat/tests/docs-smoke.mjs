@@ -266,4 +266,27 @@ for (const [role, file] of Object.entries(roleDoc)) {
 }
 
 
+// 14. D-082: обратная связь из рук агента обязана доходить до приёмки.
+{
+  const d082 = contract.d082;
+  assert.ok(d082, 'D-082 записан в контракт');
+  assert.match(d082.version || '', /^1\.14\.10$/, 'D-082 относится к сборке 1.14.10');
+  assert.match(d082.evidence?.probe || '', /relay-feedback-manual-row-smoke/, 'проба названа');
+  assert.match(d082.summary || '', /Warden/, 'адресат назван');
+  const safety = (d082.safety || []).join(' ');
+  assert.match(safety, /решённая строка приёмке не передаётся/, 'граница мягкости зафиксирована');
+  assert.match(safety, /UUID другой миссии отсекает/, 'привязка к миссии не ослаблена');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-082 \(1\.14\.10\)/, 'D-082 есть в журнале решений');
+  const feedback = readFileSync(join(root, 'tools/script-cat/src/24-feedback.js'), 'utf8');
+  // Пустой статус — это долг транспорта: запрос обязан его спрашивать, иначе
+  // строка, созданная руками, снова станет невидимой.
+  assert.match(feedback, /select: \{ is_empty: true \}/, 'открытые строки читаются вместе с пустым статусом');
+  assert.match(feedback, /function missionLabel/, 'голый UUID в «Миссию» не пишется');
+  const blocks = readFileSync(join(root, 'tools/script-cat/src/prompt-blocks.js'), 'utf8');
+  assert.match(blocks, /Обратную связь в Notion руками не пиши/, 'Координатору прямо запрещена ручная запись');
+  assert.match(blocks, /c\.role\?\.fn === "Coordinator"/, 'запрет адресный, а не в общем блоке');
+}
+
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');
