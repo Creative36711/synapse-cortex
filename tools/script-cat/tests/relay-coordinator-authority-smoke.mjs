@@ -36,7 +36,12 @@ assert.match(prompt, /Running\/Submitted — движок/, 'граница дв
 assert.match(prompt, /Accepted\/Rework\/Ready — ты/, 'Ready — не движок, а Координатор');
 assert.match(prompt, /Готовы к выдаче: NAR-1\.10 · Регрессия и отчёт \(Build\/Release, Sequence 100\)/, 'Ready перечислен с ролью');
 assert.match(prompt, /next — имя роли выдаваемой карточки или done/, 'адресат берётся из карточки');
-assert.match(prompt, /Статус\/Agent URL ставит Мастер/, 'статус роли — не зона Координатора');
+// D-092: процессные поля неадминской строки Координатор правит решением
+// приёмки, а права (Статус, Agent URL, Agent Admin, удаление) остаются Мастеру.
+assert.match(prompt, /Статус, Agent URL, Agent Admin и удаление — Мастер/,
+  'права роли — не зона Координатора');
+assert.match(prompt, /Зона записи\/Гейт\/Репозиторий\/Функция — твои по решению приёмки/,
+  'процессные поля — зона Координатора по решению приёмки');
 assert.match(prompt, /Reviewer карточку не выдавай/, 'Reviewer не получает рабочую карточку');
 assert.doesNotMatch(prompt, /не вправе|нельзя переводить Draft/i, 'запрета на выдачу черновика нет');
 

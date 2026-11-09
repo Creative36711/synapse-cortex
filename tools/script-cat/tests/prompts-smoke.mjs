@@ -9,7 +9,8 @@ import {
 } from './helpers/prompt-env.mjs';
 
 const BUDGETS = {
-  'executor.card': 2800, 'auditor.card': 2200, 'coordinator.plan': 3200, 'coordinator.recovery': 1500,
+  // D-092: coordinator.plan 3200 → 3400 — права на процессные поля «Ролей».
+  'executor.card': 2800, 'auditor.card': 2200, 'coordinator.plan': 3400, 'coordinator.recovery': 1500,
   'reviewer.mission': 2400, 'reviewer.answer': 1800, 'reviewer.card': 2000, 'reminder.marker': 700,
   'reviewer.arbiter': 2400, 'continuation.arbiter': 700,
   'delivery.compact': 1500, 'pilot.synapse': 250,
@@ -221,7 +222,9 @@ for (const req of cases) {
   const longZone = 'docs/agents/**, tools/script-cat/**, contracts/**, docs/DECISIONS.md, docs/REGULATION.md, docs/design/**, docs/process/**, docs/agents/roles/**, docs/adr/**';
   const r = PromptCompiler.compile(planRequest({ role: { name: 'Coordinator', fn: 'Coordinator', zone: longZone } }));
   assert.ok(r.ok, `plan с длинной зоной компилируется: ${r.error?.message}`);
-  assert.ok(r.metrics.overheadChars <= 3200, `plan overhead ${r.metrics.overheadChars} ≤ 3200 без подъёма бюджета`);
+  // D-092: бюджет профиля 3400 — подъём за инструкцию о процессных полях «Ролей»
+  // (записан в контракте, d092.raisedBudget). Общий total не двигался.
+  assert.ok(r.metrics.overheadChars <= 3400, `plan overhead ${r.metrics.overheadChars} ≤ 3400 (D-092)`);
   assert.equal(r.blocks[0].id, 'coordinator.prime', 'прайм остался первым блоком');
 }
 
@@ -242,7 +245,7 @@ for (const req of cases) {
   };
   const live = PromptCompiler.compile(planRequest({ role: { name: 'Coordinator', fn: 'Coordinator', zone }, mission: longMission }));
   assert.ok(live.ok, `боевой SYN-3 собирается: ${live.error?.message}`);
-  assert.ok(live.metrics.overheadChars <= 3200, `overhead ${live.metrics.overheadChars} ≤ 3200`);
+  assert.ok(live.metrics.overheadChars <= 3400, `overhead ${live.metrics.overheadChars} ≤ 3400 (D-092)`);
 
   // Overhead не должен зависеть от длины данных: иначе следующий длинный URL
   // снова остановит цикл, и снова в самом дорогом месте.

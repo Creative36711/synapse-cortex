@@ -315,6 +315,10 @@ for (const expect of [
 
 // При обновлении старый неотправленный ход Reviewer не обнуляется; доставленный
 // ход продолжает жить и может быть принят существующим integration-тестом.
+//
+// D-092: задание, лежащее в очереди отправки, больше не поднимает паузу —
+// отправкой владеет транспорт. Поэтому проверяются сохранность ожидания и
+// очереди, а пауза ожидается только там, где очереди нет (см. ниже).
 {
   const store = new Map([[K.stateV, '1.4.91'], [K.expect, oldExpect], [K.pending, pending]]);
   const fn = new Function('GM_getValue', 'GM_setValue', 'K', 'SCRIPT_VERSION', 'log',
@@ -322,9 +326,20 @@ for (const expect of [
     (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K, '1.4.92', () => {},
   );
   assert.equal(fn(), '«rev-1», dispatch');
-  assert.equal(store.get(K.pause).kind, 'update-recovery');
+  assert.equal(store.has(K.pause), false, 'очередь отправки есть — паузы нет (D-092)');
   assert.deepEqual(store.get(K.expect), oldExpect);
   assert.deepEqual(store.get(K.pending), pending);
+}
+// Ожидание без очереди — единственная настоящая неоднозначность «ушло или нет»:
+// здесь пауза остаётся и называет свою причину.
+{
+  const store = new Map([[K.stateV, '1.4.91'], [K.expect, oldExpect]]);
+  const fn = new Function('GM_getValue', 'GM_setValue', 'K', 'SCRIPT_VERSION', 'log',
+    `let ghostAfterUpdate = null; ${migrate}\nreturn migrateState;`)(
+    (k, d) => store.has(k) ? store.get(k) : d, (k, v) => store.set(k, clone(v)), K, '1.4.92', () => {},
+  );
+  assert.equal(fn(), '«rev-1», dispatch');
+  assert.equal(store.get(K.pause).kind, 'update-recovery', 'ожидание без очереди — пауза');
 }
 for (const hasMessage of [false, true]) {
   const legacy = { ...oldExpect, sentAt: 1, verified: false, seen: [], watermark: '' };

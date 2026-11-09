@@ -85,11 +85,27 @@ assert.deepEqual(unknownKinds, [],
   `в таблице есть виды, которых нет в коде (опечатка или удалённая пауза): ${unknownKinds.join(', ')}`);
 
 // ── 2. Штатные остановки — не поломка ──────────────────────────────────────
-for (const kind of ['tool-limit', 'pilot-timeout', 'rework-limit', 'arbiter-limit', 'review-needs-master', 'no-reply']) {
+//
+// D-092: класс у них по-прежнему `master` («нужен ход рассуждения, а не
+// повтор»), но адресат рассуждения разный: лимит инструментов и предел
+// доработок снимает транспорт, решение по ТЗ и по петле — приёмка, и только
+// пилот и «вопрос про продукт» остаются человеку.
+const ADDRESS = {
+  'tool-limit': 'transport',
+  'rework-limit': 'warden',
+  'arbiter-limit': 'warden',
+  'no-reply': 'warden',
+  'review-needs-master': 'master',
+  'pilot-timeout': 'master',
+};
+for (const [kind, address] of Object.entries(ADDRESS)) {
   const v = classifyPause(kind, 'штатная остановка');
   assert.equal(v.cls, 'master', `${kind}: штатная остановка не маршрутизируется как поломка`);
   assert.equal(v.repair, 'none', `${kind}: транспорт это не чинит`);
-  assert.equal(decideHeal(v, {}, {}).action, 'master', `${kind}: сразу Мастер`);
+  assert.equal(v.with, address, `${kind}: адресат решения — ${address}`);
+  const action = decideHeal(v, {}, {}).action;
+  assert.equal(action, address === 'warden' ? 'warden' : address === 'transport' ? 'maintainer' : 'master',
+    `${kind}: маршрут решения — ${action}`);
 }
 
 // ── 3. Капча, авторизация, сбой сайта — стоп и Мастер ──────────────────────
@@ -102,7 +118,7 @@ for (const [kind, text, cls] of [
   const v = classifyPause(kind, text);
   assert.equal(v.cls, 'arena', `${kind || 'без вида'}: класс arena`);
   assert.equal(v.reason, cls, `${kind || 'без вида'}: причина названа (${cls})`);
-  assert.equal(v.route, 'master', `${cls}: маршрут — Мастер`);
+  assert.equal(v.route, 'master', `${cls}: маршрут — человек`);
   assert.equal(decideHeal(v, { retries: 0, escalations: 0 }, {}).action, 'master', `${cls}: автопродолжения нет`);
 }
 // Ярлык не сильнее текста: «временный» вид с текстом капчи остаётся капчей.
@@ -135,18 +151,27 @@ for (const kind of ['prompt-compile', 'orphan-dispatch', 'delivery-state-lost', 
   const second = decideHeal(v, { retries: 1 }, { healRetryMax: 2, healBackoffMs: [30000, 120000] });
   assert.equal(second.action, 'retry');
   assert.equal(second.delayMs, 120000, 'вторая выдержка — 2 мин');
+  // D-092: исчерпанный повтор — дефект, а не «решение человека». Уходит
+  // транспорту, у него дифф и проба; человек тут ничего не выбирает.
   const third = decideHeal(v, { retries: 2 }, { healRetryMax: 2 });
-  assert.equal(third.action, 'master', 'после двух автопродолжений — только Мастер');
+  assert.equal(third.action, 'maintainer', 'после двух автопродолжений — разбор транспорта');
   assert.equal(healBackoff(5, { healBackoffMs: [1000, 2000] }), 2000, 'выдержка не выходит за список');
 }
 
-// ── 6. Нераспознанное — Мастеру и помечено ────────────────────────────────
+// ── 6. Нераспознанное — транспорту, а не человеку (D-092) ─────────────────
+//
+// Инверсия по умолчанию: раньше неизвестный вид уходил Мастеру, и любая
+// опечатка в имени паузы будила человека. Теперь неизвестное читается как
+// «вид не назван» и уходит разбору транспорта: у него есть журнал, снимок и
+// дифф, а у человека — только кнопка «Продолжить», которая ничего не чинит.
 {
   const v = classifyPause('never-seen-kind', 'непонятно что');
   assert.equal(v.unknown, true, 'нераспознанное помечено');
-  assert.equal(v.route, 'master', 'нераспознанное не чинится наугад');
-  assert.match(v.why, /не распознан/);
-  assert.equal(decideHeal(v, {}, {}).action, 'master');
+  assert.equal(v.cls, 'transport', 'неизвестное — дефект транспорта, а не решение человека');
+  assert.equal(v.with, 'transport', 'адресат — транспорт');
+  assert.equal(decideHeal(v, {}, { healMaintainerMax: 2 }).action, 'maintainer', 'уходит Maintainer-у');
+  const exhausted = decideHeal(v, { escalations: 2 }, { healMaintainerMax: 2 });
+  assert.equal(exhausted.action, 'master', 'после предела разбора — единственный стоп');
 }
 
 // ── 7. Ключ инцидента: цифры и id не делают новый инцидент ────────────────

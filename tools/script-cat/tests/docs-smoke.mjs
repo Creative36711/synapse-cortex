@@ -328,6 +328,36 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.ok(!/Нужен Мастер/.test(ladder.slice(ladder.indexOf('async function markerMissing('),
     ladder.indexOf('// ───────────────────────── ошибка на экране'))), 'маркерная лестница Мастера не зовёт');
 }
+// 17-бис. D-092 (1.14.21): автономность — правило, человек — закрытый список.
+{
+  const d092 = contract.d092;
+  assert.ok(d092, 'D-092 записан в контракт');
+  assert.match(d092.version || '', /^1\.14\.21$/, 'D-092 относится к сборке 1.14.21');
+  assert.equal(d092.budgetsRaised, true, 'D-092 поднял бюджет осознанно');
+  assert.match(d092.raisedBudget || '', /3200 → 3400/, 'D-092: назван подъём');
+  assert.match(d092.protocolNote || '', /остаётся 1\.11/, 'D-092: версия контракта не менялась');
+  assert.match((d092.fix || []).join(' '), /healResolveWith/, 'адресат решения назван');
+  assert.match((d092.fix || []).join(' '), /инверсия по умолчанию/, 'инверсия по умолчанию названа');
+  const safety = (d092.safety || []).join(' ');
+  assert.match(safety, /капча, вход/, 'человек остался там, где действие, а не решение');
+  assert.match(safety, /права \(Статус, Agent URL, Agent Admin, удаление\) не двигались/, 'права не двигались');
+  assert.match(d092.evidence?.probe || '', /relay-autonomy-smoke/, 'проба названа');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-092 \(1\.14\.21\)/, 'D-092 есть в журнале решений');
+  assert.match(decisions, /48 \(69 %\)/, 'замер до правки сохранён как факт');
+  // Закрытый список — в коде, а не только в документе.
+  const core = readFileSync(join(root, 'tools/script-cat/src/40-heal-core.js'), 'utf8');
+  assert.match(core, /const MASTER_ONLY = \["install", "agent", "money", "product"\];/, 'список закрыт в коде');
+  assert.match(core, /function healResolveWith/, 'адресат решения решается в ядре');
+  // Громкий сигнал — только человеку.
+  const panel = readFileSync(join(root, 'tools/script-cat/src/06-pause-panel.js'), 'utf8');
+  assert.match(panel, /const forHuman = !info\.with \|\| info\.with === "master";/, 'пауза знает адресата');
+  // Метрика — не обещание, а число.
+  const heal = readFileSync(join(root, 'tools/script-cat/src/41-heal.js'), 'utf8');
+  assert.match(heal, /function healAutonomyMetric/, 'метрика автономности реализована');
+  assert.match(heal, /per100/, 'метрика измеряется на сто ходов');
+}
+
 // 17. D-085 (1.14.14): бюджет сжимает данные, а не останавливает ход.
 {
   const d085 = contract.d085;

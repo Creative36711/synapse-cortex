@@ -31,6 +31,10 @@
     const counters = {
       retries: Math.max(0, Number(found.retries) || 0),
       escalations: Math.max(0, Number(found.escalations) || 0),
+      // D-092: сколько раз эта остановка уже была записана приёмке строкой.
+      // Третий счётчик рядом с двумя прежними: у каждого адресата свой предел,
+      // иначе «передал приёмке» считалось бы передачей транспорту.
+      tickets: Math.max(0, Number(found.tickets) || 0),
       firstAt: found.firstAt || nowIso(),
       lastAt: found.lastAt || "",
     };
@@ -47,6 +51,45 @@
     state.incident = { ...state.incident, [key]: found };
     saveHealState(state);
     return found;
+  }
+
+  /**
+   * D-092: метрика автономности — сколько остановок на сто ходов решает человек.
+   *
+   * Без числа «стало автономнее» — обещание, а не измерение. Считается дёшево и
+   * без сети: знаменатель — счётчик шагов цикла, числитель — остановки, у
+   * которых адресат `master`. Правило D-092 требует, чтобы числитель падал, а не
+   * перераспределялся: поэтому хранится ещё и разбивка по адресатам.
+   */
+  function healAutonomyMetric() {
+    const state = healState();
+    const turns = Math.max(0, Number(state.turns) || 0);
+    const tally = state.stops && typeof state.stops === "object" ? state.stops : {};
+    const forHuman = Math.max(0, Number(tally.master) || 0);
+    const total = Object.values(tally).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const per100 = turns ? Math.round((forHuman / turns) * 1000) / 10 : 0;
+    return {
+      turns, stops: total, forHuman,
+      with: Object.fromEntries(Object.entries(tally).map(([k, v]) => [k, Number(v) || 0])),
+      // Один знак после запятой: «3,4 на 100 ходов» читается, «3,4375» — нет.
+      per100,
+      share: total ? Math.round((forHuman / total) * 1000) / 10 : 0,
+    };
+  }
+
+  /** Шаг цикла состоялся: знаменатель метрики. Дёшево — два числа в хранилище. */
+  function healCountTurn() {
+    const state = healState();
+    saveHealState({ ...state, turns: Math.max(0, Number(state.turns) || 0) + 1 });
+  }
+
+  /** Остановка состоялась: числитель и разбивка по адресатам. */
+  function healCountStop(withWho) {
+    const state = healState();
+    const stops = { ...(state.stops || {}) };
+    const key = String(withWho || "master");
+    stops[key] = Math.max(0, Number(stops[key]) || 0) + 1;
+    saveHealState({ ...state, stops });
   }
 
   /** Журнал попыток доставки как состав (без текста промптов). */
@@ -332,6 +375,7 @@
         } : null,
       },
       verdict: { ...verdict, decision },
+      autonomy: healAutonomyMetric(),
       snapshot: healPageSnapshot(),
       journal: healJournal().slice(-12),
     }, 8000);
@@ -555,6 +599,9 @@
     const key = healIncidentKey(info);
     const counters = healCounters(key);
     const decision = decideHeal(verdict, counters, C);
+    // D-092: каждая остановка попадает в метрику с адресатом решения. Считается
+    // до действия: даже если передача не удалась, факт «человека звали» важнее.
+    healCountStop(verdict.with);
     saveHealState({
       ...healState(),
       last: { kind: verdict.kind, cls: verdict.cls, route: verdict.route, why: verdict.why, at: nowIso() },
@@ -586,7 +633,61 @@
       return { verdict, decision, retried: true };
     }
 
-    if (verdict.cls === "transport" && decision.action === "maintainer") {
+    // D-092: остановка, которую решает приёмка, а не человек.
+    //
+    // `master` раньше означал «стоп и человек». Но постановка, зоны, очередь и
+    // петли — предмет приёмки (D-027 п. 1, D-066 г), и человек там нужен только
+    // для пунктов закрытого списка (MASTER_ONLY). Поэтому такая остановка
+    // становится СТРОКОЙ В «Обратной связи»: приёмка отвечает обычным ходом,
+    // ответ ложится в её «Ответ», а цикл не стоит и не ждёт нажатия.
+    if (decision.action === "warden") {
+      healBump(key, "tickets");
+      try {
+        const row = await askQuestion(
+          {
+            // Вопрос — сама остановка, дословно: приёмка должна видеть причину,
+            // а не пересказ. Полный текст уходит в тело страницы.
+            text: `${verdict.why || "остановка"}: ${oneLine(info.reason, 160)}`,
+            fullText: healDiagnosis(info, verdict, decision, upload),
+            // Вариант по умолчанию — «работу не останавливать»: она и так не
+            // остановлена, а приёмка отвечает, не задерживая очередь.
+            fallback: "работу не останавливать: решение придёт ответом в «Обратной связи»",
+            gate: false,
+            options: [],
+            url: "",
+          },
+          {
+            key: `heal:${key}`,
+            roleName: "Transport",
+            card: String(info.ref || ""),
+            mission: String(info.missionId || ""),
+            forceAnswer: true,
+            blocks: `остановка транспорта · ${verdict.kind || "без вида"}`,
+          },
+        );
+        if (row && row.id) {
+          log(
+            `Остановка «${verdict.kind || "без вида"}» записана приёмке строкой ${row.id}: ` +
+              "цикл не останавливаю — ответ придёт в её «Ответ» и в следующий план.",
+            false,
+            { ntfy: "quiet", title: "Relay: вопрос приёмке" },
+          );
+          return { verdict, decision, ticketed: true, questionId: row.id };
+        }
+      } catch (e) {
+        log(`Строку приёмке записать не удалось (${e.message}): останавливаюсь, чтобы не потерять причину.`, true);
+      }
+      // Не записалось — честнее остановиться, чем молча продолжать: причина
+      // остановки должна существовать хотя бы в панели.
+      pause(`${verdict.why || "остановка"}: ${oneLine(info.reason, 300)}`,
+        { kind: "heal-exhausted", ref: info.ref, runId: info.runId, turnId: info.turnId, quiet: true });
+      return { verdict, decision, ticketed: false, stopped: true };
+    }
+
+    // D-092: маршрут к Maintainer'у решает не класс, а решение (`action`).
+    // Повтор, который исчерпал свои пределы, — тоже дефект, а не «стоп»: раньше
+    // он падал в общую ветку и оставлял цикл без адресата.
+    if (decision.action === "maintainer") {
       saveHealState({
         ...healState(),
         pending: {

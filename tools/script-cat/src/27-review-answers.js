@@ -407,10 +407,52 @@
    * («вся папка tools/x и точка входа») не разбирается: строить по ней запрет
    * значило бы останавливать выдачу на догадке.
    */
+  /**
+   * D-092: зона роли — данные, а не проза.
+   *
+   * В базе «Роли» зона пишется разными людьми и разным почерком: у Warden это
+   * абзац («Решения по постановке и приёмке; код не трогает…»), у Locale
+   * Auditor — список с префиксом «synapse: ». Прежний разбор молча выбрасывал
+   * всё, что не похоже на glob, и зона превращалась в пустую: проверка
+   * `scopeZoneIssue` тогда ничего не проверяла, а прозу читали как «зона есть».
+   *
+   * Здесь два разных факта:
+   *   • `roleZoneGlobs` — пути, по которым можно судить машинно (glob);
+   *   • `roleZoneIsProse` — зона объявлена словами, и судить по ней нельзя.
+   * Второй факт не ошибка конфигурации: он честно говорит, что граница здесь
+   * человеческая, и гейт по путям к такой роли не применяется.
+   */
+  const roleZoneGlobs = (roleZone) => {
+    const out = [];
+    for (const rawLine of String(roleZone || "").split(/[\n;]+/)) {
+      // Метка перед путями («synapse: », «Зона записи: ») — не путь, а подпись.
+      // Раньше она приклеивалась к первому шаблону, и зона начиналась со
+      // второго: у Locale Auditor `locales/**` молча выпадал.
+      const line = rawLine.replace(/^\s*[^:\s][^:]{0,30}:\s*/, "").trim();
+      if (!line) continue;
+      const tokens = line.split(/[\s,]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+      if (!tokens.length) continue;
+      // Строка целиком должна быть списком путей. Если в ней есть слова, это
+      // прозаическая зона: судить по ней машинно нельзя, и притворяться, что
+      // можно, — хуже, чем не проверять вовсе (D-092).
+      const globby = tokens.every((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+      if (!globby) continue;
+      out.push(...tokens);
+    }
+    return [...new Set(out)];
+  };
+  const roleZoneIsProse = (roleZone) => {
+    const text = String(roleZone || "").trim();
+    if (!text) return false;
+    if (roleZoneGlobs(text).length) return false;
+    // Слова без единого пути — зона описана прозой. Это допустимо, но тогда
+    // проверять по ней нечего, и решение принимает человек/приёмка.
+    return /\s/.test(text) || /[а-яё]/i.test(text);
+  };
+
   function scopeZoneIssue(cardZone, roleZone) {
     const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
-    const globs = String(roleZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean)
-      .filter((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+    const globs = roleZoneGlobs(roleZone);
     if (!paths.length || !globs.length) return "";
     const asRe = (glob) => new RegExp("^" + glob
       .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -429,6 +471,43 @@
       "либо отдай эти пути тому, за кем они в «Ролях» (D-085)";
   }
 
+  /**
+   * D-092: путь из `Scope` не принадлежит никому.
+   *
+   * Вторая половина правила о зонах. Первая (`scopeZoneIssue`) спрашивает
+   * «входит ли путь в зону адресата»; она молчит, когда зон несколько и путь
+   * есть у соседа, и молчит, когда зона адресата описана прозой. Из-за этого
+   * карточка с путём `tools/i18n/**` уходила Executor'у без зоны вовсе: путь
+   * не в зоне никого, но проверить это было нечем.
+   *
+   * Здесь вопрос другой: существует ли вообще роль, которой этот путь
+   * разрешён. Нет такой роли — карточка чинится постановкой (либо в «Ролях»
+   * появляется зона, либо путь убирают из `Scope`), и это решение приёмки, а
+   * не ход исполнителя. `roles` передаются снаружи: функция чистая.
+   */
+  function unownedPaths(cardZone, roleRowsList) {
+    const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+    if (!paths.length) return [];
+    const owners = (roleRowsList || [])
+      .filter((row) => row && (row.status || "") === "Активна")
+      .flatMap((row) => roleZoneGlobs(row.zone || ""));
+    // Ни у одной активной роли зон нет — судить не о чем: пустой ответ честнее
+    // обвинения. Так бывает на чистой базе, и это не дефект постановки.
+    if (!owners.length) return [];
+    const asRe = (glob) => new RegExp("^" + glob
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*") + "$");
+    const res = owners.map(asRe);
+    const bad = [];
+    for (const path of paths) {
+      if (/созда|нов|new/i.test(path)) continue;
+      const clean = path.split(/\s+/)[0].replace(/\/+$/, "");
+      if (!clean || !/[./]/.test(clean)) continue;
+      if (!res.some((re) => re.test(clean))) bad.push(clean);
+    }
+    return bad;
+  }
+
   /** Проверка постановки и подтверждённых зависимостей, до изменения карточки. */
   async function taskPreflight(card, mission, roleZone = "") {
     const active = await activeMission(); // откажет и при нескольких активных миссиях
@@ -444,6 +523,18 @@
     // D-085: дефект постановки ловится здесь, а не на приёмке после прогона.
     const zoneIssue = scopeZoneIssue(rt(props["Scope"]), roleZone);
     if (zoneIssue) return zoneIssue;
+    // D-092: вторая половина — путь не принадлежит никому. Спрашиваем только
+    // там, где зона адресата не проза: если она описана словами, машинного
+    // ответа нет, и обвинять постановку было бы догадкой.
+    if (!roleZoneIsProse(roleZone)) {
+      const owners = await roleRows().catch(() => []);
+      const loose = unownedPaths(rt(props["Scope"]), owners);
+      if (loose.length) {
+        return `пути Scope не входят в зону ни одной активной роли: ${loose.slice(0, 4).join(", ")}` +
+          `${loose.length > 4 ? ` и ещё ${loose.length - 4}` : ""}. Это дефект постановки: ` +
+          "путь отдают в «Зону записи» роли или убирают из Scope (D-092)";
+      }
+    }
     if (!props["Dependency"] || props["Dependency"].type && props["Dependency"].type !== "rich_text")
       return "в схеме нет текстового поля Dependency";
     const value = rt(props["Dependency"]).trim();

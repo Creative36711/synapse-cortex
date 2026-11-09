@@ -14,7 +14,9 @@ const binding = cut('  const cardMissionId = ', '  // ────────�
 const words = cut('  const MISSION_STOPWORDS = new Set([', '  /** Поле названия показывается человеку');
 const active = cut('  async function activeMission()', '  const missionKind');
 const migration = cut('  async function inspectMissionMigration()', '  function formatMissionMigration(');
-const scopeZone = cut('  function scopeZoneIssue(', '  /** Проверка постановки');
+// D-092: зона разбирается отдельными чистыми функциями — они нужны и
+// scopeZoneIssue, и гейту «путь без владельца», поэтому вырезаются вместе.
+const scopeZone = cut('  const roleZoneGlobs', '  /** Проверка постановки');
 const preflight = cut('  async function taskPreflight(', '  async function dispatchTask(');
 const M1 = '11111111-1111-4111-8111-111111111111', M2 = '22222222-2222-4222-8222-222222222222';
 const ID1 = '33333333-3333-4333-8333-333333333333', ID2 = '44444444-4444-4444-8444-444444444444';
@@ -34,9 +36,13 @@ const C={ missions:'missions', requests:'requests' },
   taskTitle=(p)=>rt(p.properties['Запрос']), taskState=(p)=>sel(p.properties['Dispatch State']);
 const query=async (db, filter)=>db==='missions' ? (filter ? missions.filter(m=>['Активна','Возвращена'].includes(sel(m.properties['Состояние']))) : missions) : filter ? cards.filter(x=>taskState(x)===filter.select.equals) : cards;
 const notion=async (_method,path)=>{const row=cards.find(c=>c.id===path.slice(6));if(!row)throw Error('not found');return structuredClone(row)};
-const api=new Function('C','rt','sel','norm','taskTitle','taskState','query','notion','log',
-  `${uuid}\n${words}\n${binding}\n${active}\n${migration}\n${scopeZone}\n${preflight}\nreturn {cardInMission,cardBindingIssue,cardNamesMission,bindingBlockers,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight,scopeZoneIssue};`)
-  (C,rt,sel,norm,taskTitle,taskState,query,notion,()=>{});
+// D-092: гейт «путь без владельца» спрашивает базу «Роли». В этой пробе базы нет —
+// передаём пустой список: тогда гейт молчит (судить не о чем), а зона проверяется
+// старым путём. Сам гейт проверяется отдельно в relay-autonomy-smoke.
+const roleRows=async()=>[];
+const api=new Function('C','rt','sel','norm','taskTitle','taskState','query','notion','log','roleRows',
+  `${uuid}\n${words}\n${binding}\n${active}\n${migration}\n${scopeZone}\n${preflight}\nreturn {cardInMission,cardBindingIssue,cardNamesMission,bindingBlockers,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight,scopeZoneIssue,roleZoneGlobs,roleZoneIsProse,unownedPaths};`)
+  (C,rt,sel,norm,taskTitle,taskState,query,notion,()=>{},roleRows);
 assert.equal(api.cardInMission(cards[0], missions[0]), true);
 assert.equal(api.cardInMission(card(ID1,''), missions[0]), false, 'пустой ID не относится ко всем миссиям');
 assert.equal(api.cardInMission(card(ID1,M2,'Альфа'), missions[0]), false, 'имя не подменяет ID');

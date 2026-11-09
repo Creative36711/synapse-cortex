@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.20
+// @version      1.14.21
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "c6a99dcb7247aee1",
+    buildFingerprint: "68b67f4259e61988",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -724,7 +724,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.20";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.21";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1166,20 +1166,41 @@
       // его из состояния, а не из текста причины.
       defect: context.heal && context.heal.defect ? context.heal : null,
       wasAuto: autoOn(),
+      // D-092: кому адресована остановка. До этой правки адресат был один —
+      // человек, и различать было нечего. Теперь разбор восстановления решает,
+      // кто отвечает по существу: `master` (закрытый список, только человек),
+      // `warden` (постановка, зоны, очередь), `transport` (технический дефект),
+      // `self` (повтор). Поле попадает в состояние паузы, поэтому панель и
+      // телеметрия видят адресата, а не догадываются по тексту.
+      with: "",
       // D-073: какая сборка сломалась. По этому признаку гейт версии отличает
       // «установлена новая сборка» от «тот же номер, тот же бандл».
       version: SCRIPT_VERSION,
       fingerprint: C.buildFingerprint || "",
     };
+    // D-092: адресат остановки считается здесь, а не в панели.
+    //
+    // 08–09.11 телефон звонил двенадцать раз, и восемь из них были установкой
+    // сборки — событием, где человек ничего не решает. Громкий сигнал должен
+    // означать «без тебя физически нельзя», иначе он перестаёт что-либо
+    // означать. Поэтому громко — только когда адресат `master` (закрытый
+    // список MASTER_ONLY) или разбор не смог классифицировать остановку.
+    try {
+      const verdict = typeof classifyPause === "function" ? classifyPause(info.kind, info.reason) : null;
+      info.with = verdict ? String(verdict.with || "") : "";
+    } catch {
+      info.with = "";
+    }
+    const forHuman = !info.with || info.with === "master";
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
-    log(`ПАУЗА: ${info.reason}`, true, { skip: true });
+    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
     // Тихая пауза — для остановок, которые Мастер не разбирает: вопрос ушёл
     // приёмке, миссию закрыли в обход неё, приёмка сама решает по существу.
     // С 1.4.80 такие события не повод звонить в телефон: их закрывает приёмка,
     // а Мастер нужен только там, где без него физически нельзя (нет роли,
     // нет прав, предел доработок).
-    if (context.quiet) {
+    if (context.quiet || !forHuman) {
       notifyNtfy(`Цикл остановлен: ${info.reason}`, {
         title: context.notifyTitle || "Relay: пауза",
         priority: "2",
@@ -1553,10 +1574,16 @@
     const paused = GM_getValue(K.paused, "");
     const me = GM_getValue("cfn-me", "");
     const short = paused.length > 70 ? `${paused.slice(0, 70)}…` : paused;
-    const text = extra || (paused ? `Пауза: ${short}` : auto ? "Работает" : "Выключен");
+    // D-092: панель называет адресата. «Пауза» без адресата читается как
+    // «нужен Мастер», а теперь это не так: постановку разбирает приёмка,
+    // поломку — транспорт. Красный цвет — только тому, что правда ждёт человека.
+    const who = String(GM_getValue(K.pause, null)?.with || "");
+    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор" }[who] || "";
+    const text = extra || (paused ? `Пауза${label ? ` (${label})` : ""}: ${short}` : auto ? "Работает" : "Выключен");
     el.textContent = me ? `${text} · ${me}` : text;
     el.title = paused || text;
-    el.style.color = paused ? "#ff9a9a" : auto ? "#8ee28e" : "inherit";
+    // Красным — только пауза, которая действительно ждёт человека.
+    el.style.color = paused ? (who && who !== "master" ? "#e8d08a" : "#ff9a9a") : auto ? "#8ee28e" : "inherit";
     const toggle = document.getElementById(ui.toggle);
     if (toggle) {
       toggle.textContent = paused ? "▶ Продолжить" : auto ? "⏸ Стоп" : "▶ Включить";
@@ -8794,6 +8821,26 @@
     } catch {
       // Нет доступа к полю ввода — работаем по-старому: пауза честнее догадки.
     }
+    // D-092: установка сборки перестала быть поводом для человека.
+    //
+    // 08–09.11 она поднимала паузу класса `master` восемь раз за два дня: одна
+    // установка = одно нажатие «Продолжить». Решения там нет — есть вопрос
+    // «ушло сообщение или нет», и на него уже есть два машинных ответа:
+    //   • задание стоит в очереди (`pending`) — значит оно ещё не отправлено,
+    //     отправкой владеет транспорт, двусмысленности нет вовсе;
+    //   • доставка подтверждена в чате (`verified`, D-085) — тоже нет.
+    // Оба случая продолжают ход сами. Пауза остаётся ровно там, где ожидание
+    // есть, а очереди нет: сообщение могло уйти, и повторная отправка была бы
+    // дублем — это и есть единственная настоящая неоднозначность.
+    if (pending) {
+      log(
+        `Обновление ${seen || "неизвестной версии"} → ${SCRIPT_VERSION}: ${who} ещё в очереди отправки — ` +
+          "отправкой владеет транспорт, продолжаю без паузы.",
+        false,
+        { skip: true },
+      );
+      return who;
+    }
     const message = `Обновление ${seen || "неизвестной версии"} → ${SCRIPT_VERSION}: сохранены ${who} и очередь. ` +
       "Проверьте доставку в чате, карточку и журнал до ручного продолжения; отсутствие sentAt не доказывает, что отправки не было.";
     // D-085: пауза после обновления нужна ровно там, где есть неоднозначность
@@ -8814,6 +8861,10 @@
       );
       return who;
     }
+    // Единственный оставшийся случай: ожидание есть, очереди нет. Сообщение
+    // могло уйти, а могло и не уйти — повторная отправка дала бы дубль, поэтому
+    // ход останавливается, а не гадает. Это не «решение Мастера», а сверка:
+    // чат и карточка покажут, ушло ли задание, и «Продолжить» её и запускает.
     GM_setValue(K.paused, message);
     GM_setValue(K.pause, { kind: "update-recovery", ref: expect?.ref || "", runId: expect?.runId || "", turnId: expect?.turnId || "" });
     log(message, false, { skip: true });
@@ -9979,7 +10030,7 @@
     // узнавал, приёмка не получала ничего. Дело было не в формате маркера, а в
     // том, что зона Координатора описана как «решения в Notion» без границы.
     def("authority.coordinator", { version: 2, ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
-      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. «Обратную связь» руками не пиши — только вопрос полем маркера, запись делает транспорт. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
+      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. «Обратную связь» руками не пиши — только вопрос полем маркера, запись делает транспорт. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли»: у неадминских строк Зона записи/Гейт/Репозиторий/Функция — твои по решению приёмки; Статус, Agent URL, Agent Admin и удаление — Мастер." });
 
     // D-087: «ни документы» — причина, по которой ТЗ 1.6/1.7 и очередь 1.8/1.9 не
     // появились. 09.11 Warden объявил две редакции в ответе, но публиковать их не
@@ -10340,7 +10391,7 @@
     def("identity.provision", { audience: ["Coordinator", "Reviewer"], render: (c) =>
       `Provisioning-запрос Arena-агентов. Это не миссия и не рабочая карточка. request_id: ${c.provision?.requestId}.` });
     def("authority.provision", { audience: ["Coordinator", "Reviewer"], ruleIds: ["R-MASTER-ONLY"], render: () =>
-      "Одобряй только создание/замену неадмин-ролей из списка. Нельзя одобрять админ-роли, удаление строк, ручную активацию и изменение прав. Сомнительного кандидата не включай. Архивация старого агента — внутреннее следствие replace, отдельной команды нет." });
+      "Одобряй только создание/замену неадмин-ролей из списка. Нельзя одобрять админ-роли, удаление строк, ручную активацию и изменение прав. Сомнительного кандидата не включай. Архивация старого агента — внутреннее следствие replace, отдельной команды нет. Процессные поля неадминской строки — Зона записи, Гейт, Репозиторий, Функция — одобряй сам: это постановка, а не права (D-092)." });
     def("provision.candidates", { audience: ["Coordinator", "Reviewer"], verbatim: true, render: (c) =>
       `Кандидаты:\n${JSON.stringify((c.provision?.candidates || []).map((x) => ({
         role_page_id: x.rolePageId, role_name: x.roleName, fn: x.fn, repo: x.repo, action: x.action,
@@ -10402,7 +10453,11 @@
       blocks: ["coordinator.prime", "identity.mission", "mission.returned", "plan.note", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
-      budget: { overhead: 3200 },
+      // D-092: 3200 → 3400. Прибавка — права Координатора на процессные поля
+      // «Ролей» (Зона записи, Гейт, Репозиторий, Функция) по решению приёмки.
+      // Это инструкция, а не данные: сжимать её нельзя (D-078), поэтому бюджет
+      // поднят явно и записан в контракте, а не выведен из сжатия соседей.
+      budget: { overhead: 3400 },
     });
     def("coordinator.recovery", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
@@ -16022,10 +16077,52 @@
    * («вся папка tools/x и точка входа») не разбирается: строить по ней запрет
    * значило бы останавливать выдачу на догадке.
    */
+  /**
+   * D-092: зона роли — данные, а не проза.
+   *
+   * В базе «Роли» зона пишется разными людьми и разным почерком: у Warden это
+   * абзац («Решения по постановке и приёмке; код не трогает…»), у Locale
+   * Auditor — список с префиксом «synapse: ». Прежний разбор молча выбрасывал
+   * всё, что не похоже на glob, и зона превращалась в пустую: проверка
+   * `scopeZoneIssue` тогда ничего не проверяла, а прозу читали как «зона есть».
+   *
+   * Здесь два разных факта:
+   *   • `roleZoneGlobs` — пути, по которым можно судить машинно (glob);
+   *   • `roleZoneIsProse` — зона объявлена словами, и судить по ней нельзя.
+   * Второй факт не ошибка конфигурации: он честно говорит, что граница здесь
+   * человеческая, и гейт по путям к такой роли не применяется.
+   */
+  const roleZoneGlobs = (roleZone) => {
+    const out = [];
+    for (const rawLine of String(roleZone || "").split(/[\n;]+/)) {
+      // Метка перед путями («synapse: », «Зона записи: ») — не путь, а подпись.
+      // Раньше она приклеивалась к первому шаблону, и зона начиналась со
+      // второго: у Locale Auditor `locales/**` молча выпадал.
+      const line = rawLine.replace(/^\s*[^:\s][^:]{0,30}:\s*/, "").trim();
+      if (!line) continue;
+      const tokens = line.split(/[\s,]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+      if (!tokens.length) continue;
+      // Строка целиком должна быть списком путей. Если в ней есть слова, это
+      // прозаическая зона: судить по ней машинно нельзя, и притворяться, что
+      // можно, — хуже, чем не проверять вовсе (D-092).
+      const globby = tokens.every((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+      if (!globby) continue;
+      out.push(...tokens);
+    }
+    return [...new Set(out)];
+  };
+  const roleZoneIsProse = (roleZone) => {
+    const text = String(roleZone || "").trim();
+    if (!text) return false;
+    if (roleZoneGlobs(text).length) return false;
+    // Слова без единого пути — зона описана прозой. Это допустимо, но тогда
+    // проверять по ней нечего, и решение принимает человек/приёмка.
+    return /\s/.test(text) || /[а-яё]/i.test(text);
+  };
+
   function scopeZoneIssue(cardZone, roleZone) {
     const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
-    const globs = String(roleZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean)
-      .filter((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+    const globs = roleZoneGlobs(roleZone);
     if (!paths.length || !globs.length) return "";
     const asRe = (glob) => new RegExp("^" + glob
       .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -16044,6 +16141,43 @@
       "либо отдай эти пути тому, за кем они в «Ролях» (D-085)";
   }
 
+  /**
+   * D-092: путь из `Scope` не принадлежит никому.
+   *
+   * Вторая половина правила о зонах. Первая (`scopeZoneIssue`) спрашивает
+   * «входит ли путь в зону адресата»; она молчит, когда зон несколько и путь
+   * есть у соседа, и молчит, когда зона адресата описана прозой. Из-за этого
+   * карточка с путём `tools/i18n/**` уходила Executor'у без зоны вовсе: путь
+   * не в зоне никого, но проверить это было нечем.
+   *
+   * Здесь вопрос другой: существует ли вообще роль, которой этот путь
+   * разрешён. Нет такой роли — карточка чинится постановкой (либо в «Ролях»
+   * появляется зона, либо путь убирают из `Scope`), и это решение приёмки, а
+   * не ход исполнителя. `roles` передаются снаружи: функция чистая.
+   */
+  function unownedPaths(cardZone, roleRowsList) {
+    const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+    if (!paths.length) return [];
+    const owners = (roleRowsList || [])
+      .filter((row) => row && (row.status || "") === "Активна")
+      .flatMap((row) => roleZoneGlobs(row.zone || ""));
+    // Ни у одной активной роли зон нет — судить не о чем: пустой ответ честнее
+    // обвинения. Так бывает на чистой базе, и это не дефект постановки.
+    if (!owners.length) return [];
+    const asRe = (glob) => new RegExp("^" + glob
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*") + "$");
+    const res = owners.map(asRe);
+    const bad = [];
+    for (const path of paths) {
+      if (/созда|нов|new/i.test(path)) continue;
+      const clean = path.split(/\s+/)[0].replace(/\/+$/, "");
+      if (!clean || !/[./]/.test(clean)) continue;
+      if (!res.some((re) => re.test(clean))) bad.push(clean);
+    }
+    return bad;
+  }
+
   /** Проверка постановки и подтверждённых зависимостей, до изменения карточки. */
   async function taskPreflight(card, mission, roleZone = "") {
     const active = await activeMission(); // откажет и при нескольких активных миссиях
@@ -16059,6 +16193,18 @@
     // D-085: дефект постановки ловится здесь, а не на приёмке после прогона.
     const zoneIssue = scopeZoneIssue(rt(props["Scope"]), roleZone);
     if (zoneIssue) return zoneIssue;
+    // D-092: вторая половина — путь не принадлежит никому. Спрашиваем только
+    // там, где зона адресата не проза: если она описана словами, машинного
+    // ответа нет, и обвинять постановку было бы догадкой.
+    if (!roleZoneIsProse(roleZone)) {
+      const owners = await roleRows().catch(() => []);
+      const loose = unownedPaths(rt(props["Scope"]), owners);
+      if (loose.length) {
+        return `пути Scope не входят в зону ни одной активной роли: ${loose.slice(0, 4).join(", ")}` +
+          `${loose.length > 4 ? ` и ещё ${loose.length - 4}` : ""}. Это дефект постановки: ` +
+          "путь отдают в «Зону записи» роли или убирают из Scope (D-092)";
+      }
+    }
     if (!props["Dependency"] || props["Dependency"].type && props["Dependency"].type !== "rich_text")
       return "в схеме нет текстового поля Dependency";
     const value = rt(props["Dependency"]).trim();
@@ -17802,9 +17948,57 @@
 
   const HEAL_CLASS_INFO = {
     momentary: { route: "retry", repair: "self", label: "временный сбой транспорта или сети" },
+    // D-092: сюда входит и то, что решает агент (постановка, очередь, зоны,
+    // петли), и то, что решает только человек. Маршрут один — решение, но
+    // адресат решения теперь разный, и различие несёт не класс, а
+    // `MASTER_ONLY` (см. ниже): класс отвечает на «чинить или решать»,
+    // адресат — на «кто решает».
     transport: { route: "maintainer", repair: "maintainer", label: "поломка транспорта" },
     arena: { route: "master", repair: "none", label: "сбой сайта Arena: чинить нечего" },
-    master: { route: "master", repair: "none", label: "решает только Мастер" },
+    master: { route: "master", repair: "none", label: "остановка без автоматического пути" },
+  };
+
+  /**
+   * D-092: ЗАКРЫТЫЙ список того, что решает только человек.
+   *
+   * До 1.92.0 человек был адресатом по умолчанию: 48 из 70 видов паузы имели
+   * класс `master`, и 12 из 17 фактических остановок за 08–09.11 упирались в
+   * Мастера. Ни одна из этих двенадцати не требовала решения по существу:
+   * восемь были установкой сборки, две — падением доставки агенту, одна —
+   * разбором маркера.
+   *
+   * Теперь список закрыт по смыслу: новый вид паузы не может попасть к Мастеру
+   * «по привычке» — только сюда, а проба не даёт таблице разойтись с ним.
+   * Четыре пункта и есть «технически невозможно»:
+   *   • install — установка userscript в браузер и действия в браузере;
+   *   • agent — создание агента в Arena, его Agent URL и доступы;
+   *   • money — лицензии, ToS, деньги, секреты;
+   *   • product — переход фазы, новая миссия, границы продукта.
+   * Код в `synapse` Мастеру не принадлежит — его пишет роль ядра; здесь его нет
+   * намеренно, иначе «только человек» стало бы списком прав человека на код.
+   */
+  const MASTER_ONLY = ["install", "agent", "money", "product"];
+
+  /** Вид паузы → пункт закрытого списка. Нет записи — Мастеру не показывать. */
+  const HEAL_MASTER_ONLY = {
+    // Установку сборки делает человек, но пауза за неё больше не поднимается
+    // (D-085): это отметка, а не остановка. Пункт нужен, чтобы `update-recovery`
+    // не ушёл агенту как «поломка транспорта».
+    "update-recovery": "install",
+    "heal-await-update": "install",
+    // Доступы и состав: строку «Роли», Agent URL и флаг правит Мастер.
+    "mission-roster": "agent",
+    provision: "agent",
+    "provision-no-admin": "agent",
+    "project-role-origin": "agent",
+    "no-reviewer": "agent",
+    "heal-no-maintainer": "agent",
+    // Решения уровня продукта и фаз.
+    "review-needs-master": "product",
+    "pilot-timeout": "product",
+    "pilot-tool-limit": "product",
+    // Вариант по умолчанию кончился, а вопрос — про продукт: решает человек.
+    "answer-needs-master": "product",
   };
 
   /**
@@ -17902,6 +18096,9 @@
     "pilot-timeout": "master",
     provision: "master",
     "provision-no-admin": "master",
+    // D-092: класс оставлен `master`, но пауза теперь поднимается только там,
+    // где нет очереди отправки (см. 18-state-recovery.js). Тот случай — сверка,
+    // а не решение; Мастеру он не показывается как вопрос (тихий).
     "update-recovery": "master",
     // D-075: нехватка роли — не поломка транспорта. Виды `reviewer-task-check`
     // и `reviewer-task-pending` по умолчанию остаются за транспортом (потеря
@@ -17954,6 +18151,42 @@
       "roster-row", "роль или её строка не готовы к выдаче"],
   ];
 
+  /**
+   * D-092: кто отвечает по существу — человек, Warden или транспорт.
+   *
+   * Раньше этот выбор был один на всё: класс `master` — значит человек. Но
+   * `master` отвечает на другой вопрос: «нужен ход рассуждения, а не повтор».
+   * Адресат рассуждения бывает разным: постановка, зоны и очередь — Warden,
+   * технический дефект — Maintainer, и только закрытый список (MASTER_ONLY) —
+   * человек.
+   *
+   * Инверсия здесь не косметическая: таблица `HEAL_PAUSE_CLASS` осталась та же,
+   * но её `master` больше не значит «Мастер». Поэтому проба проверяет не
+   * таблицу, а это решение.
+   */
+  function healResolveWith(kind, cls, config = {}) {
+    const key = String(kind || "");
+    const list = Array.isArray(config.masterOnly) && config.masterOnly.length ? config.masterOnly : MASTER_ONLY;
+    const point = HEAL_MASTER_ONLY[key];
+    if (point && list.includes(point)) return { with: "master", point };
+    // Капча и вход — физическое действие в браузере: его выполняет человек, но
+    // это не «решение», а действие. Отдельного пункта списка у него нет, и это
+    // осознанно: пункт списка даёт право решать, а нажать капчу — не решение.
+    if (cls === "arena") return { with: "master", point: "" };
+    if (cls === "momentary") return { with: "self", point: "" };
+    if (cls === "transport") return { with: "transport", point: "" };
+    if (cls === "master") {
+      // Решение уровня постановки: зоны, очередь, трактовка ТЗ, петля.
+      // Это D-027 п. 1 и D-066 г — предмет приёмки, а не человека.
+      if (/^(review|plan|dispatch|return|done|rework|arbiter|answer|blocked|redispatch|mission)/.test(key) ||
+          key === "no-reply" || key === "busy-stuck") {
+        return { with: "warden", point: "" };
+      }
+      // Всё прочее — техническая остановка без разбора: её снимает транспорт.
+      return { with: "transport", point: "" };
+    }
+    return { with: "transport", point: "" };
+  }
   function healMasterMatch(kind, text) {
     const label = String(kind || "");
     if (label !== "reviewer-task-check" && label !== "reviewer-task-pending") return null;
@@ -18000,6 +18233,10 @@
       repair: info.repair,
       retry: info.route === "retry",
       maintainer: info.route === "maintainer",
+      // D-092: «кто решает» отдельным полем вердикта. `route` оставлен как был:
+      // на него смотрит старый разбор состояния, и менять его значение значило
+      // бы переписать историю в телеметрии.
+      with: healResolveWith(kind, HEAL_CLASS_INFO[cls] ? cls : "master").with,
     };
   }
 
@@ -18016,7 +18253,16 @@
     const byText = healTextMatch(reason);
     if (byText) return healVerdict(key, byText.cls, byText.why, false, byText.reason, "text");
     const cls = HEAL_PAUSE_CLASS[key];
-    if (!cls) return healVerdict(key, "master", "вид остановки не распознан: не чиню наугад", true, key);
+    // D-092: инверсия адресата по умолчанию. Раньше нераспознанный вид уходил
+    // Мастеру — «безопасно». На практике это означало, что каждый новый дефект
+    // сначала зовёт человека, а агент разбирает только то, что ему разрешили
+    // задним числом. Теперь неизвестная остановка уходит транспорту: он снимет
+    // телеметрию и назовёт причину, а человек нужен лишь там, где без него
+    // физически нельзя (MASTER_ONLY).
+    // D-092: инверсия по умолчанию. Раньше здесь стояло «неизвестный вид — значит
+    // Мастер», и любая опечатка в имени паузы (а их 70) будила человека ночью.
+    // Неизвестное — это дефект таблицы или кода, то есть работа транспорта.
+    if (!cls) return healVerdict(key, "transport", "вид остановки не назван в таблице: разбирает транспорт, а не человек", true, key);
     return healVerdict(key, cls, HEAL_CLASS_INFO[cls].label, false, key);
   }
 
@@ -18071,9 +18317,43 @@
           why: `${v.why}: продолжаю сам (${retries + 1} из ${retryMax})`,
         };
       }
+      // D-092: повторяющийся «временный» сбой — это не решение человека, а
+      // дефект: два одинаковых обрыва подряд означают, что чинит не повтор, а
+      // правка. Уходит транспорту, у него дифф и проба.
+      return {
+        action: "maintainer",
+        attempt: escalations + 1, max: maintMax,
+        why: `временный сбой повторился ${retries} раз(а) (предел ${retryMax}): это дефект, а не случайность`,
+      };
+    }
+    // D-092: адресат решения. `master` больше не значит «человек»: закрытый
+    // список MASTER_ONLY отвечает за «только человек», а постановка, очередь и
+    // петли уходят приёмке. Порядок важен: сначала «кто решает», потом пределы
+    // этого адресата — иначе счётчик одного адресата тратился бы на другого.
+    if (v.with === "warden") {
+      const ticketMax = Number.isFinite(Number(config.masterTicketMax)) ? Number(config.masterTicketMax) : 1;
+      const tickets = Math.max(0, Number(counters.tickets) || 0);
+      if (tickets < ticketMax) {
+        return {
+          action: "warden", attempt: tickets + 1, max: ticketMax,
+          why: `${v.why}: передаю приёмке строкой в «Обратную связь», цикл продолжается`,
+        };
+      }
       return {
         action: "master",
-        why: `временный сбой повторился ${retries} раз(а) (предел ${retryMax}): продолжаю только по слову Мастера`,
+        why: `приёмка уже получала эту остановку ${tickets} раз(а) (предел ${ticketMax}) и решения нет: останавливаюсь`,
+      };
+    }
+    if (v.with === "transport" && v.route !== "retry") {
+      if (escalations < maintMax) {
+        return {
+          action: "maintainer", attempt: escalations + 1, max: maintMax,
+          why: `${v.why}: передаю Maintainer'у (${escalations + 1} из ${maintMax})`,
+        };
+      }
+      return {
+        action: "master",
+        why: `Maintainer уже ${escalations} раз(а) разбирал этот инцидент (предел ${maintMax}): останавливаю цикл`,
       };
     }
     if (v.route === "maintainer") {
@@ -18241,6 +18521,10 @@
     const counters = {
       retries: Math.max(0, Number(found.retries) || 0),
       escalations: Math.max(0, Number(found.escalations) || 0),
+      // D-092: сколько раз эта остановка уже была записана приёмке строкой.
+      // Третий счётчик рядом с двумя прежними: у каждого адресата свой предел,
+      // иначе «передал приёмке» считалось бы передачей транспорту.
+      tickets: Math.max(0, Number(found.tickets) || 0),
       firstAt: found.firstAt || nowIso(),
       lastAt: found.lastAt || "",
     };
@@ -18257,6 +18541,45 @@
     state.incident = { ...state.incident, [key]: found };
     saveHealState(state);
     return found;
+  }
+
+  /**
+   * D-092: метрика автономности — сколько остановок на сто ходов решает человек.
+   *
+   * Без числа «стало автономнее» — обещание, а не измерение. Считается дёшево и
+   * без сети: знаменатель — счётчик шагов цикла, числитель — остановки, у
+   * которых адресат `master`. Правило D-092 требует, чтобы числитель падал, а не
+   * перераспределялся: поэтому хранится ещё и разбивка по адресатам.
+   */
+  function healAutonomyMetric() {
+    const state = healState();
+    const turns = Math.max(0, Number(state.turns) || 0);
+    const tally = state.stops && typeof state.stops === "object" ? state.stops : {};
+    const forHuman = Math.max(0, Number(tally.master) || 0);
+    const total = Object.values(tally).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const per100 = turns ? Math.round((forHuman / turns) * 1000) / 10 : 0;
+    return {
+      turns, stops: total, forHuman,
+      with: Object.fromEntries(Object.entries(tally).map(([k, v]) => [k, Number(v) || 0])),
+      // Один знак после запятой: «3,4 на 100 ходов» читается, «3,4375» — нет.
+      per100,
+      share: total ? Math.round((forHuman / total) * 1000) / 10 : 0,
+    };
+  }
+
+  /** Шаг цикла состоялся: знаменатель метрики. Дёшево — два числа в хранилище. */
+  function healCountTurn() {
+    const state = healState();
+    saveHealState({ ...state, turns: Math.max(0, Number(state.turns) || 0) + 1 });
+  }
+
+  /** Остановка состоялась: числитель и разбивка по адресатам. */
+  function healCountStop(withWho) {
+    const state = healState();
+    const stops = { ...(state.stops || {}) };
+    const key = String(withWho || "master");
+    stops[key] = Math.max(0, Number(stops[key]) || 0) + 1;
+    saveHealState({ ...state, stops });
   }
 
   /** Журнал попыток доставки как состав (без текста промптов). */
@@ -18542,6 +18865,7 @@
         } : null,
       },
       verdict: { ...verdict, decision },
+      autonomy: healAutonomyMetric(),
       snapshot: healPageSnapshot(),
       journal: healJournal().slice(-12),
     }, 8000);
@@ -18765,6 +19089,9 @@
     const key = healIncidentKey(info);
     const counters = healCounters(key);
     const decision = decideHeal(verdict, counters, C);
+    // D-092: каждая остановка попадает в метрику с адресатом решения. Считается
+    // до действия: даже если передача не удалась, факт «человека звали» важнее.
+    healCountStop(verdict.with);
     saveHealState({
       ...healState(),
       last: { kind: verdict.kind, cls: verdict.cls, route: verdict.route, why: verdict.why, at: nowIso() },
@@ -18796,7 +19123,61 @@
       return { verdict, decision, retried: true };
     }
 
-    if (verdict.cls === "transport" && decision.action === "maintainer") {
+    // D-092: остановка, которую решает приёмка, а не человек.
+    //
+    // `master` раньше означал «стоп и человек». Но постановка, зоны, очередь и
+    // петли — предмет приёмки (D-027 п. 1, D-066 г), и человек там нужен только
+    // для пунктов закрытого списка (MASTER_ONLY). Поэтому такая остановка
+    // становится СТРОКОЙ В «Обратной связи»: приёмка отвечает обычным ходом,
+    // ответ ложится в её «Ответ», а цикл не стоит и не ждёт нажатия.
+    if (decision.action === "warden") {
+      healBump(key, "tickets");
+      try {
+        const row = await askQuestion(
+          {
+            // Вопрос — сама остановка, дословно: приёмка должна видеть причину,
+            // а не пересказ. Полный текст уходит в тело страницы.
+            text: `${verdict.why || "остановка"}: ${oneLine(info.reason, 160)}`,
+            fullText: healDiagnosis(info, verdict, decision, upload),
+            // Вариант по умолчанию — «работу не останавливать»: она и так не
+            // остановлена, а приёмка отвечает, не задерживая очередь.
+            fallback: "работу не останавливать: решение придёт ответом в «Обратной связи»",
+            gate: false,
+            options: [],
+            url: "",
+          },
+          {
+            key: `heal:${key}`,
+            roleName: "Transport",
+            card: String(info.ref || ""),
+            mission: String(info.missionId || ""),
+            forceAnswer: true,
+            blocks: `остановка транспорта · ${verdict.kind || "без вида"}`,
+          },
+        );
+        if (row && row.id) {
+          log(
+            `Остановка «${verdict.kind || "без вида"}» записана приёмке строкой ${row.id}: ` +
+              "цикл не останавливаю — ответ придёт в её «Ответ» и в следующий план.",
+            false,
+            { ntfy: "quiet", title: "Relay: вопрос приёмке" },
+          );
+          return { verdict, decision, ticketed: true, questionId: row.id };
+        }
+      } catch (e) {
+        log(`Строку приёмке записать не удалось (${e.message}): останавливаюсь, чтобы не потерять причину.`, true);
+      }
+      // Не записалось — честнее остановиться, чем молча продолжать: причина
+      // остановки должна существовать хотя бы в панели.
+      pause(`${verdict.why || "остановка"}: ${oneLine(info.reason, 300)}`,
+        { kind: "heal-exhausted", ref: info.ref, runId: info.runId, turnId: info.turnId, quiet: true });
+      return { verdict, decision, ticketed: false, stopped: true };
+    }
+
+    // D-092: маршрут к Maintainer'у решает не класс, а решение (`action`).
+    // Повтор, который исчерпал свои пределы, — тоже дефект, а не «стоп»: раньше
+    // он падал в общую ветку и оставлял цикл без адресата.
+    if (decision.action === "maintainer") {
       saveHealState({
         ...healState(),
         pending: {
@@ -19186,6 +19567,14 @@
     // Повтор записи снимка не запускает ход и работает также в ручном режиме
     // и на паузе. Его не ждём: сетевой шлюз не должен блокировать «Шаг».
     flushPollJournal().catch((e) => log(`Очередь записи опросов не обработана: ${e.message}`, true));
+    // D-092: шаг цикла состоялся — это знаменатель метрики автономности. Считаем
+    // здесь, до всех ранних выходов ниже: шаг уже начался, и «сколько остановок
+    // на сто ходов» без знаменателя было бы долей от неизвестного.
+    try {
+      if (typeof healCountTurn === "function") healCountTurn();
+    } catch (e) {
+      dbg("метрика автономности: шаг не посчитан", e.message);
+    }
     // Ложный отказ проверки мержа чинится сам: иначе карточка ждёт Мастера,
     // а работа уже лежит в main (24.10 так было дважды).
     try {

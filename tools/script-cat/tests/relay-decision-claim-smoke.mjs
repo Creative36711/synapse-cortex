@@ -85,7 +85,7 @@ assert.match(src, /kind: "answer-decisions"/, 'пауза названа сво�
 assert.match(src, /"answer-decisions": "transport",/, 'пауза остаётся транспорту');
 
 // ── 6. Версия и решение ─────────────────────────────────────────────────────
-assert.match(src, /@version\s+1\.14\.(?:1[89]|20)/, 'сборка не старее 1.14.18');
+assert.match(src, /@version\s+1\.14\.(?:1[89]|2[01])/, 'сборка не старее 1.14.18');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-089/, "решение D-089 записано");
 

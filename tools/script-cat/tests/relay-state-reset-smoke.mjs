@@ -46,19 +46,28 @@ const ghost = { roleId: 'coord', roleName: 'Coordinator', kind: 'plan', text: '�
 const real = { ...ghost, sentAt: 2, verified: true };
 
 // ── Обновление сохраняет ожидание и ставит восстановительную паузу ТОЛЬКО там,
-// где есть неоднозначность «ушло или нет» (D-085).
-// Неподтверждённое ожидание и очередь — пауза: доказательства доставки нет.
+// где есть неоднозначность «ушло или нет» (D-085, D-092).
+// Ожидание без очереди — пауза: отправка могла состояться, повтор дал бы дубль.
 {
-  const pending = { roleId:'coord', text:'ЗАДАНИЕ', at:1 };
-  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending });
+  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':ghost });
   assert.equal(api.migrateState(), '«Coordinator», plan');
   assert.deepEqual(store.get('cfn-expect'), ghost);
-  assert.deepEqual(store.get('cfn-pending'), pending);
   assert.equal(store.get('cfn-pause-context').kind, 'update-recovery');
   assert.match(store.get('cfn-paused'), /отсутствие sentAt не доказывает/);
   assert.equal(store.get('cfn-state-v'), '1.4.74');
   assert.equal(logs.length, 1);
   assert.equal(logs[0].o?.skip, true);
+}
+// Задание в очереди отправки — паузы нет: отправкой владеет транспорт, и
+// «ушло или нет» решается очередью, а не человеком. 08–09.11 именно этот случай
+// поднимал паузу восемь раз за два дня.
+{
+  const pending = { roleId:'coord', text:'ЗАДАНИЕ', at:1 };
+  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending });
+  assert.equal(api.migrateState(), '«Coordinator», plan');
+  assert.deepEqual(store.get('cfn-pending'), pending, 'очередь сохранена');
+  assert.equal(store.get('cfn-pause-context'), undefined, 'очередь есть — паузы нет');
+  assert.match(String(logs[0]?.t || ''), /ещё в очереди отправки/);
 }
 // Подтверждённая доставка — паузы нет: ожидание живое, ответ придёт в него же.
 // 09.11 на этом стояли паузы после каждой из шести сборок подряд.
@@ -70,11 +79,11 @@ const real = { ...ghost, sentAt: 2, verified: true };
   assert.deepEqual(store.get('cfn-expect'), real, 'ожидание сохранено как есть');
   assert.match(String(logs[0]?.t || ''), /доставка подтверждена/);
 }
-// Очередь без ожидания — по-прежнему пауза: отправки могло не быть.
+// Очередь без ожидания — паузы нет: сообщение ещё не отправлено, отправит транспорт.
 {
   const { api, store } = make({ 'cfn-state-v':'1.4.8', 'cfn-pending':{ roleId:'coord', text:'З', at:1 } });
   api.migrateState();
-  assert.equal(store.get('cfn-pause-context').kind, 'update-recovery');
+  assert.equal(store.get('cfn-pause-context'), undefined, 'очередь отправки — не повод для человека');
 }
 {
   const { api, logs } = make({ 'cfn-state-v':'1.4.8' });
@@ -151,12 +160,15 @@ console.log('OK: relay 1.4.63 — обновление сохраняет ожи
   assert.match(String(logs[0]?.t || ''), /уже в поле ввода/);
   assert.deepEqual(store.get('cfn-expect'), ghost, 'ожидание не тронуто');
 }
-// Чужой текст в поле доказательством не считается: пауза остаётся.
+// Чужой текст в поле доказательством не считается. D-092: и паузы тоже нет —
+// задание лежит в очереди отправки, значит отправкой владеет транспорт, а не
+// человек. Пауза нужна только там, где очередь пуста, а ожидание живо.
 {
   const pending = { roleId:'coord', text:'ЗАДАНИЕ В ПОЛЕ', at:1 };
-  const { api, store } = make({
+  const { api, store, logs } = make({
     'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending, 'cfn-composer':'вопрос про другое',
   });
   api.migrateState();
-  assert.equal(store.get('cfn-pause-context').kind, 'update-recovery', 'чужой текст паузу не снимает');
+  assert.equal(store.get('cfn-pause-context'), undefined, 'очередь отправки — не повод для человека');
+  assert.match(String(logs[0]?.t || ''), /ещё в очереди отправки/, 'причина названа');
 }

@@ -116,11 +116,16 @@ const info = (over = {}) => ({
   const state = env.store.get('cfn-heal-state');
   const counters = Object.values(state.incident)[0];
   assert.equal(counters.retries, 1, 'счётчик инцидента вырос');
-  // Второй такой же сбой — второй раз; третий — стоп.
+  // Второй такой же сбой — второй раз; третий — уже не случайность.
+  //
+  // D-092: исчерпанный повтор уходит транспорту, а не человеку. Два одинаковых
+  // обрыва подряд — признак дефекта, у Maintainer'а есть дифф и проба; раньше
+  // здесь стоял стоп и звонок Мастеру, хотя решения человек не принимает.
   await env.api.healAfterPause(info({ kind: 'nav', reason: 'Не удалось открыть страницу', ref: 'agent-1' }));
   const third = await env.api.healAfterPause(info({ kind: 'nav', reason: 'Не удалось открыть страницу', ref: 'agent-1' }));
-  assert.equal(third.stopped, true, 'после двух автопродолжений — стоп');
-  assert.equal(env.pauses.at(-1).kind, 'heal-exhausted', 'причина стопа названа классом, а не «error»');
+  assert.equal(third.escalated, true, 'третий повтор уходит разбору, а не человеку');
+  assert.equal(env.pauses.length, 0, 'цикл не встал на паузу из-за повтора');
+  assert.equal(env.sends.at(-1).role.fn, 'Maintainer', 'адресат разбора — Maintainer');
 }
 
 // ── 2. Поломка транспорта: передача Maintainer'у без маркера ───────────────
