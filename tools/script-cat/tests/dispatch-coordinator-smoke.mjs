@@ -19,7 +19,7 @@ assert.ok(version, 'the active userscript declares an x.y.z version');
 assert.match(source, /^\/\/ @match\s+https:\/\/arena\.ai\/\*/m, 'the active script is bound to Arena');
 
 const tests = readdirSync(testDir).filter((name) => name.endsWith('.mjs'));
-assert.equal(tests.length, 104, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan, D-056 unbound-binding, D-067 marker-ladder, D-068 orphan-navigation, D-072 questions, четыре сюиты D-073 (heal-core, heal-flow, watchdog, relay-build-node), mission-roster D-075 relay-plan-recover 1.14.3 relay-busy-indicator 1.14.4, relay-answers-delta 1.14.6, relay-composer-draft 1.14.7 остаются в наборе, relay-question-gate 1.14.8, relay-question-gate-persist 1.14.9, relay-feedback-manual-row 1.14.10 (D-082) relay-direct-answer 1.14.11 (D-083) и новая relay-marker-escalation 1.14.12 (D-084)');
+assert.equal(tests.length, 105, '83 prior suites, D-046 pr-claim, D-049 arbiter, D-054 run-id typo, D-055 review-turn orphan, D-056 unbound-binding, D-067 marker-ladder, D-068 orphan-navigation, D-072 questions, четыре сюиты D-073 (heal-core, heal-flow, watchdog, relay-build-node), mission-roster D-075 relay-plan-recover 1.14.3 relay-busy-indicator 1.14.4, relay-answers-delta 1.14.6, relay-composer-draft 1.14.7 остаются в наборе, relay-question-gate 1.14.8, relay-question-gate-persist 1.14.9, relay-feedback-manual-row 1.14.10 (D-082) relay-direct-answer 1.14.11 (D-083) новая relay-marker-escalation 1.14.12 (D-084) и relay-budget-fit 1.14.13 (D-085)');
 for (const added of ['prompts-smoke.mjs', 'delivery-smoke.mjs', 'pilot-smoke.mjs', 'docs-smoke.mjs']) {
   assert.ok(tests.includes(added), `${added} suite present`);
 }

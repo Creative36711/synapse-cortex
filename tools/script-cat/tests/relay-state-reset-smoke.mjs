@@ -41,18 +41,36 @@ function make(seed = {}) {
 const ghost = { roleId: 'coord', roleName: 'Coordinator', kind: 'plan', text: 'ЗАДАНИЕ', watermark: 'm1', at: 1 };
 const real = { ...ghost, sentAt: 2, verified: true };
 
-// ── Обновление сохраняет оба вида ожиданий и ставит восстановительную паузу.
-for (const expect of [ghost, real]) {
+// ── Обновление сохраняет ожидание и ставит восстановительную паузу ТОЛЬКО там,
+// где есть неоднозначность «ушло или нет» (D-085).
+// Неподтверждённое ожидание и очередь — пауза: доказательства доставки нет.
+{
   const pending = { roleId:'coord', text:'ЗАДАНИЕ', at:1 };
-  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':expect, 'cfn-pending':pending });
+  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending });
   assert.equal(api.migrateState(), '«Coordinator», plan');
-  assert.deepEqual(store.get('cfn-expect'), expect);
+  assert.deepEqual(store.get('cfn-expect'), ghost);
   assert.deepEqual(store.get('cfn-pending'), pending);
   assert.equal(store.get('cfn-pause-context').kind, 'update-recovery');
   assert.match(store.get('cfn-paused'), /отсутствие sentAt не доказывает/);
   assert.equal(store.get('cfn-state-v'), '1.4.74');
   assert.equal(logs.length, 1);
   assert.equal(logs[0].o?.skip, true);
+}
+// Подтверждённая доставка — паузы нет: ожидание живое, ответ придёт в него же.
+// 09.11 на этом стояли паузы после каждой из шести сборок подряд.
+{
+  const { api, store, logs } = make({ 'cfn-state-v':'1.4.8', 'cfn-expect':real });
+  assert.equal(api.migrateState(), '«Coordinator», plan');
+  assert.equal(store.get('cfn-pause-context'), undefined, 'доставка подтверждена — паузы нет');
+  assert.equal(store.get('cfn-paused'), undefined);
+  assert.deepEqual(store.get('cfn-expect'), real, 'ожидание сохранено как есть');
+  assert.match(String(logs[0]?.t || ''), /доставка подтверждена/);
+}
+// Очередь без ожидания — по-прежнему пауза: отправки могло не быть.
+{
+  const { api, store } = make({ 'cfn-state-v':'1.4.8', 'cfn-pending':{ roleId:'coord', text:'З', at:1 } });
+  api.migrateState();
+  assert.equal(store.get('cfn-pause-context').kind, 'update-recovery');
 }
 {
   const { api, logs } = make({ 'cfn-state-v':'1.4.8' });

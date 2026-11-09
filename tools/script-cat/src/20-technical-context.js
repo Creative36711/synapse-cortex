@@ -66,10 +66,30 @@
   /**
    * Скомпилировать запрос или поставить локальную паузу с причиной.
    * Ошибка компиляции не отправляется в Arena. Возвращает envelope или null.
+   *
+   * D-085: перерасход бюджета — не повод останавливать ход, пока есть что
+   * сжимать. 09.11 боевой план дал 8178 при пределе 7500 (answers.delta 3346,
+   * queue.snapshot 1191): отправки не было, и цикл стоял, хотя мешало не
+   * задание, а размер переписки. Инструкции роли не режутся никогда (D-034) —
+   * сжимаются данные: брифинг ответов и снимок очереди. Порядок — от самого
+   * «жирного» блока к остальным, и каждый шаг СКАЗАН в журнале: агент должен
+   * знать, что видел ответ не целиком, и что полный текст — в Notion.
    */
   function compileOrPause(request, label) {
     const result = PromptCompiler.compile(request);
     if (result.ok) return result;
+    if (result.error.code === "budget_exceeded") {
+      const fitted = fitRequestToBudget(request, result);
+      if (fitted) {
+        log(
+          `Промпт не влезал (${label}): ${result.error.message}. Сжал данные — отправляю ${fitted.metrics.chars} знаков. ` +
+            "Инструкции не тронуты; сжатое помечено в тексте, полные тексты — в Notion.",
+          false,
+          { ntfy: "quiet", title: "Relay: промпт сжат по бюджету" },
+        );
+        return fitted;
+      }
+    }
     // Перерасход бюджета — это поломка профиля/блоков, а не данных Мастера:
     // такой разбор уходит Maintainer'у (D-073). Текст паузы говорит правду о
     // том, что произошло, и не обещает Мастеру ручную правку, которой от него
@@ -85,6 +105,63 @@
       { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
     );
     return null;
+  }
+
+  /**
+   * D-085: уложить переполненный запрос в предел, сжимая ТОЛЬКО данные.
+   *
+   * Возвращает собранный envelope или null, если даже после сжатия не влезает
+   * (тогда остаётся прежняя пауза — молча не режем).
+   *
+   * Что считается данными: `queue.answersLine` (брифинг ответов ролей),
+   * `queue.openLine` (открытые вопросы), `queue.answerLine` (журнал ответа),
+   * `queue.ready` (перечень готовых карточек) — они длинные, меняются каждую
+   * минуту и целиком лежат в Notion. Что не трогаем никогда: оракул, Scope,
+   * инварианты, Acceptance, зону роли, правила и маркер — это задание, а не
+   * переписка (D-034, D-038).
+   *
+   * Шаги идут по возрастанию цены: сначала наполовину, потом до строки-указателя.
+   * Первый шаг, который уложился, и уходит — лишнего не режем.
+   */
+  function fitRequestToBudget(request, failure) {
+    const queue = request?.queue;
+    if (!queue || typeof queue !== "object") return null;
+    const limit = Number(failure?.error?.detail?.limit) || 0;
+    const note = "… (сжато под предел промпта; полный текст — в Notion, открой строку перед работой)";
+    // Сколько нужно освободить: перерасход плюс небольшой запас, иначе
+    // округление сжатия снова упрётся в тот же предел.
+    const over = Math.max(0, Number(failure?.error?.detail?.total) || 0) - limit;
+    const need = over + 120;
+    const shrink = (s) => (typeof s === "string" ? s : "");
+    const fields = ["answersLine", "openLine", "answerLine", "ready"].filter((k) => shrink(queue[k]));
+    const steps = [];
+    // Шаг 1: половина самых длинных строк. Шаг 2: до читаемого начала (240).
+    for (const keep of [0.5, 240]) {
+      for (const k of fields) {
+        const full = shrink(queue[k]);
+        const want = keep < 1 ? Math.max(400, Math.floor(full.length * keep)) : keep;
+        if (full.length <= want) continue;
+        steps.push({ [k]: full.slice(0, want) + " " + note });
+      }
+    }
+    // Берём шаги подряд, пока не набрали нужное: «наполовину» по всем полям,
+    // затем «до начала» по тем, которых не хватило.
+    const patch = {};
+    const taken = new Set();
+    for (const step of steps) {
+      const k = Object.keys(step)[0];
+      if (taken.has(k)) continue; // для поля берём самый мягкий достаточный шаг
+      if (shrink(queue[k]).length <= step[k].length) continue;
+      patch[k] = step[k];
+      taken.add(k);
+      const freed = Object.entries(patch)
+        .reduce((a, [key]) => a + (shrink(queue[key]).length - patch[key].length), 0);
+      if (freed >= need) break;
+    }
+    if (!Object.keys(patch).length) return null;
+    const next = { ...request, queue: { ...queue, ...patch } };
+    const retry = PromptCompiler.compile(next);
+    return retry.ok ? retry : null;
   }
 
   /** D-034/D-043: какие блоки съели бюджет — топ-4 по связанному лимиту.
