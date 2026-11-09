@@ -27,7 +27,7 @@ const cut = (from, to) => {
 const flatSrc = 'const flat = (x) => String(x || "").replace(/[\\s\\u00a0]+/g, " ").trim().toLowerCase();';
 assert.ok(src.includes(flatSrc), 'flat() на месте');
 
-const sendKeySrc = cut('  function sendKey(text) {', '  /** Своё сообщение в транскрипте');
+const sendKeySrc = cut('  function sendKey(text, turnId = "") {', '  /** Своё сообщение в транскрипте');
 const { sendKey } = new Function(`${flatSrc}\n${sendKeySrc}\nreturn { sendKey };`)();
 
 const task = [
@@ -105,7 +105,7 @@ const empty = lastUserSays([]);
 assert.equal(empty(key), false, 'пустой транскрипт — не подтверждение');
 
 // ── 3. deliver: подтверждение по сообщению, а не по счётчику ──────────────
-const deliverSrc = cut('  async function deliver(editor, text) {', '  /** Короткий хеш текста');
+const deliverSrc = cut('  async function deliver(editor, text, turnId = "") {', '  /** Короткий хеш текста');
 assert.match(
   deliverSrc,
   /waitSent\(key, known, C\.sendVerifyMs, text, since\)/,

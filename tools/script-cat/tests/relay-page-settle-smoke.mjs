@@ -76,7 +76,7 @@ const waitSrc = cut(
   '  async function waitSendReady(editor, text, timeoutMs = C.sendReadyMs) {',
   '  /**\n   * Отличительная строка задания',
 );
-const runWait = async ({ readyAfter, budget = 900 }) => {
+const runWait = async ({ readyAfter, budget = 900, fieldText = '' }) => {
   const out = { prompts: [], logs: [], now: 0, calls: 0 };
   const wait = new Function(
     'sendReady',
@@ -85,6 +85,8 @@ const runWait = async ({ readyAfter, budget = 900 }) => {
     'sleep',
     'C',
     'Date',
+    'flat',
+    'composerText',
     `${waitSrc}\nreturn waitSendReady;`,
   )(
     () => {
@@ -93,13 +95,20 @@ const runWait = async ({ readyAfter, budget = 900 }) => {
         ? { ok: true, btn: 'SEND' }
         : { ok: false, why: 'кнопка Send ещё неактивна', editor: {} };
     },
-    (_editor, text) => out.prompts.push(text),
+    (_editor, text) => {
+      out.prompts.push(text);
+      // Как настоящая вставка: после неё поле не пустое.
+      fieldText = text;
+    },
     (text) => out.logs.push(text),
     async (ms) => {
       out.now += ms;
     },
     { sendReadyMs: budget },
     { now: () => out.now },
+    // flat/composerText — боевые помощники; поле отдаёт то, что в него вставили.
+    (x) => String(x || '').replace(/[\s\u00a0]+/g, ' ').trim().toLowerCase(),
+    () => fieldText,
   );
   const btn = await wait({}, 'задание NAR-2.12', budget);
   return { btn, ...out };
@@ -111,6 +120,20 @@ assert.ok(slow.prompts.length > 0, 'пока страница рисуется, 
 assert.ok(
   slow.prompts.every((t) => t === 'задание NAR-2.12'),
   'в поле возвращается то же задание, а не пустая строка',
+);
+
+// 1.14.7: «возврат текста» — это лечение одного случая, когда перерисовка
+// стёрла поле. Пока текст в поле УЖЕ есть, писать заново нельзя: `insertText`
+// встаёт в выделение, которым служит всё содержимое, и каждые 1,5 с затирает
+// набранное — поле не набирает состояние, кнопка Send остаётся серой.
+// 09.11 в 14:03:27 так прошло 20 с («активной кнопки Send нет за 20 с, поле
+// 8403 симв.»). Число перевставок ограничено, и только пустое поле их разрешает.
+assert.ok(slow.prompts.length <= 2, `перевставок не больше двух (было ${slow.prompts.length})`);
+const full = await runWait({ readyAfter: 99_999, budget: 6000, fieldText: 'задание NAR-2.12' });
+assert.equal(
+  full.prompts.length,
+  0,
+  'непустое поле не перезаписывается: текст на месте, значит ждём кнопку, а не вставляем снова',
 );
 
 const never = await runWait({ readyAfter: 99_999, budget: 900 });

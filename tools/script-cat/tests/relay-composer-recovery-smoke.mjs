@@ -32,7 +32,7 @@ const cut = (from, to) => {
 };
 
 // ── 1. Ожидание поля ввода не спрятано в `if (panels)` ──────────────────────
-const deliver = cut('  async function deliver(editor, text) {', '  /** Короткий хеш текста');
+const deliver = cut('  async function deliver(editor, text, turnId = "") {', '  /** Короткий хеш текста');
 assert.ok(
   /if \(panels\) \{\n(?:[^\n]*\n)*?\s*\}\n\s*live = await waitFor\(composer, C\.composerGraceMs, 300\);/.test(deliver),
   'ожидание поля стоит ПОСЛЕ закрытия панелей, а не внутри if (panels)',

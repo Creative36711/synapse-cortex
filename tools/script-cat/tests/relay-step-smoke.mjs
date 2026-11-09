@@ -131,9 +131,9 @@ assert.match(cpBody, /composerDiagnostics\(\)/, 'при отказе печат�
 assert.ok(!/В поле ввода уже есть другой текст/.test(src), 'запрета на чужой текст больше нет');
 assert.match(cpBody, /очистил перед вставкой задания/, 'видно, что поле очищено перед вставкой');
 assert.match(cpBody, /clearComposer\(editor\)/, 'поле чистится перед заданием, а не поверх старого текста');
-assert.match(cpBody, /const delivery = await deliver\(editor, pending\.text\);/, 'отправка проверяется');
+assert.match(cpBody, /const delivery = await deliver\(editor, pending\.text, pending\.turnId\);/, 'отправка проверяется');
 assert.match(cpBody, /if \(!delivery\.ok\)/, 'неудачная отправка — пауза, а не «отправлено»');
-assert.match(sendBlock, /async function deliver\(editor, text\)/, 'доставка отдельной функцией');
+assert.match(sendBlock, /async function deliver\(editor, text, turnId = ""\)/, 'доставка отдельной функцией, номер хода — в ключ (1.14.7)');
 assert.match(sendBlock, /async function waitForSendReady\(editor, timeoutMs = 4000\)/, 'ждём активную кнопку Send');
 assert.match(sendBlock, /активной кнопки Send нет/, 'неактивная кнопка называется причиной');
 assert.match(sendBlock, /function sendDiagnostics\(editor\)/, 'при отказе печатаются кандидаты в кнопку Send');
