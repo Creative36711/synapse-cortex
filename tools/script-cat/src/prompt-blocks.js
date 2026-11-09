@@ -291,7 +291,12 @@
       ].join("\n");
     } });
     def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
-      if (c.delivery?.tier === "tool_limit") return [
+      // D-093: короткий вариант нужен не только продолжению после лимита
+      // инструментов, но и повтору после ошибки Arena (`compact`). У вопроса,
+      // приёмки и арбитража повтора раньше не было вовсе — они падали на фактах
+      // карточки; теперь он есть, а профиль continuation.* держит overhead 700,
+      // в который полный текст маркера не влезает (815).
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
         "Если доказательств не хватает — не принимай миссию.",
         `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
@@ -305,7 +310,7 @@
     def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
       const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
-      if (c.delivery?.tier === "tool_limit") return [
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
         "Решение по карточке обязательно: resolve с action или master.",
         resolve,
@@ -320,7 +325,7 @@
       ].join("\n");
     } });
     def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
-      if (c.delivery?.tier === "tool_limit") return [
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
         "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
         `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,

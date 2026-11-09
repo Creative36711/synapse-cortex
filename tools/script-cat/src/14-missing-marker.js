@@ -147,19 +147,68 @@
    * выдачи и формат маркера. Всё остальное агент берёт из карточки.
    */
   function minimalPrompt(expect) {
+    const attempt = (Number(expect.arenaResend) || 0) + 1;
     if (expect.kind === "plan") {
       return compileOrPause({
         kind: "plan", role: { fn: "Coordinator", name: expect.roleName || "Coordinator" },
         mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
         queue: { summary: expect.planContext || "Прочитай очередь миссии и продолжи планирование." },
-        delivery: { tier: "recovery", attempt: (Number(expect.arenaResend) || 0) + 1 },
+        delivery: { tier: "recovery", attempt },
       }, `recovery ${expect.ref}`);
+    }
+    // D-093: вид хода решает, какими фактами собирать повтор.
+    //
+    // 09.11 в 20:28 передача вопроса Warden'у не принялась ошибкой Arena, и
+    // минимальный повтор собрался через delivery.compact — профиль карточки. У
+    // вопроса нет `runId`: повтор упал на `missing_fact task.runId`, до Arena не
+    // дошёл и ушёл в разбор как «поломка транспорта». Цикл встал на ровном
+    // месте: вопрос в очереди был, ответа не было, отправлять было нечего.
+    //
+    // У приёмки миссии и у арбитра тоже нет runId — у них свой маркер и свои
+    // IDs. Поэтому повтор собирается ровно теми фактами, которые есть у вида
+    // хода, а профиль выбирает `select` (continuation.*). Ничего нового здесь не
+    // выдумывается: те же ID, что ушли в первый раз.
+    const answerLike = expect.kind === "answer" || expect.kind === "review" || expect.kind === "arbiter";
+    if (answerLike) {
+      const role = { fn: expect.roleFn || "Reviewer", name: expect.roleName || "" };
+      if (expect.kind === "answer") {
+        return compileOrPause({
+          kind: "answer", role, turnId: expect.turnId || "",
+          mission: { id: expect.missionId || "" },
+          question: { id: expect.ref, turnId: expect.turnId || "" },
+          delivery: { tier: "compact", attempt },
+        }, `retry ${expect.ref}`);
+      }
+      if (expect.kind === "review") {
+        return compileOrPause({
+          kind: "review", role, mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
+          delivery: { tier: "compact", attempt },
+        }, `retry ${expect.ref}`);
+      }
+      return compileOrPause({
+        kind: "arbiter", role, turnId: expect.turnId || "",
+        mission: { id: expect.missionId || "" },
+        arbiter: { cardId: expect.ref, cardTitle: expect.title || "", ...(expect.arbiter || {}) },
+        delivery: { tier: "compact", attempt },
+      }, `retry ${expect.ref}`);
+    }
+    // Обычная выдача: здесь runId есть, и профиль карточки — правильный.
+    // Если его всё же нет (старое ожидание из прежней сборки), повтор не
+    // отправляем: собранный «на пустом месте» промпт хуже честной паузы.
+    if (!String(expect.runId || "").trim()) {
+      pause(
+        `Повтор задания «${expect.title || expect.ref}» невозможен: в ожидании нет run_id этой выдачи. ` +
+          "Без него агент не сможет ответить маркером, а собирать промпт без фактов — врать самому себе. " +
+          "Карточка и ожидание сохранены; нужен новый ход Координатора.",
+        { kind: "retry-no-run", ref: expect.ref, runId: "" },
+      );
+      return null;
     }
     return compileOrPause({
       kind: "retry", profileId: "delivery.compact",
       role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
       task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
-      delivery: { tier: "compact", attempt: (Number(expect.arenaResend) || 0) + 1 },
+      delivery: { tier: "compact", attempt },
     }, `retry ${expect.ref}`);
   }
 
