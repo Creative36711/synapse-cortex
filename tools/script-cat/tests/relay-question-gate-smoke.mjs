@@ -105,9 +105,16 @@ const api = new Function(
 
 // ── 4. Ход держит только gate, а не сам факт вопроса ──────────────────────
 {
-  const adr = cut('      if (askedRow && (askedRow.gate', '      if (norm(decision.next) === "blocked")');
+  // D-083: ветка вопроса больше не спрятана под `next !== "blocked"` — иначе
+  // вопрос, поданный вместе с остановкой, выбрасывался целиком.
+  const adr = cut('      if (askedRow && (askedRow.gate', '      if (blocked) {');
   assert.match(adr, /askedRow\.gate === true \|\| askedRow\.need/, 'ход уходит приёмке только по gate/need');
   assert.match(adr, /ход идёт дальше по/, 'обычный вопрос не мешает next');
+  // Остановка с адресованным вопросом — ход к адресату, а не пауза для Мастера.
+  const blockedAsk = cut('      if (blocked) {\n        // D-083', '        // Право Координатора');
+  assert.match(blockedAsk, /startAnswer\(mission, item\)/, 'ответ адресата ставится отдельным ходом');
+  assert.match(blockedAsk, /item\.gate === true \|\| item\.need/, 'при остановке ведёт именно адресованный вопрос');
+  assert.match(blockedAsk, /return true;/, 'ход Координатора на этом заканчивается, а не висит');
 
   const ask = cut('  async function askQuestion(q, ctx = {}) {', '  /**\n   * Отметить ответы доставленными');
   assert.match(ask, /if \(!q\.gate && !ctx\.forceAnswer\) \{/, 'askQuestion различает обычный вопрос и остановку');
