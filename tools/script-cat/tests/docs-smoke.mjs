@@ -158,13 +158,16 @@ for (const [role, file] of Object.entries(roleDoc)) {
 {
   const d077 = contract.d077;
   assert.ok(d077, 'D-077 записан в контракт');
-  assert.match(d077.version || '', /^1\.14\.4$/, 'D-077 относится к сборке 1.14.4');
+  assert.match(d077.version || '', /^1\.14\.5$/, 'D-077 доведён до 1.14.5 (видимый отсчёт)');
   assert.match(d077.evidence?.probe || '', /relay-busy-indicator-smoke/, 'проба названа');
   assert.match(d077.fix || '', /busySince/, 'потолок ожидания назван в контракте');
   assert.match(d077.fix || '', /fullLabel/, 'проверка по полному тексту названа');
   const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
   assert.match(decisions, /## D-077 \(1\.14\.4\)/, 'D-077 есть в журнале решений');
   assert.match(decisions, /length > 80/, 'мёртвая проверка названа по имени');
+  // Потолок без часов не решает жалобы: у ожидания должен быть видимый отсчёт.
+  assert.match(decisions, /отсчёт обязан быть видимым/, 'правило про видимый отсчёт записано');
+  assert.match(d077.fix || '', /logThrottled/, 'видимый отсчёт назван в контракте');
   const config = readFileSync(join(root, 'tools/script-cat/src/01-config.js'), 'utf8');
   assert.match(config, /pendingBusyMaxMs:\s*1800000/, 'потолок ожидания в конфиге');
   const heal = readFileSync(join(root, 'tools/script-cat/src/40-heal-core.js'), 'utf8');

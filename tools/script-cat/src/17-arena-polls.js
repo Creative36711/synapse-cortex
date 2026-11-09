@@ -1927,11 +1927,24 @@
         GM_setValue(K.pending, { ...pending, busySince: Date.now() });
         pendingSay(
           pending,
-          `Агент ещё отвечает: задание из очереди подождёт и уйдёт, как только он закончит (${busyLabel(busy)}).`,
+          `Агент ещё отвечает: задание из очереди подождёт и уйдёт, как только он закончит (${busyLabel(busy)}). ` +
+            `Предел ожидания — ${Math.round(C.pendingBusyMaxMs / 60000)} мин, потом пауза.`,
         );
         return true;
       }
       const waitedMs = Date.now() - waitSince;
+      // Отсчёт виден в журнале, пока идёт. Без этого 09.11 была одна строка в
+      // 13:31 и двенадцать часов тишины: Мастер не мог отличить «идёт долгая
+      // работа» от «цикл встал», а `pendingSay` пишет ровно один раз на
+      // очередь (ключ — `pending.at`). Напоминаем редко — раз в 10 минут, как
+      // у прочих долгих ожиданий, чтобы журнал оставался читаемым.
+      logThrottled(
+        `pending-busy:${pending.at}`,
+        `Задание ждёт ${Math.round(waitedMs / 60000)} мин: адресат всё ещё числится работающим ` +
+          `(${busyLabel(busy)}). Пауза будет через ${Math.max(0, Math.round((C.pendingBusyMaxMs - waitedMs) / 60000))} мин.`,
+        false,
+        Math.min(C.pendingBusyMaxMs, C.longWaitNoticeMs),
+      );
       if (waitedMs > C.pendingBusyMaxMs) {
         GM_setValue(K.pending, { ...pending, busySince: 0 });
         pause(
