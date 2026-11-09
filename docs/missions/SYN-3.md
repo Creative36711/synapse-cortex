@@ -11,7 +11,9 @@
 проверка 3 — только к B1 и последующим; B0 не зависит от собственной приёмки, §10 переписан
 соответственно; ярлык при этом не был поднят — исправлено в 1.5;
 1.5 — V-2: `--frames 1/60/120` вместо `0/60/120`, сноска о неисполнимости нуля кадров на стартовом
-состоянии и об обязательном `--shot` (D-070)). Владелец приёмки: Warden. Исполнители: `Contract Architect`, `Executor Core`,
+состоянии и об обязательном `--shot` (D-070);
+1.6 — зоны §7 разведены по факту: строка `Executor Core` получает `tools/i18n/**`, `tests/i18n/**`,
+`docs/I18N.md`, у `Locale Auditor` остаётся `locales/**` (D-087)). Владелец приёмки: Warden. Исполнители: `Contract Architect`, `Executor Core`,
 `Locale Auditor`, `Spec Auditor` (доступ только к `Creative36711/synapse`, D-022).
 Гейт: SYN-2 принята (`accept`, круг 1, SHA `6cff12a`); SYN-P1 не запускается до приёмки SYN-3.
 Очередь к выдаче: `docs/handoff/syn-3-card-queue.md` — **сначала B0** (репетиция оракула), затем
@@ -166,7 +168,7 @@ PNG и описать наблюдаемое; «по таблице символ
 |---|---|---|
 | Контракт отпечатка v2 и v1, регистрация наборов, дополнение таблиц ошибок | `Contract Architect` | `schema/**`, `docs/contracts/**`, `tests/contracts/**`, `docs/decisions/SYN-3.md` |
 | Runtime: отпечаток, ввод, диагностика, CI | `Executor Core` | `game/**`, `tests/cli/**`, `tests/runtime/**`, `tests/fixtures/**`, `.github/workflows/**`, `README.md`, `AGENTS.md`, `package.json` |
-| Анализатор литералов, локали игрового UI | `Locale Auditor` | `tools/i18n/**`, `tests/i18n/**`, `locales/**`, `docs/I18N.md` |
+| Анализатор литералов (`tools/i18n/**`, `tests/i18n/**`, `docs/I18N.md`), локали игрового UI (`locales/**`) | `Executor Core` — анализатор, `Locale Auditor` — локали | `tools/i18n/**`, `tests/i18n/**`, `docs/I18N.md` (Executor Core); `locales/**` (Locale Auditor) |
 | Репетиция оракула до выдачи (B0) | `Spec Auditor` | чтение; отчёт |
 | Независимый аудит V-1…V-6, V-8, V-10 | `Spec Auditor` | чтение; отчёт |
 | Очередь, статусы, Sequence | `Coordinator` | Notion «Запросы» |

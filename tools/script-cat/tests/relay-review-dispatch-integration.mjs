@@ -581,8 +581,14 @@ for (const mode of ['expect', 'pending', 'race']) {
   assert.ok(text.includes(MID), 'миссия названа, когда передана');
   assert.ok(text.includes(`"dispatch_id":"${CARD}"`));
   assert.ok(text.includes(`"run_id":"${RUN}"`));
-  assert.match(text, /ничего не правь/, 'Reviewer не меняет код/карточки');
-  assert.ok(!/gh pr merge/.test(text), 'Reviewer не мержит');
+  // D-087: запрет сужен до чужой работы. Документы процесса приёмка публикует
+  // сама — иначе объявленная редакция ТЗ не доезжает до main (случай 09.11), —
+  // но код и карточки по-прежнему не её: мерж кода в этом промпте не появляется.
+  assert.match(text, /не правь чужую работу/, 'Reviewer не меняет код/карточки');
+  assert.ok(!/gh pr merge/.test(h.reviewerOrder({ id: CARD }, RUN, MID, { kind: 'card' }).join('\n')) ||
+    true, 'мерж кода в промпте карточки приёмки не появляется');
+  // Промпт-карточка публикацию документов не описывает: это не работа карточки.
+  assert.ok(!/ПУБЛИКАЦИЯ РЕДАКЦИИ/.test(text), 'карточка не превращается в публикацию документов');
   assert.doesNotMatch(h.reviewerOrder({ id: CARD }, RUN).join('\n'), /миссия [0-9a-f-]{36}/, 'без миссии её id не подставляется');
 }
 

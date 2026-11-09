@@ -411,7 +411,8 @@
       "title": "Git-ритуал и границы записи",
       "requiredFor": [
         "Executor",
-        "Auditor"
+        "Auditor",
+        "Reviewer"
       ]
     },
     "R-EVIDENCE": {
@@ -499,6 +500,13 @@
         "Executor",
         "Auditor",
         "Coordinator",
+        "Reviewer"
+      ]
+    },
+    "R-DOCS": {
+      "title": "Публикация редакции документа",
+      "text": "Объявленная редакция ТЗ или очереди — ветка, PR и мерж до выдачи карточек по ней; direct push в main запрещён",
+      "requiredFor": [
         "Reviewer"
       ]
     }

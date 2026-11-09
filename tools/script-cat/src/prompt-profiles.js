@@ -37,14 +37,16 @@
     });
     def("reviewer.mission", {
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      // D-087: `git.docs` — потому что объявленная редакция ТЗ и очереди публикуется
+      // веткой и PR, а раньше у приёмки не было ни права, ни порядка это делать.
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
     });
     def("reviewer.answer", {
       audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
-      blocks: ["identity.mission", "authority.reviewer", "answer.question", "answer.protocol", "answer.resume", "marker.answer"],
+      blocks: ["identity.mission", "authority.reviewer", "git.docs", "answer.question", "answer.protocol", "answer.resume", "marker.answer"],
       requiredFacts: ["question.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 1800 },
