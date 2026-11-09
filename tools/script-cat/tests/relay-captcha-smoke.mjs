@@ -119,7 +119,7 @@ assert.equal(
 );
 
 // ── 3. Проверки в самой отправке ───────────────────────────────────────────
-const deliverSrc = cut('  async function deliver(editor, text) {', '  /** Короткий хеш текста');
+const deliverSrc = cut('  async function deliver(editor, text, turnId = "") {', '  /** Короткий хеш текста');
 assert.match(deliverSrc, /if \(captchaDialog\(\)\) return blocked\(\);/, 'капча проверяется до клика');
 assert.match(deliverSrc, /const blocked = \(\) => \(\{/, 'отказ по капче отдельный');
 assert.match(deliverSrc, /captcha: true,/, 'признак капчи есть в результате');

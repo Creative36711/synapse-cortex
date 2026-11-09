@@ -153,7 +153,7 @@ assert.match(composerBlock, /await closeCompletionPanels\(\)/, 'ensureComposer �
 assert.doesNotMatch(composerBlock, /closed >= 2\) break/, 'выхода «после второй попытки» больше нет');
 
 // deliver: поле пропало посреди отправки — панели убираем, ход не снимаем.
-const deliverFrom = src.indexOf('async function deliver(editor, text) {');
+const deliverFrom = src.indexOf('async function deliver(editor, text, turnId = "") {');
 const deliverBlock = src.slice(deliverFrom, src.indexOf('async function send(', deliverFrom));
 assert.match(deliverBlock, /await closeCompletionPanels\(\)/, 'deliver убирает панели, а не сдаётся сразу');
 assert.match(deliverBlock, /поле ввода пропало — убрал панелей/, 'в причине видно, что панель была');

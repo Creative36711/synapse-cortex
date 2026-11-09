@@ -100,7 +100,7 @@ assert.ok(!/"count"\.test|return "count"/.test(verifySrc), 'ветки «счё�
 assert.ok(!/"generating"/.test(verifySrc), 'ветки «поле опустело + Stop» больше нет');
 
 // ── 3. Проверка стоит после клика, до рапорта ─────────────────────────────
-const deliverSrc = cut('  async function deliver(editor, text) {', '  /** Короткий хеш текста');
+const deliverSrc = cut('  async function deliver(editor, text, turnId = "") {', '  /** Короткий хеш текста');
 const clickAt = deliverSrc.indexOf('btn.click();');
 const holdAt = deliverSrc.indexOf('if (composerHolds(key, text)) {');
 const okAt = deliverSrc.indexOf('return { ok: true, via: "message", msgId: via.id || "" };');
@@ -108,7 +108,11 @@ assert.ok(clickAt > 0, 'клик по Send на месте');
 assert.ok(holdAt > clickAt, 'после клика проверяется поле ввода');
 assert.ok(okAt > holdAt, 'успех объявляется только после проверки');
 assert.match(deliverSrc, /текст остался в поле ввода/, 'причина названа словами, а не кодом');
-assert.match(deliverSrc, /const key = sendKey\(text\) \|\| flat\(text\)\.slice\(0, 60\);/, 'без отличительной строки ключ берётся из начала текста');
+assert.match(
+  deliverSrc,
+  /const key = sendKey\(text, turnId\) \|\| flat\(text\)\.slice\(0, 60\);/,
+  'без отличительной строки ключ берётся из начала текста, а номер хода передаётся явно (1.14.7)',
+);
 
 // Главный случай 1.4.84 (28.10, 19:38): в чате уже лежит СТАРОЕ сообщение с
 // тем же ключом, а новое не ушло. Скрипт верил старому и через секунду писал

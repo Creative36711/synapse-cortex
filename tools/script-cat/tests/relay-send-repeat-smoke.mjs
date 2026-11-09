@@ -37,7 +37,7 @@ const flatSrc = 'const flat = (x) => String(x || "").replace(/[\\s\\u00a0]+/g, "
 assert.ok(src.includes(flatSrc), 'flat() на месте');
 
 // ── 1. Ключ: та же карточка, другая выдача ────────────────────────────────
-const sendKeySrc = cut('  function sendKey(text) {', '  /** Своё сообщение в транскрипте');
+const sendKeySrc = cut('  function sendKey(text, turnId = "") {', '  /** Своё сообщение в транскрипте');
 const { sendKey } = new Function(`${flatSrc}\n${sendKeySrc}\nreturn { sendKey };`)();
 
 const card = '4016f0cf-5705-81f4-8e07-d987ab5f34db';
@@ -133,7 +133,7 @@ assert.equal(
 assert.equal(saysWith({ nodes: [newReply], known: [] }).userSaysSince('', []), null, 'пустой ключ ничего не даёт');
 
 // ── 3. deliver: снимок до клика, старое сообщение не в счёт ───────────────
-const deliverSrc = cut('  async function deliver(editor, text) {', '  /** Короткий хеш текста');
+const deliverSrc = cut('  async function deliver(editor, text, turnId = "") {', '  /** Короткий хеш текста');
 const snapshotAt = deliverSrc.indexOf('const known = userNodeIds();');
 const loopAt = deliverSrc.indexOf('for (let attempt = 1; attempt <= 3; attempt += 1)');
 const clickAt = deliverSrc.indexOf('btn.click();');

@@ -22,7 +22,7 @@ function cut(a, b) {
 }
 
 const idsBlock = cut('  function promptDispatchIds(text) {', '  /** Своё сообщение в транскрипте');
-const sendKeyBlock = cut('  function sendKey(text) {', '  /** Своё сообщение в транскрипте');
+const sendKeyBlock = cut('  function sendKey(text, turnId = "") {', '  /** Своё сообщение в транскрипте');
 const flushBlock = cut('  async function flushBeforeNavigate(', '  const norm = (x) =>');
 const receiptsBlock = cut('  const DELIVERY_RECEIPT_KEY', '  /** Уведомление и время относятся только к той очереди');
 const adoptBlock = cut('  async function roleAddress(', '  /**\n   * Досылает задание, сохранённое перед переходом');

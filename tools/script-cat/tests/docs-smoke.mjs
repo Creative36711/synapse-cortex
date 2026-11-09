@@ -192,4 +192,24 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.doesNotMatch(blocks, /answerBriefMax|fitBrief/, 'блоки промпта не сжимают инструкций');
 }
 
+// 11. D-079: поле ввода после отправки — наш черновик, а не возврат текста Arena.
+{
+  const d079 = contract.d079;
+  assert.ok(d079, 'D-079 записан в контракт');
+  assert.match(d079.version || '', /^1\.14\.7$/, 'D-079 относится к сборке 1.14.7');
+  assert.match(d079.evidence?.probe || '', /relay-composer-draft-smoke/, 'проба названа');
+  assert.match(d079.fix || '', /clearComposer/, 'очистка черновика названа');
+  assert.match(d079.fix || '', /waitSendReady/, 'ожидание кнопки названо');
+  assert.match(d079.fix || '', /sendKey\(text, turnId\)/, 'номер хода в ключе назван');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-079 \(1\.14\.7\)/, 'D-079 есть в журнале решений');
+  // Главный вывод разбора: причина не в содержимом текста.
+  assert.match(decisions, /Содержимое отправке не мешает/, 'вывод про текст записан словами');
+  assert.match(decisions, /ProseMirror нельзя наполнять присвоением/, 'особенность редактора названа');
+  // Правка не имеет права разрешать повторный клик после доставки.
+  const polls = readFileSync(join(root, 'tools/script-cat/src/17-arena-polls.js'), 'utf8');
+  assert.match(polls, /const cleared = clearComposer\(composer\(\)\);/, 'черновик чистится самим транспортом');
+  assert.match(polls, /!holdsText && rewrites < 2/, 'в непустое поле текст не пишется');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');
