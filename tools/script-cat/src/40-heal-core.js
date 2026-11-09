@@ -100,6 +100,9 @@
     "answer-needs-master": "master",
     "answer-marker": "master",
     "answer-empty": "master",
+    // D-085: ответ приёмки заявляет занятый номер решения. Правит приёмка, не
+    // человек: список номеров лежит в docs/DECISIONS.md и читается транспортом.
+    "answer-decisions": "transport",
     "answer-nocoord": "master",
     "tool-limit": "master",
     "pilot-tool-limit": "master",

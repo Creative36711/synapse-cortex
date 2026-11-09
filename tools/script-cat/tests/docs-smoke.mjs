@@ -328,17 +328,17 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.ok(!/Нужен Мастер/.test(ladder.slice(ladder.indexOf('async function markerMissing('),
     ladder.indexOf('// ───────────────────────── ошибка на экране'))), 'маркерная лестница Мастера не зовёт');
 }
-// 17. D-085 (1.14.13): бюджет сжимает данные, а не останавливает ход.
+// 17. D-085 (1.14.14): бюджет сжимает данные, а не останавливает ход.
 {
   const d085 = contract.d085;
   assert.ok(d085, 'D-085 записан в контракт');
-  assert.match(d085.version || '', /^1\.14\.13$/, 'D-085 относится к сборке 1.14.13');
+  assert.match(d085.version || '', /^1\.14\.14$/, 'D-085 относится к сборке 1.14.14');
   assert.match(d085.evidence?.probe || '', /relay-budget-fit-smoke/, 'проба названа');
   const safety = (d085.safety || []).join(' ');
   assert.match(safety, /не режутся — сжимаются только данные/, 'задание не режется');
   assert.match(safety, /прежняя пауза prompt-compile/, 'остаётся честная пауза');
   const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
-  assert.match(decisions, /## D-085 \(1\.14\.13\)/, 'D-085 есть в журнале решений');
+  assert.match(decisions, /## D-085 \(1\.14\.14\)/, 'D-085 есть в журнале решений');
   const ctx = readFileSync(join(root, 'tools/script-cat/src/20-technical-context.js'), 'utf8');
   assert.match(ctx, /function fitRequestToBudget/, 'сжатие данных реализовано');
   assert.match(ctx, /queue\.answersLine|"answersLine"/, 'сжимается именно брифинг');

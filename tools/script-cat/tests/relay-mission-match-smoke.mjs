@@ -14,6 +14,7 @@ const binding = cut('  const cardMissionId = ', '  // ────────�
 const words = cut('  const MISSION_STOPWORDS = new Set([', '  /** Поле названия показывается человеку');
 const active = cut('  async function activeMission()', '  const missionKind');
 const migration = cut('  async function inspectMissionMigration()', '  function formatMissionMigration(');
+const scopeZone = cut('  function scopeZoneIssue(', '  /** Проверка постановки');
 const preflight = cut('  async function taskPreflight(', '  async function dispatchTask(');
 const M1 = '11111111-1111-4111-8111-111111111111', M2 = '22222222-2222-4222-8222-222222222222';
 const ID1 = '33333333-3333-4333-8333-333333333333', ID2 = '44444444-4444-4444-8444-444444444444';
@@ -34,7 +35,7 @@ const C={ missions:'missions', requests:'requests' },
 const query=async (db, filter)=>db==='missions' ? (filter ? missions.filter(m=>['Активна','Возвращена'].includes(sel(m.properties['Состояние']))) : missions) : filter ? cards.filter(x=>taskState(x)===filter.select.equals) : cards;
 const notion=async (_method,path)=>{const row=cards.find(c=>c.id===path.slice(6));if(!row)throw Error('not found');return structuredClone(row)};
 const api=new Function('C','rt','sel','norm','taskTitle','taskState','query','notion','log',
-  `${uuid}\n${words}\n${binding}\n${active}\n${migration}\n${preflight}\nreturn {cardInMission,cardBindingIssue,cardNamesMission,bindingBlockers,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight};`)
+  `${uuid}\n${words}\n${binding}\n${active}\n${migration}\n${scopeZone}\n${preflight}\nreturn {cardInMission,cardBindingIssue,cardNamesMission,bindingBlockers,assertMissionBindings,tasks,activeMission,inspectMissionMigration,taskPreflight,scopeZoneIssue};`)
   (C,rt,sel,norm,taskTitle,taskState,query,notion,()=>{});
 assert.equal(api.cardInMission(cards[0], missions[0]), true);
 assert.equal(api.cardInMission(card(ID1,''), missions[0]), false, 'пустой ID не относится ко всем миссиям');
@@ -73,4 +74,25 @@ dep.properties.Check.select.name='pass';dep.properties['Dispatch State'].select.
 dep.properties['Dispatch State'].select.name='Accepted';dep.properties['Mission ID']=rich(M2);assert.match(await api.taskPreflight(cards[0],missions[0]),/другой миссии/);
 cards[0].properties.Dependency=rich(ID1);assert.match(await api.taskPreflight(cards[0],missions[0]),/саму карточку/);
 cards[0].properties.Dependency=rich('название карточки');assert.match(await api.taskPreflight(cards[0],missions[0]),/UUID/);
+// D-085: Scope против «Зоны записи» — дефект постановки ловится до выдачи.
+assert.equal(api.scopeZoneIssue('tools/i18n/a.mjs, docs/I18N.md', 'tools/i18n/**, docs/**'), '',
+  'свои пути не считаются расхождением');
+assert.match(api.scopeZoneIssue('locales/ru.json', 'tools/i18n/**, tests/i18n/**'),
+  /выходит за «Зону записи»/, 'чужой путь назван');
+assert.equal(api.scopeZoneIssue('locales/new-file.json (создаётся)', 'tools/i18n/**'), '',
+  'путь, помеченный создаваемым, не запрещает выдачу');
+assert.equal(api.scopeZoneIssue('a/b.mjs', 'вся папка tools/x и точка входа'), '',
+  'прозаическая зона не разбирается — запрет на догадке не ставится');
+assert.match(api.scopeZoneIssue('a/b.mjs, c/d.mjs', 'tools/**'), /a\/b\.mjs/,
+  'названы конкретные пути, а не только факт');
+{
+  const c = card(ID1, M1);
+  c.properties.Dependency = rich('');
+  c.properties.Scope = rich('locales/ru.json');
+  assert.match(await api.taskPreflight(c, missions[0], 'tools/i18n/**'), /Зону записи/,
+    'preflight получает зону роли и отказывает');
+  assert.equal(await api.taskPreflight(c, missions[0], 'locales/**'), '',
+    'та же карточка при своей зоне проходит');
+}
+
 console.log('OK: UUID mission binding, global guard, migration preview and dependency preflight');
