@@ -58,7 +58,27 @@ const upload = heal.slice(heal.indexOf('async function healUpload('), heal.index
 assert.ok(!/contents\/\$\{repo\}/.test(upload), 'в репозиторий проекта телеметрия не пишется');
 assert.match(upload, /contents\/\$\{encodeURI\(path\)\}/, 'путь пишется по вычисленному адресу получателя');
 
-// ── 5. Версия и решения ─────────────────────────────────────────────────────
+// ── 5. Две шапки не расходятся ──────────────────────────────────────────────
+// D-086/1.14.17: номер ТЗ живёт в двух файлах — в шапке миссии и в шапке очереди.
+// Ровно это расхождение и было 09.11: очередь объявляла «ТЗ 1.6», а миссия
+// продолжала говорить «Версия ТЗ 1.5». Гейт сверки такой документ считал бы
+// опубликованным, потому что читает одну шапку из двух.
+{
+  const mission = readFileSync(new URL('../../../docs/missions/SYN-3.md', import.meta.url), 'utf8');
+  const queue = readFileSync(new URL('../../../docs/handoff/syn-3-card-queue.md', import.meta.url), 'utf8');
+  const inMission = mission.match(/Версия ТЗ \*\*(\d+\.\d+)\*\*/);
+  // В шапке очередь пишет «ТЗ» между двумя звёздочными парами:
+  // «(**редакция 1.8**, **ТЗ 1.6**)» — ищем номер без привязки к выделению.
+  const inQueue = queue.slice(0, 1200).match(/ТЗ\s*\**\s*(\d+\.\d+)/);
+  assert.ok(inMission, 'в шапке миссии назван номер ТЗ');
+  assert.ok(inQueue, 'в шапке очереди назван номер ТЗ');
+  assert.equal(inMission[1], inQueue[1], 'номер ТЗ в миссии и в очереди совпадает');
+  const declared = queue.slice(0, 1200).match(/редакция\s*\**\s*(\d+\.\d+)/);
+  assert.ok(declared, 'в шапке очереди назван номер редакции');
+  assert.ok(Number(declared[1]) >= 1.8, 'редакция не откатилась ниже опубликованной');
+}
+
+// ── 6. Версия и решения ─────────────────────────────────────────────────────
 assert.match(src, /@version\s+1\.14\.1[6-9]/, 'сборка не старее 1.14.16');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-086/, 'решение D-086 в журнале');
