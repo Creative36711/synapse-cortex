@@ -23,6 +23,7 @@ function make(seed = {}) {
   const logs = [];
   const fn = new Function(
     'GM_getValue', 'GM_setValue', 'K', 'SCRIPT_VERSION', 'log', 'confirm', 'setStatus',
+    'composerText', 'healAfterUpdate', 'C',
     `${block}
      return { transientState, describeTransient, resetState, migrateState, resetStateDialog };`,
   );
@@ -34,6 +35,9 @@ function make(seed = {}) {
     (t, e, o) => logs.push({ t, e, o }),
     () => true,
     () => {},
+    () => String(seed['cfn-composer'] || ''),
+    undefined,
+    { buildFingerprint: 'fp-test' },
   );
   return { api, store, logs };
 }
@@ -133,3 +137,26 @@ assert.match(src, /const boot = \(\) => \{\s*migrateState\(\);/, 'миграци
 assert.match(src, /title="версия скрипта">v\$\{SCRIPT_VERSION\}/, 'в панели видно, какая версия загружена');
 
 console.log('OK: relay 1.4.63 — обновление сохраняет ожидание и ставит паузу, ↺ снимает ход целиком, журнал не засоряется');
+
+// ── D-085: задание уже в поле ввода — доказательство «не ушло», пауза не нужна.
+// 09.11 каждая из шести установок сборки при живом ходе требовала «Продолжить»,
+// хотя часть ходов стояла именно в поле и отправлялась сама.
+{
+  const pending = { roleId:'coord', text:'ЗАДАНИЕ В ПОЛЕ', at:1 };
+  const { api, store, logs } = make({
+    'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending, 'cfn-composer':'ЗАДАНИЕ В ПОЛЕ',
+  });
+  assert.equal(api.migrateState(), '«Coordinator», plan');
+  assert.equal(store.get('cfn-pause-context'), undefined, 'задание в поле — паузы нет');
+  assert.match(String(logs[0]?.t || ''), /уже в поле ввода/);
+  assert.deepEqual(store.get('cfn-expect'), ghost, 'ожидание не тронуто');
+}
+// Чужой текст в поле доказательством не считается: пауза остаётся.
+{
+  const pending = { roleId:'coord', text:'ЗАДАНИЕ В ПОЛЕ', at:1 };
+  const { api, store } = make({
+    'cfn-state-v':'1.4.8', 'cfn-expect':ghost, 'cfn-pending':pending, 'cfn-composer':'вопрос про другое',
+  });
+  api.migrateState();
+  assert.equal(store.get('cfn-pause-context').kind, 'update-recovery', 'чужой текст паузу не снимает');
+}

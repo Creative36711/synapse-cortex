@@ -274,6 +274,22 @@
       });
       return true;
     }
+    // D-085: номер решения берётся из репозитория, а не из памяти модели.
+    // 09.11 Warden предложил «D-084 (зоны)», не зная, что D-084 уже занят
+    // транспортом; коллизию заметил человек. Здесь ответ не доходит до записи,
+    // пока номер не сверен с docs/DECISIONS.md в main.
+    if (typeof decisionNumberConflict === "function" && typeof decisionNumbersTaken === "function") {
+      try {
+        const conflict = decisionNumberConflict(answer, await decisionNumbersTaken());
+        if (conflict) {
+          pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
+          return true;
+        }
+      } catch (e) {
+        // Не смогли прочитать список — не блокируем ответ: номер проверит приёмка.
+        logThrottled(`decisions-${expect.ref}`, `Номера решений не сверены: ${e.message}. Ответ не блокирую.`, true);
+      }
+    }
     // Вопрос могли закрыть руками, пока приёмка думала: тогда её ответ уже
     // никому не нужен, и перезаписывать чужое решение нельзя.
     let stage = "read";
@@ -361,8 +377,45 @@
     return true;
   }
 
+  /**
+   * D-085: пути из `Scope` против зоны роли — машинная проверка ДО выдачи.
+   *
+   * 09.11 на этом сгорели три круга B0: в ТЗ §7 путь был записан за Locale
+   * Auditor, в «Зоне записи» той же роли его не было, а Acceptance требовал
+   * буквального совпадения. Спецификация была внутренне противоречива — пройти
+   * приёмку не могла ни при каком тексте карточки, а узнавалось это после
+   * выдачи, прогона и отчёта, то есть самым дорогим способом.
+   *
+   * Проверка нарочно мягкая: ловится только ЯВНОЕ расхождение, когда у роли
+   * есть перечислимая зона (шаблоны через запятую/перенос), а путь карточки не
+   * попадает ни в один шаблон и не помечен создаваемым. Прозаическая зона
+   * («вся папка tools/x и точка входа») не разбирается: строить по ней запрет
+   * значило бы останавливать выдачу на догадке.
+   */
+  function scopeZoneIssue(cardZone, roleZone) {
+    const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+    const globs = String(roleZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean)
+      .filter((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+    if (!paths.length || !globs.length) return "";
+    const asRe = (glob) => new RegExp("^" + glob
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*") + "$");
+    const res = globs.map(asRe);
+    const bad = [];
+    for (const path of paths) {
+      if (/созда|нов|new/i.test(path)) continue; // путь может появиться в этой работе
+      const clean = path.split(/\s+/)[0].replace(/\/+$/, "");
+      if (!clean || !/[./]/.test(clean)) continue;
+      if (!res.some((re) => re.test(clean))) bad.push(clean);
+    }
+    if (!bad.length) return "";
+    return `Scope карточки выходит за «Зону записи» роли: ${bad.slice(0, 4).join(", ")}` +
+      `${bad.length > 4 ? ` и ещё ${bad.length - 4}` : ""}. Правь постановку: либо сузь Scope до зоны роли, ` +
+      "либо отдай эти пути тому, за кем они в «Ролях» (D-085)";
+  }
+
   /** Проверка постановки и подтверждённых зависимостей, до изменения карточки. */
-  async function taskPreflight(card, mission) {
+  async function taskPreflight(card, mission, roleZone = "") {
     const active = await activeMission(); // откажет и при нескольких активных миссиях
     if (!mission || !active || norm(active.id) !== norm(mission.id) || !cardInMission(card, active))
       return "Mission ID карточки отсутствует или не совпадает с единственной активной миссией";
@@ -373,6 +426,9 @@
     if (!taskTitle(card).trim()) empty.unshift("Запрос");
     if (typeof props["Sequence"]?.number !== "number" || !Number.isFinite(props["Sequence"].number)) empty.push("Sequence");
     if (empty.length) return `не заполнены обязательные поля: ${empty.join(", ")}`;
+    // D-085: дефект постановки ловится здесь, а не на приёмке после прогона.
+    const zoneIssue = scopeZoneIssue(rt(props["Scope"]), roleZone);
+    if (zoneIssue) return zoneIssue;
     if (!props["Dependency"] || props["Dependency"].type && props["Dependency"].type !== "rich_text")
       return "в схеме нет текстового поля Dependency";
     const value = rt(props["Dependency"]).trim();
@@ -424,7 +480,7 @@
     // NAR-1.7 выдали второй раз с новым run — она была в списке Ready уже
     // отвеченной, и агент честно повторил ту же работу.
     const fresh = await notion("GET", `pages/${card.id}`);
-    const preflight = await taskPreflight(fresh, mission);
+    const preflight = await taskPreflight(fresh, mission, confirmed[0].zone || "");
     if (preflight) return `предварительная проверка: ${preflight}; карточку и историю не меняю`;
     const recipient = taskRole(fresh);
     if (!recipient || norm(recipient) !== norm(role.name))

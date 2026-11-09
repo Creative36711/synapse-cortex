@@ -1352,25 +1352,30 @@
   },
   "d085": {
     "decision": "D-085",
-    "version": "1.14.13",
+    "version": "1.14.14",
     "summary": "переполнение бюджета сжимает данные вместо остановки хода; Rework не вешает миссию; обновление без неоднозначности не поднимает паузу",
     "fix": [
       "20-technical-context.compileOrPause: budget_exceeded → fitRequestToBudget сжимает queue.answersLine/openLine/answerLine/ready до читаемого начала и помечает сжатие в тексте; пауза — только если сжимать нечего",
       "25-legacy-adr: next:\"done\" блокируют Submitted/Running/Ready/Blocked; Rework и Draft — очередь приёмки, ход не останавливают",
-      "18-state-recovery.migrateState: пауза update-recovery ставится только при неоднозначности доставки (нет verified) и только если есть ожидание или очередь"
+      "18-state-recovery.migrateState: пауза update-recovery ставится только при неоднозначности доставки (нет verified) и только если есть ожидание или очередь",
+      "27-review-answers.scopeZoneIssue + taskPreflight: пути Scope сверяются с перечислимой «Зоной записи» роли до выдачи",
+      "18-state-recovery: задание, найденное в поле ввода, — доказательство «не ушло», паузы нет",
+      "25-legacy-adr.decisionNumbersTaken + decisionNumberConflict: номер решения сверяется с docs/DECISIONS.md до записи ответа; пауза answer-decisions — класс transport"
     ],
     "safety": [
       "инструкции профиля, оракул, Scope, инварианты и Acceptance не режутся — сжимаются только данные переписки (D-034, D-038)",
       "сжатие всегда сказано в тексте промпта и в журнале, адрес полного текста — Notion",
       "если сжимать нечего — прежняя пауза prompt-compile с раскладкой блоков",
       "Rework по-прежнему закрывает миссию в приёмке (26-review.js): там карточка действительно ещё в работе",
-      "подтверждённая доставка (verified) сохраняет ожидание как есть; неподтверждённая по-прежнему даёт паузу"
+      "подтверждённая доставка (verified) сохраняет ожидание как есть; неподтверждённая по-прежнему даёт паузу",
+      "сверка зоны мягкая: прозаическая зона и пути, помеченные создаваемыми, выдачу не блокируют",
+      "номер решения проверяется только в заявке (рядом слова «свободен/номер/решение»); ссылка «см. D-077» не блокируется"
     ],
     "evidence": {
       "probe": "tools/script-cat/tests/relay-budget-fit-smoke.mjs",
       "red_on": "1.14.12",
-      "green_on": "1.14.13",
-      "incident": "telemetry 09.11: prompt-compile budget_exceeded total 8178 > 7500 (answers.delta 3346, queue.snapshot 1191); done-with-open при 1 Rework, 6 Draft; 6*update-recovery"
+      "green_on": "1.14.14",
+      "incident": "telemetry 09.11: prompt-compile budget_exceeded total 8178 > 7500 (answers.delta 3346, queue.snapshot 1191); done-with-open при 1 Rework, 6 Draft; 6*update-recovery; B0-r1/r2: §7 отдаёт пути Locale Auditor, поле «Зона записи» их не содержит; Warden заявил свободным D-084, занятый транспортом 1.14.12"
     },
     "revision": "2026-11-09"
   }

@@ -75,6 +75,12 @@ assert.ok(kinds.size >= 60, `видов паузы найдено ${kinds.size}:
 const missing = [...kinds.keys()].filter((kind) => !(kind in HEAL_PAUSE_CLASS));
 assert.deepEqual(missing, [], `виды паузы без класса: ${missing.join(', ')}`);
 const unknownKinds = Object.keys(HEAL_PAUSE_CLASS).filter((kind) => !kinds.has(kind));
+// D-085: занятый номер решения — дефект ответа приёмки, а не повод будить
+// человека: список номеров лежит в docs/DECISIONS.md и читается транспортом.
+assert.equal(HEAL_PAUSE_CLASS['answer-decisions'], 'transport',
+  'answer-decisions уходит транспорту: правит приёмка, не Мастер');
+assert.equal(HEAL_PAUSE_CLASS['marker-mismatch'], 'master',
+  'соседние паузы приёмки не сдвинулись');
 assert.deepEqual(unknownKinds, [],
   `в таблице есть виды, которых нет в коде (опечатка или удалённая пауза): ${unknownKinds.join(', ')}`);
 

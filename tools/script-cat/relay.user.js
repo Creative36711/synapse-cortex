@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "fd65998519415ee0",
+    buildFingerprint: "41fc7172fbe2310f",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -8714,6 +8714,24 @@
       return "";
     }
     const who = expect ? `«${expect.roleName || expect.roleId || "?"}», ${expect.kind || "?"}` : "очередь отправки";
+    // D-085: если задание уже стоит в поле ввода — доказательство не нужно, это
+    // и есть «не ушло». Такой ход продолжается сам, без «Продолжить»: очередь
+    // отправится на первом же тике. Ложное совпадение исключено: текст другой
+    // роли в это поле не попадал.
+    try {
+      const inComposer = pending && typeof composerText === "function" ? String(composerText() || "") : "";
+      const planned = String((pending && pending.text) || "");
+      if (expect && planned && inComposer && inComposer.includes(planned.slice(0, 200))) {
+        log(
+          `Обновление ${SCRIPT_VERSION}: задание для ${who} уже в поле ввода — очередь отправится сама, продолжаю без паузы.`,
+          false,
+          { skip: true },
+        );
+        return who;
+      }
+    } catch {
+      // Нет доступа к полю ввода — работаем по-старому: пауза честнее догадки.
+    }
     const message = `Обновление ${seen || "неизвестной версии"} → ${SCRIPT_VERSION}: сохранены ${who} и очередь. ` +
       "Проверьте доставку в чате, карточку и журнал до ручного продолжения; отсутствие sentAt не доказывает, что отправки не было.";
     // D-085: пауза после обновления нужна ровно там, где есть неоднозначность
@@ -13364,6 +13382,65 @@
   const adrKeyOf = (file) => String(file || "").replace(/\.md$/i, "").toLowerCase();
 
   /**
+   * D-085: какие номера решений уже заняты — по `docs/DECISIONS.md` в `main`.
+   *
+   * 09.11 Warden в ответе написал «свободны D-084 (зоны) и D-085 (V-2)», хотя
+   * D-084 к этому моменту занимал транспорт (1.14.12, коммит 55d8480). Номер
+   * выдавался по памяти модели, а не по источнику истины, и коллизию заметил
+   * человек уже после публикации. Здесь список читается из репозитория; ответ
+   * приёмки с занятым номером до записи не доходит.
+   *
+   * Кэш на `adrCheckMs`: список меняется только вместе с решением, а вызов
+   * стоит на пути каждого ответа приёмки.
+   */
+  async function decisionNumbersTaken() {
+    const cache = GM_getValue("cfn-decisions-taken", null);
+    const now = Date.now();
+    if (cache && Array.isArray(cache.numbers) && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+      return cache.numbers;
+    }
+    const token = GM_getValue(K.ghToken, "");
+    const repo = String(C.repo || "");
+    if (!token || !repo) return cache?.numbers || [];
+    try {
+      const url = `https://api.github.com/repos/${repo}/contents/docs/DECISIONS.md?ref=${encodeURIComponent(C.branch || "main")}`;
+      const file = await request("GET", url, githubHeaders(token));
+      const text = b64Text(file && file.content);
+      const numbers = [...String(text || "").matchAll(/^##\s*D-(\d{3})/gm)].map((m) => `D-${m[1]}`);
+      GM_setValue("cfn-decisions-taken", { at: now, numbers });
+      return numbers;
+    } catch (e) {
+      dbg("номера решений не прочитаны", e && e.message);
+      return cache?.numbers || [];
+    }
+  }
+
+  /**
+   * Где ответ приёмки берёт номер, который уже занят.
+   *
+   * Смотрим только форму «D-084» рядом со словом «свободен/номер/решение» или
+   * прямо в перечислении номеров: обычная ссылка на уже принятое решение вида
+   * «см. D-077» — нормальная работа, а не заявка на номер.
+   */
+  function decisionNumberConflict(answer, taken) {
+    const text = String(answer || "");
+    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
+    if (!text || !free.size) return "";
+    const claimed = [];
+    for (const m of text.matchAll(/D-(\d{3})/g)) {
+      const id = `D-${m[1]}`;
+      const around = text.slice(Math.max(0, m.index - 120), m.index + 160);
+      if (/свобод|занима|нов(ый|ое|ого)\s+(решени|номер)|номер(а|ом)?\s+(решени|D-)/i.test(around) && free.has(id.toUpperCase())) {
+        claimed.push(id);
+      }
+    }
+    const unique = [...new Set(claimed)];
+    if (!unique.length) return "";
+    return `Ответ заявляет номером решения ${unique.join(", ")}, но в docs/DECISIONS.md этот номер уже занят. ` +
+      "Номер берётся из репозитория, а не из памяти: назови следующий свободный (последний + 1) и повтори ответ.";
+  }
+
+  /**
    * Вопрос приёмке по предложению из репозитория.
    *
    * Текст держится коротким (заголовок «Вопрос» режется на 180 знаках), а
@@ -15503,6 +15580,22 @@
       });
       return true;
     }
+    // D-085: номер решения берётся из репозитория, а не из памяти модели.
+    // 09.11 Warden предложил «D-084 (зоны)», не зная, что D-084 уже занят
+    // транспортом; коллизию заметил человек. Здесь ответ не доходит до записи,
+    // пока номер не сверен с docs/DECISIONS.md в main.
+    if (typeof decisionNumberConflict === "function" && typeof decisionNumbersTaken === "function") {
+      try {
+        const conflict = decisionNumberConflict(answer, await decisionNumbersTaken());
+        if (conflict) {
+          pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
+          return true;
+        }
+      } catch (e) {
+        // Не смогли прочитать список — не блокируем ответ: номер проверит приёмка.
+        logThrottled(`decisions-${expect.ref}`, `Номера решений не сверены: ${e.message}. Ответ не блокирую.`, true);
+      }
+    }
     // Вопрос могли закрыть руками, пока приёмка думала: тогда её ответ уже
     // никому не нужен, и перезаписывать чужое решение нельзя.
     let stage = "read";
@@ -15590,8 +15683,45 @@
     return true;
   }
 
+  /**
+   * D-085: пути из `Scope` против зоны роли — машинная проверка ДО выдачи.
+   *
+   * 09.11 на этом сгорели три круга B0: в ТЗ §7 путь был записан за Locale
+   * Auditor, в «Зоне записи» той же роли его не было, а Acceptance требовал
+   * буквального совпадения. Спецификация была внутренне противоречива — пройти
+   * приёмку не могла ни при каком тексте карточки, а узнавалось это после
+   * выдачи, прогона и отчёта, то есть самым дорогим способом.
+   *
+   * Проверка нарочно мягкая: ловится только ЯВНОЕ расхождение, когда у роли
+   * есть перечислимая зона (шаблоны через запятую/перенос), а путь карточки не
+   * попадает ни в один шаблон и не помечен создаваемым. Прозаическая зона
+   * («вся папка tools/x и точка входа») не разбирается: строить по ней запрет
+   * значило бы останавливать выдачу на догадке.
+   */
+  function scopeZoneIssue(cardZone, roleZone) {
+    const paths = String(cardZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean);
+    const globs = String(roleZone || "").split(/[\n,;]+/).map((x) => x.trim().replace(/^`|`$/g, "")).filter(Boolean)
+      .filter((x) => /^[\w.@*/-]+$/.test(x) && /[/*]/.test(x));
+    if (!paths.length || !globs.length) return "";
+    const asRe = (glob) => new RegExp("^" + glob
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*") + "$");
+    const res = globs.map(asRe);
+    const bad = [];
+    for (const path of paths) {
+      if (/созда|нов|new/i.test(path)) continue; // путь может появиться в этой работе
+      const clean = path.split(/\s+/)[0].replace(/\/+$/, "");
+      if (!clean || !/[./]/.test(clean)) continue;
+      if (!res.some((re) => re.test(clean))) bad.push(clean);
+    }
+    if (!bad.length) return "";
+    return `Scope карточки выходит за «Зону записи» роли: ${bad.slice(0, 4).join(", ")}` +
+      `${bad.length > 4 ? ` и ещё ${bad.length - 4}` : ""}. Правь постановку: либо сузь Scope до зоны роли, ` +
+      "либо отдай эти пути тому, за кем они в «Ролях» (D-085)";
+  }
+
   /** Проверка постановки и подтверждённых зависимостей, до изменения карточки. */
-  async function taskPreflight(card, mission) {
+  async function taskPreflight(card, mission, roleZone = "") {
     const active = await activeMission(); // откажет и при нескольких активных миссиях
     if (!mission || !active || norm(active.id) !== norm(mission.id) || !cardInMission(card, active))
       return "Mission ID карточки отсутствует или не совпадает с единственной активной миссией";
@@ -15602,6 +15732,9 @@
     if (!taskTitle(card).trim()) empty.unshift("Запрос");
     if (typeof props["Sequence"]?.number !== "number" || !Number.isFinite(props["Sequence"].number)) empty.push("Sequence");
     if (empty.length) return `не заполнены обязательные поля: ${empty.join(", ")}`;
+    // D-085: дефект постановки ловится здесь, а не на приёмке после прогона.
+    const zoneIssue = scopeZoneIssue(rt(props["Scope"]), roleZone);
+    if (zoneIssue) return zoneIssue;
     if (!props["Dependency"] || props["Dependency"].type && props["Dependency"].type !== "rich_text")
       return "в схеме нет текстового поля Dependency";
     const value = rt(props["Dependency"]).trim();
@@ -15653,7 +15786,7 @@
     // NAR-1.7 выдали второй раз с новым run — она была в списке Ready уже
     // отвеченной, и агент честно повторил ту же работу.
     const fresh = await notion("GET", `pages/${card.id}`);
-    const preflight = await taskPreflight(fresh, mission);
+    const preflight = await taskPreflight(fresh, mission, confirmed[0].zone || "");
     if (preflight) return `предварительная проверка: ${preflight}; карточку и историю не меняю`;
     const recipient = taskRole(fresh);
     if (!recipient || norm(recipient) !== norm(role.name))
@@ -17425,6 +17558,9 @@
     "answer-needs-master": "master",
     "answer-marker": "master",
     "answer-empty": "master",
+    // D-085: ответ приёмки заявляет занятый номер решения. Правит приёмка, не
+    // человек: список номеров лежит в docs/DECISIONS.md и читается транспортом.
+    "answer-decisions": "transport",
     "answer-nocoord": "master",
     "tool-limit": "master",
     "pilot-tool-limit": "master",

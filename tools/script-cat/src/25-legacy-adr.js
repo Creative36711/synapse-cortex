@@ -90,6 +90,65 @@
   const adrKeyOf = (file) => String(file || "").replace(/\.md$/i, "").toLowerCase();
 
   /**
+   * D-085: какие номера решений уже заняты — по `docs/DECISIONS.md` в `main`.
+   *
+   * 09.11 Warden в ответе написал «свободны D-084 (зоны) и D-085 (V-2)», хотя
+   * D-084 к этому моменту занимал транспорт (1.14.12, коммит 55d8480). Номер
+   * выдавался по памяти модели, а не по источнику истины, и коллизию заметил
+   * человек уже после публикации. Здесь список читается из репозитория; ответ
+   * приёмки с занятым номером до записи не доходит.
+   *
+   * Кэш на `adrCheckMs`: список меняется только вместе с решением, а вызов
+   * стоит на пути каждого ответа приёмки.
+   */
+  async function decisionNumbersTaken() {
+    const cache = GM_getValue("cfn-decisions-taken", null);
+    const now = Date.now();
+    if (cache && Array.isArray(cache.numbers) && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+      return cache.numbers;
+    }
+    const token = GM_getValue(K.ghToken, "");
+    const repo = String(C.repo || "");
+    if (!token || !repo) return cache?.numbers || [];
+    try {
+      const url = `https://api.github.com/repos/${repo}/contents/docs/DECISIONS.md?ref=${encodeURIComponent(C.branch || "main")}`;
+      const file = await request("GET", url, githubHeaders(token));
+      const text = b64Text(file && file.content);
+      const numbers = [...String(text || "").matchAll(/^##\s*D-(\d{3})/gm)].map((m) => `D-${m[1]}`);
+      GM_setValue("cfn-decisions-taken", { at: now, numbers });
+      return numbers;
+    } catch (e) {
+      dbg("номера решений не прочитаны", e && e.message);
+      return cache?.numbers || [];
+    }
+  }
+
+  /**
+   * Где ответ приёмки берёт номер, который уже занят.
+   *
+   * Смотрим только форму «D-084» рядом со словом «свободен/номер/решение» или
+   * прямо в перечислении номеров: обычная ссылка на уже принятое решение вида
+   * «см. D-077» — нормальная работа, а не заявка на номер.
+   */
+  function decisionNumberConflict(answer, taken) {
+    const text = String(answer || "");
+    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
+    if (!text || !free.size) return "";
+    const claimed = [];
+    for (const m of text.matchAll(/D-(\d{3})/g)) {
+      const id = `D-${m[1]}`;
+      const around = text.slice(Math.max(0, m.index - 120), m.index + 160);
+      if (/свобод|занима|нов(ый|ое|ого)\s+(решени|номер)|номер(а|ом)?\s+(решени|D-)/i.test(around) && free.has(id.toUpperCase())) {
+        claimed.push(id);
+      }
+    }
+    const unique = [...new Set(claimed)];
+    if (!unique.length) return "";
+    return `Ответ заявляет номером решения ${unique.join(", ")}, но в docs/DECISIONS.md этот номер уже занят. ` +
+      "Номер берётся из репозитория, а не из памяти: назови следующий свободный (последний + 1) и повтори ответ.";
+  }
+
+  /**
    * Вопрос приёмке по предложению из репозитория.
    *
    * Текст держится коротким (заголовок «Вопрос» режется на 180 знаках), а
