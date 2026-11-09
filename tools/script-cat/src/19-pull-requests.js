@@ -508,6 +508,33 @@
     return matches.length === 1 ? String(matches[0].repo) : raw;
   }
 
+  /**
+   * D-086: может ли эта роль вообще править этот репозиторий.
+   *
+   * 09.11 Мастер назвал правило прямым текстом: «у нас два репозитория, кто к
+   * какому подключён, тот может тот и править; кто к чему подключён — смотри в
+   * Notion в базе «Роли», там есть Репозиторий». До сих пор `repo` роли был
+   * только источником значения по умолчанию: карточка с полем «Репозиторий»
+   * перебивала его, и роль, подключённая к публичному `synapse`, могла получить
+   * выдачу в приватный cortex (или наоборот) — ровно так выглядит «у роли не тот
+   * репозиторий», на который жалуются агенты.
+   *
+   * Правило мягкое там, где назначение неизвестно: нет поля у роли — берём repo
+   * сессии профиля, как раньше. Расхождение с объявленным репозиторием роли —
+   * отказ с названием обеих сторон, а не тихая выдача.
+   */
+  function roleRepoVerdict(targetRepo, role = null) {
+    const target = canonicalTargetRepository(targetRepo || C.repo || "");
+    if (!target) return "";
+    const declared = String((role && role.repo) || "").trim();
+    if (!declared) return "";
+    const allowed = canonicalTargetRepository(declared, C.repo);
+    if (!allowed || allowed.toLowerCase() === target.toLowerCase()) return "";
+    return `репозиторий карточки ${target} не тот, к которому подключена роль: в «Ролях» у ` +
+      `${(role && role.name) || "роли"} указан ${allowed}. Выдачу не начинаю — ` +
+      "правь поле «Репозиторий» в карточке или подключение роли (D-086)";
+  }
+
   /** Целевой repo карточки; старые карточки наследуют repo активной роли. */
   function taskTargetRepository(card, fallback = C.repo) {
     const props = card && card.properties || {};

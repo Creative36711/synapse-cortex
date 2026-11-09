@@ -132,6 +132,30 @@
   }
 
   /**
+   * Приватность получателя телеметрии: кеш на сессию, ошибка чтения — «не знаю».
+   *
+   * `false` здесь означает «нельзя писать»: при сомнении телеметрия остаётся на
+   * Drive, а не уезжает в публичный репозиторий кода.
+   */
+  const telemetryPrivacy = new Map();
+  function telemetryRepoPrivate(repo) {
+    const key = String(repo || "").toLowerCase();
+    if (!key) return false;
+    if (telemetryPrivacy.has(key)) return telemetryPrivacy.get(key);
+    telemetryPrivacy.set(key, false); // по умолчанию — не пишем
+    const token = GM_getValue(K.ghToken, "");
+    if (!token) return false;
+    request("GET", `https://api.github.com/repos/${repo}`, githubHeaders(token))
+      .then((meta) => {
+        if (meta && meta.private === true) telemetryPrivacy.set(key, true);
+        else dbg("телеметрия: репозиторий не приватный", repo);
+        return null;
+      })
+      .catch((e) => dbg("телеметрия: видимость репозитория не прочитана", e && e.message));
+    return false;
+  }
+
+  /**
    * Выгрузка наружу: Drive (шлюз проекта) и GitHub (если есть токен).
    *
    * Идемпотентно: повтор с тем же содержимым — `duplicate`, а не второй файл.
@@ -164,7 +188,15 @@
     // проекта, уже выше) и отдельный приватный репозиторий, если Мастер его
     // завёл (`C.telemetryRepo`). Нет репозитория — телеметрия остаётся на Drive,
     // и это не ошибка, а норма.
+    // 09.11 (2-я редакция): репозитории разной видимости — `synapse` публичный,
+    // `synapse-cortex` приватный. Телеметрия содержит тексты карточек, зоны
+    // ролей и куски переписки, поэтому разрешён только приватный получатель.
+    // Проверяем один раз на сессию: лишний GET на каждую паузу не нужен.
     const tRepo = String(C.telemetryRepo || "");
+    if (tRepo && !telemetryRepoPrivate(tRepo)) {
+      out.github = { ok: false, skipped: `телеметрия не пишется в публичный репозиторий ${tRepo} (D-086); выгружена на Drive` };
+      return out;
+    }
     if (!tRepo) {
       out.github = { ok: false, skipped: "телеметрия в репозиторий проекта не пишется (D-086); выгружена на Drive" };
     } else if (!token) {
@@ -184,7 +216,7 @@
               return btoa(bin);
             })(),
           });
-        out.github = { ok: true, path, sha: String(res?.content?.sha || "") };
+        out.github = { ok: true, path, sha: String(res?.content?.sha || ""), repo: tRepo };
       } catch (e) {
         out.github = { ok: false, path: "", error: String((e && e.message) || e).slice(0, 200) };
       }

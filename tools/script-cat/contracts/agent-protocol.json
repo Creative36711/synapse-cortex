@@ -1380,7 +1380,7 @@
     "revision": "2026-11-09"
   },
   "d086": {
-    "version": "1.14.15",
+    "version": "1.14.16",
     "title": "Объявленная редакция ТЗ против опубликованной; телеметрия вне репозитория проекта",
     "date": "2026-11-09",
     "decision": [
@@ -1388,7 +1388,9 @@
       "25-legacy-adr.publishedTzVersion",
       "01-config.queueDoc",
       "01-config.telemetryRepo",
-      "41-heal.healUpload"
+      "41-heal.healUpload",
+      "19-pull-requests.roleRepoVerdict",
+      "41-heal.telemetryRepoPrivate"
     ],
     "pause": {
       "kind": "answer-unpublished",
@@ -1402,7 +1404,22 @@
       "дорогая правка документа не публикуется мимо приёмки",
       "сбой чтения репозитория не блокирует ответ",
       "служебные коммиты не попадают в репозиторий проекта",
-      "оракул, Scope, Acceptance и маркер не режутся"
-    ]
+      "оракул, Scope, Acceptance и маркер не режутся",
+      "телеметрия не уезжает в публичный репозиторий"
+    ],
+    "revision": {
+      "at": "2026-11-09",
+      "build": "1.14.16",
+      "why": "два репозитория разной видимости: кто к какому подключён в «Ролях», тот и правит",
+      "changes": [
+        "docsRepository: документы читаются из репозитория роли-приёмки, а не сессии",
+        "roleRepoVerdict: подключение роли — граница выдачи",
+        "telemetryRepoPrivate: получатель телеметрии обязан быть приватным"
+      ],
+      "evidence": {
+        "probe": "tests/relay-repo-visibility-smoke.mjs",
+        "suites": 107
+      }
+    }
   }
 }
