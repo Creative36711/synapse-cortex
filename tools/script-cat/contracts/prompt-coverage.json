@@ -15,6 +15,10 @@
       "authority.coordinator",
       "authority.reviewer"
     ],
+    "R-DOCS": [
+      "authority.reviewer",
+      "git.docs"
+    ],
     "R-EVIDENCE": [
       "drive.artifacts",
       "evidence.rule",
@@ -24,6 +28,7 @@
     ],
     "R-GIT": [
       "git.auditor",
+      "git.docs",
       "git.executor",
       "role.boundary.continue"
     ],
@@ -168,6 +173,8 @@
     ],
     "reviewer.answer": [
       "R-D028",
+      "R-DOCS",
+      "R-GIT",
       "R-MARKER",
       "R-MASTER-ONLY",
       "R-QUESTIONS",
@@ -176,6 +183,7 @@
     ],
     "reviewer.arbiter": [
       "R-D028",
+      "R-DOCS",
       "R-MARKER",
       "R-MASTER-ONLY",
       "R-ROLES",
@@ -183,6 +191,7 @@
     ],
     "reviewer.card": [
       "R-D028",
+      "R-DOCS",
       "R-EVIDENCE",
       "R-MARKER",
       "R-MASTER-ONLY",
@@ -191,7 +200,9 @@
     ],
     "reviewer.mission": [
       "R-D028",
+      "R-DOCS",
       "R-EVIDENCE",
+      "R-GIT",
       "R-MARKER",
       "R-MASTER-ONLY",
       "R-QUESTIONS",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.16
+// @version      1.14.17
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "9e79a74253935a13",
+    buildFingerprint: "23036c10f026d4b0",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -724,7 +724,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.16";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.17";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9931,14 +9931,37 @@
     def("authority.coordinator", { version: 2, ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
       "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. «Обратную связь» руками не пиши — только вопрос полем маркера, запись делает транспорт. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
 
-    def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: (c) =>
+    // D-087: «ни документы» — причина, по которой ТЗ 1.6/1.7 и очередь 1.8/1.9 не
+    // появились. 09.11 Warden объявил две редакции в ответе, но публиковать их не
+    // стал; формулировка ниже запрещала правку документов безусловно, а `role.zone`
+    // (его же поле «Зона записи» в «Ролях») разрешал их писать. Два правила об одном
+    // предмете: запрет — во властном блоке, разрешение — в описательном. Побеждает
+    // запрет, потому что он рядом с перечнем того, что нельзя трогать вообще.
+    //
+    // Теперь граница проведена по предмету, а не по типу файла: чужая работа
+    // (код, карточки, постановка) — не трогать; документы процесса в репозитории
+    // своей роли — единственный выход, кроме вердикта. Без этого запрета ревьюер
+    // не может выполнить собственную зону, и его отчёт противоречит его правилам.
+    def("authority.reviewer", { version: 2, ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028", "R-DOCS"], audience: ["Reviewer"], render: (c) =>
       c.kind === "arbiter"
-        ? "Ты приёмка (Reviewer) и сейчас арбитр: ничего не правь — ни код, ни карточки, ни документы, ни постановку. Твой выход — решение по карточке или остановка цикла. Проверяй по GitHub, Notion и фактам, а не по словам агента; Мастера зовёшь только там, где без него физически нельзя."
-        : "Ты приёмка (Reviewer): ничего не правь — ни код, ни карточки, ни документы. Твой выход — вердикт (accept/rework/master) или ответ на вопрос. Проверяй по GitHub и фактам, а не по словам агента. Вопрос агента закрываешь вместо Мастера; зовёшь Мастера только где без него физически нельзя." });
+        ? "Ты приёмка (Reviewer) и сейчас арбитр: не правь чужую работу — ни код, ни карточки, ни постановку, ни документы процесса. Твой выход — решение по карточке или остановка цикла. Проверяй по GitHub, Notion и фактам, а не по словам агента; Мастера зовёшь только там, где без него физически нельзя."
+        : "Ты приёмка (Reviewer): не правь чужую работу — ни код, ни карточки, ни постановку. Документы процесса в репозитории своей роли (`docs/missions/**`, `docs/handoff/**`, `docs/DECISIONS.md`) — твоя зона: объявил редакцию — опубликуй её отдельным PR до выдачи карточек. Выход: вердикт (accept/rework/master), ответ или эта публикация. Проверяй по GitHub и фактам. Вопрос агента закрываешь вместо Мастера; Мастер — только где без него нельзя." });
 
     def("git.executor", { version: 2, ruleIds: ["R-GIT"], audience: ["Executor"], render: (c) => {
       const base = c.target?.baseBranch || "main";
       return `GIT: fetch origin; merge-base HEAD origin/${base}; status --short (чужое не трогай/не сбрасывай). Закреплённую ветку не меняй; новую — только если разрешено. Коммит своих путей; пуш в разрешённую ветку; gh pr create --fill --base ${base}; gh pr merge <N> --squash. Direct push в ${base} запрещён. Нет изменений — "pr":null.`;
+    } });
+
+    // D-087: у приёмки был запрет на правку документов и не было ни одного блока,
+    // который говорит, как их публиковать. Публикация редакции — это ветка и PR,
+    // то есть ровно тот git-порядок, который исполнитель получает, а приёмка нет.
+    def("git.docs", { version: 2, ruleIds: ["R-GIT", "R-DOCS"], audience: ["Reviewer"], render: (c) => {
+      const base = c.target?.baseBranch || "main";
+      const repo = c.target?.repo || "репозиторий документов";
+      return `ПУБЛИКАЦИЯ РЕДАКЦИИ в ${repo}: ветка от origin/${base}; правь только ` +
+        "docs/missions/**, docs/handoff/**; подними номер в шапке файла (ТЗ N.M, редакция N.M) — ключ сверки; " +
+        `коммит, пуш, gh pr create --fill --base ${base}, gh pr merge <N> --merge. Direct push в ${base} запрещён. ` +
+        "Карточки по неопубликованной редакции не выдаются.";
     } });
 
     def("git.auditor", { version: 2, ruleIds: ["R-GIT", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: (c) => {
@@ -10340,14 +10363,16 @@
     });
     def("reviewer.mission", {
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      // D-087: `git.docs` — потому что объявленная редакция ТЗ и очереди публикуется
+      // веткой и PR, а раньше у приёмки не было ни права, ни порядка это делать.
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
     });
     def("reviewer.answer", {
       audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
-      blocks: ["identity.mission", "authority.reviewer", "answer.question", "answer.protocol", "answer.resume", "marker.answer"],
+      blocks: ["identity.mission", "authority.reviewer", "git.docs", "answer.question", "answer.protocol", "answer.resume", "marker.answer"],
       requiredFacts: ["question.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 1800 },
