@@ -45,7 +45,7 @@ function harness({ roles: roleList = [COORD, MAINTAINER], version = '1.14.12', f
     'busyReason', 'elementCovered', 'composerText', 'captchaDialog', 'skipCardButton', 'completionPanels',
     'composerDiagnostics', 'roleFromPath', 'pageReady', 'messagesAfter', 'ntfyPublish', 'normalizeNtfyTopic',
     `${core}\n${body}\nreturn { healAfterPause, healStep, healDiagnosis, classifyPause, decideHeal,
-      healIncidentKey, buildHealTelemetry, escalateToMaintainer, maintainerRole };`,
+      healIncidentKey, buildHealTelemetry, escalateToMaintainer, maintainerRole, healUpload };`,
   )(
     (k, d) => (store.has(k) ? structuredClone(store.get(k)) : d),
     (k, v) => store.set(k, structuredClone(v)),
@@ -208,6 +208,24 @@ const markerPause = (over = {}) => ({
   assert.ok(masters > 0, 'в других местах Мастер по-прежнему вызывается');
   assert.match(missing, /markerDefectHint\(why, defect, markerName\)/,
     'подсказка о дефекте — одна функция, а не пять копий текста');
+}
+
+// ── D-086: телеметрия не пишет в репозиторий проекта.
+// 09.11 в main лежало 17 коммитов `telemetry:` — все прямые пуши мимо приёмки.
+{
+  const env = harness({ version: '1.14.15', fingerprint: 'fp-telemetry' });
+  // Токен есть, репозиторий проекта есть, отдельного репозитория телеметрии нет.
+  env.store.set('cfn-github-token', 'ghp_test');
+  const built = env.api.buildHealTelemetry({
+    phase: 'stop', at: '2026-11-09T18:20:00.000Z', version: '1.14.15', fingerprint: 'fp',
+    incident: { kind: 'send', ref: '' }, verdict: {}, snapshot: {}, journal: [],
+  }, 100000);
+  const sent = await env.api.healUpload(built.payload, { kind: 'send', ref: '' });
+  const puts = env.requests.filter((r) => r.method === 'PUT');
+  assert.equal(puts.length, 0, 'ни одного коммита в репозиторий проекта');
+  assert.equal(sent.github.ok, false);
+  assert.match(String(sent.github.skipped || ''), /не пишется/, 'причина названа словами');
+  assert.ok(sent.drive.ok, 'на Drive телеметрия ушла как раньше');
 }
 
 console.log('OK: D-084 — исчерпание напоминаний уводит ход Transport Maintainer\'у: класс transport, ' +

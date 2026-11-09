@@ -103,6 +103,9 @@
     // D-085: ответ приёмки заявляет занятый номер решения. Правит приёмка, не
     // человек: список номеров лежит в docs/DECISIONS.md и читается транспортом.
     "answer-decisions": "transport",
+    // D-086: редакция ТЗ объявлена, но не опубликована. Правит приёмка вместе с
+    // Координатором (PR), человек тут не нужен и не поможет.
+    "answer-unpublished": "transport",
     "answer-nocoord": "master",
     "tool-limit": "master",
     "pilot-tool-limit": "master",

@@ -151,12 +151,28 @@
     }
     const token = GM_getValue(K.ghToken, "");
     const repo = String(C.repo || "");
-    if (!token || !repo) {
-      out.github = { ok: false, skipped: !token ? "нет GitHub-токена" : "нет репозитория проекта" };
+    // D-086: телеметрия НЕ пишется в репозиторий проекта.
+    //
+    // 09.11 в `main` лежало 17 коммитов `telemetry:` — все прямые пуши, ни один
+    // не связан с PR. Правила процесса (ветка, приёмка, ревью) действуют для
+    // агентов и не действовали для самого транспорта: он же и обходил
+    // ветвление, о котором пишет агентам. Хуже того, каждый такой коммит — это
+    // изменение `main` без проверки, то есть шум в истории рядом с настоящими
+    // решениями.
+    //
+    // Поэтому наружу телеметрия уходит только по двум каналам: Drive (шлюз
+    // проекта, уже выше) и отдельный приватный репозиторий, если Мастер его
+    // завёл (`C.telemetryRepo`). Нет репозитория — телеметрия остаётся на Drive,
+    // и это не ошибка, а норма.
+    const tRepo = String(C.telemetryRepo || "");
+    if (!tRepo) {
+      out.github = { ok: false, skipped: "телеметрия в репозиторий проекта не пишется (D-086); выгружена на Drive" };
+    } else if (!token) {
+      out.github = { ok: false, skipped: "нет GitHub-токена" };
     } else {
       try {
         const path = `telemetry/${name.name.replace(/\.json$/, "")}__${String(payload.script?.fingerprint || "") || "nofp"}.json`;
-        const res = await request("PUT", `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}`,
+        const res = await request("PUT", `https://api.github.com/repos/${tRepo}/contents/${encodeURI(path)}`,
           githubHeaders(token),
           {
             message: `telemetry: ${info.kind || "pause"} ${info.ref || ""}`.slice(0, 120),

@@ -1378,5 +1378,31 @@
       "incident": "telemetry 09.11: prompt-compile budget_exceeded total 8178 > 7500 (answers.delta 3346, queue.snapshot 1191); done-with-open при 1 Rework, 6 Draft; 6*update-recovery; B0-r1/r2: §7 отдаёт пути Locale Auditor, поле «Зона записи» их не содержит; Warden заявил свободным D-084, занятый транспортом 1.14.12"
     },
     "revision": "2026-11-09"
+  },
+  "d086": {
+    "version": "1.14.15",
+    "title": "Объявленная редакция ТЗ против опубликованной; телеметрия вне репозитория проекта",
+    "date": "2026-11-09",
+    "decision": [
+      "24-feedback.publicationGaps",
+      "25-legacy-adr.publishedTzVersion",
+      "01-config.queueDoc",
+      "01-config.telemetryRepo",
+      "41-heal.healUpload"
+    ],
+    "pause": {
+      "kind": "answer-unpublished",
+      "class": "transport"
+    },
+    "evidence": {
+      "probe": "tests/relay-publication-gap-smoke.mjs",
+      "suites": 106
+    },
+    "safety": [
+      "дорогая правка документа не публикуется мимо приёмки",
+      "сбой чтения репозитория не блокирует ответ",
+      "служебные коммиты не попадают в репозиторий проекта",
+      "оракул, Scope, Acceptance и маркер не режутся"
+    ]
   }
 }
