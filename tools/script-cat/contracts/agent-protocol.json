@@ -1504,5 +1504,31 @@
       "старая реплика доставкой не считается",
       "двойная отправка запрещена"
     ]
+  },
+  "d091": {
+    "version": "1.14.20",
+    "title": "Вопрос с gate/need — это передача хода адресату, next в нём не читается",
+    "date": "2026-11-09",
+    "decision": [
+      "25-legacy-adr.askedGateHandoff",
+      "27-review-answers.startAnswer",
+      "23-coordinator.decisionRoute"
+    ],
+    "incident": {
+      "at": "2026-11-09T18:2xZ",
+      "kind": "answer-handoff",
+      "cls": "transport",
+      "reason": "гейт-вопрос к приёмке записан, но ход ушёл в маршрутизацию по next:\"Warden\" и вернулся Координатору без маркера"
+    },
+    "evidence": {
+      "probe": "tests/relay-answer-handoff-smoke.mjs",
+      "suites": 111
+    },
+    "safety": [
+      "приёмка по-прежнему не получает рабочую карточку",
+      "next:\"blocked\" разбирается своей веткой, без дублирования",
+      "вопрос, не держащий ход, next не блокирует",
+      "неудача передачи — пауза answer-handoff класса transport, ход не теряется"
+    ]
   }
 }

@@ -107,9 +107,16 @@ const api = new Function(
 {
   // D-083: ветка вопроса больше не спрятана под `next !== "blocked"` — иначе
   // вопрос, поданный вместе с остановкой, выбрасывался целиком.
-  const adr = cut('      if (askedRow && (askedRow.gate', '      if (blocked) {');
+  //
+  // D-091: и наоборот — под `blocked` вопроса больше не дважды: там своя ветка.
+  // Условие теперь `!blocked && gate/need`.
+  const adr = cut('      if (!blocked && askedRow && (askedRow.gate', '      if (blocked) {');
   assert.match(adr, /askedRow\.gate === true \|\| askedRow\.need/, 'ход уходит приёмке только по gate/need');
   assert.match(adr, /ход идёт дальше по/, 'обычный вопрос не мешает next');
+  // D-091: гейт-вопрос сам передаёт ход — возврат `true` обязателен, иначе
+  // дальше пойдёт маршрутизация по next и вопрос «съестся».
+  assert.match(adr, /await startAnswer\(mission, item\)[\s\S]{0,400}return true;/, 'гейт-вопрос передаёт ход и завершает его');
+  assert.match(adr, /"answer-handoff"/, 'неудача передачи — пауза с причиной, а не молчаливый next');
   // Остановка с адресованным вопросом — ход к адресату, а не пауза для Мастера.
   const blockedAsk = cut('      if (blocked) {\n        // D-083', '        // Право Координатора');
   assert.match(blockedAsk, /startAnswer\(mission, item\)/, 'ответ адресата ставится отдельным ходом');
