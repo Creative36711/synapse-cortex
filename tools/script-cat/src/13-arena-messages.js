@@ -601,11 +601,24 @@
   const markerRejectReason = (name) => MARKER_REJECT_LABELS[markerNotes[name]?.reason] || "";
 
   /** Короткая подпись элемента для журнала: без разметки и лишнего текста. */
-  const shortLabel = (el) =>
+  /**
+   * Полная подпись элемента — до обрезки.
+   *
+   * `shortLabel` режет до 60 знаков, и по обрезанному тексту нельзя отличить
+   * индикатор от транскрипта: проверка «длинный текст — это транскрипт»
+   * (`length > 80`) на обрезанной строке не срабатывает НИКОГДА. 09.11 так
+   * завис цикл: наша же реплика «Карточка «SYN-3 · B5 · Анализатор литералов
+   * fail-closed» · dispatch …» попала в `[aria-live]`, слово «Анализ» совпало с
+   * шаблоном «thinking|анализ», и транспорт 12 часов считал агента работающим —
+   * без ошибки и без паузы («задание из очереди подождёт, а агент ещё
+   * отвечает»). Проверять длину надо по полному тексту.
+   */
+  const fullLabel = (el) =>
     `${el?.getAttribute?.("aria-label") || el?.getAttribute?.("title") || el?.textContent || ""}`
       .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 60);
+      .trim();
+
+  const shortLabel = (el) => fullLabel(el).slice(0, 60);
 
   /**
    * Причина «агент ещё работает» — или null.
@@ -719,9 +732,17 @@
       if (!visible(el)) continue;
       // Свёрнутая история рассуждений — это уже прошлое.
       if (el.closest('[data-state="closed"], .not-prose')) continue;
+      // Своя реплика и транскрипт — не индикатор: транспорт сам отправляет
+      // длинные задания, и они лежат в чате в контейнерах с `aria-live`.
+      if (el.closest('[data-user-message-layout="true"], [data-agent-transcript-message]')) continue;
+      // Длину сверяем по ПОЛНОМУ тексту: `shortLabel` режет до 60, и проверка
+      // `> 80` по нему была мёртвой (09.11 — 12 часов ложной работы).
+      const full = fullLabel(el);
+      if (!full || full.length > 80) continue; // длинный текст — транскрипт, а не индикатор
+      // Слово в кавычках или часть имени («Анализатор литералов») — не индикатор.
+      // Индикатор — это короткая фраза о состоянии, а не упоминание слова.
       const label = shortLabel(el);
-      if (!label || label.length > 80) continue; // длинный текст — транскрипт, а не индикатор
-      if (!/thinking|reasoning|typing|дума|размышл|анализ/i.test(label)) continue;
+      if (!/^(?:\S+\s+){0,3}?(?:thinking|reasoning|typing|дума|размышл|анализ)/i.test(label)) continue;
       if (/^thought\b|^думал|^размышлял/i.test(label)) continue; // прошедшее время
       return { kind: "status", label };
     }

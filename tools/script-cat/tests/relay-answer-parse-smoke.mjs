@@ -174,7 +174,16 @@ assert.match(src, /rect\.width > 0 && rect\.height > 0/, 'нулевая пло�
 assert.match(src, /function busyReason\(\)/, 'причина работы ищется в одном месте');
 assert.match(src, /el\.closest\('\[data-state="closed"\], \.not-prose'\)/, 'свёрнутая история — не работа');
 assert.match(src, /\^thought\\b\|\^думал\|\^размышлял/, 'прошедшее время не считается работой');
-assert.match(src, /label\.length > 80/, 'длинный текст транскрипта не считается индикатором');
+// 09.11: проверка стояла на обрезанной подписи (`shortLabel` режет до 60),
+// поэтому `length > 80` не срабатывала никогда, и своя же карточка «… ·
+// Анализатор литералов …» держала цикл 12 часов как «агент думает».
+assert.match(src, /const fullLabel = \(el\) =>/, 'длина меряется по полному тексту');
+assert.match(src, /const shortLabel = \(el\) => fullLabel\(el\)\.slice\(0, 60\)/, 'обрезанная подпись — производная, а не источник');
+assert.match(src, /const full = fullLabel\(el\);/, 'индикатор сверяется по полному тексту');
+assert.match(src, /full\.length > 80/, 'длинный текст транскрипта не считается индикатором');
+assert.doesNotMatch(src, /label\.length > 80/, 'мёртвой проверки по обрезанной строке больше нет');
+assert.match(src, /data-user-message-layout="true"\], \[data-agent-transcript-message\]/, 'своя реплика и транскрипт — не индикатор');
+assert.match(src, /\^\(\?:\\S\+\\s\+\)\{0,3\}\?\(\?:thinking\|reasoning\|typing\|дума\|размышл\|анализ\)/, 'слово о состоянии — в начале подписи, а не где попало');
 assert.match(src, /busyLabel\(busyReason\(\)\)/, 'в журнале видно, что именно держит шаг');
 
 // 2.4. Завершённый ответ читается сразу, без ожидания «стабильности».
