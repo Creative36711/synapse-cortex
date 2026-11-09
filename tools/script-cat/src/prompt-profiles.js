@@ -185,6 +185,20 @@
       if (kind === "provision") return "admin.provision";
       // D-073: разбор транспорта — свой профиль без маркера, не dispatch и не review.
       if (kind === "heal") return "heal.report";
+      // D-093: человек — не единственный адресат повторной отправки. Строка
+      // выше ловит только «лимит инструментов», а минимальный повтор собирался
+      // через delivery.compact, который требует task.runId. У вопроса, у приёмки
+      // и у арбитра runId нет и быть не может — повтор падал на своих же фактах
+      // (`missing_fact task.runId`) и звал разбор вместо отправки. Вид хода
+      // решает профиль, и для нерабочих видов это continuation: он собирается из
+      // question.id/turnId (mission.id/turnId, arbiter.cardId), без карточки и
+      // без git.
+      if (kind === "answer" || kind === "review" || kind === "arbiter") {
+        if (tier === "compact" || tier === "retry") {
+          return kind === "answer" ? "continuation.answer"
+            : kind === "review" ? "continuation.review" : "continuation.arbiter";
+        }
+      }
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";

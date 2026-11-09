@@ -1593,5 +1593,42 @@
         }
       }
     }
+  },
+  "d093": {
+    "version": "1.14.22",
+    "title": "Повтор после ошибки Arena собирается фактами своего вида хода, а не карточки",
+    "date": "2026-11-10",
+    "decision": [
+      "14-missing-marker.minimalPrompt",
+      "prompt-profiles.select",
+      "prompt-blocks.marker.review",
+      "40-heal-core.HEAL_PAUSE_CLASS"
+    ],
+    "incident": {
+      "at": "2026-11-09T20:28:00.401Z",
+      "kind": "prompt-compile",
+      "cls": "transport",
+      "reason": "Промпт не собран (retry 4136f0cf-5705-8111-84eb-d250e801c3be): missing_fact — не хватает обязательного факта task.runId для delivery.compact",
+      "context": "передача вопроса Warden'у (reviewer.answer, вопрос 4136f0cf-5705-8111-84eb-d250e801c3be) не принялась ошибкой Arena; минимальный повтор собирался профилем карточки"
+    },
+    "fix": [
+      "minimalPrompt: вид хода выбирает факты — answer/review/arbiter собираются своими IDs, delivery.compact остаётся только для рабочей выдачи",
+      "select: kind answer/review/arbiter при tier compact/retry → continuation.answer/review/arbiter",
+      "marker.review/answer/arbiter: короткая ветка маркера для compact/retry — полный текст не влезал в overhead 700 профиля continuation",
+      "выдача без run_id не отправляется: пауза retry-no-run вместо промпта, собранного на пустом месте (вид размечен как master → адресат warden)"
+    ],
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.11: форма маркеров не менялась, новые виды пауз протокол не затрагивают. Бюджеты профилей не подняты — короткая ветка маркера уложилась в существующие 700.",
+    "safety": [
+      "маркер повтора тот же, что ждёт ожидание: CF_ANSWER_RESULT / CF_REVIEW_RESULT / CF_ARBITER_RESULT",
+      "IDs не пересоздаются: question_id/turn_id, mission_id/turn_id, dispatch_id берутся из ожидания",
+      "профиль continuation по-прежнему без task.assignment, task.scope, git.executor, queue.coordinator",
+      "ошибка Arena на рабочей выдаче разбирается как раньше: delivery.compact с task.runId",
+      "предохранитель arenaResendMax=1 сохранён: второй отказ — пауза, а не цикл"
+    ],
+    "evidence": {
+      "probe": "tests/relay-retry-facts-smoke.mjs",
+      "suites": 113
+    }
   }
 }

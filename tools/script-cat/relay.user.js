@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.21
+// @version      1.14.22
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "68b67f4259e61988",
+    buildFingerprint: "d1c3eb82b2ca5fde",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -724,7 +724,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.21";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.22";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -5318,19 +5318,68 @@
    * выдачи и формат маркера. Всё остальное агент берёт из карточки.
    */
   function minimalPrompt(expect) {
+    const attempt = (Number(expect.arenaResend) || 0) + 1;
     if (expect.kind === "plan") {
       return compileOrPause({
         kind: "plan", role: { fn: "Coordinator", name: expect.roleName || "Coordinator" },
         mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
         queue: { summary: expect.planContext || "Прочитай очередь миссии и продолжи планирование." },
-        delivery: { tier: "recovery", attempt: (Number(expect.arenaResend) || 0) + 1 },
+        delivery: { tier: "recovery", attempt },
       }, `recovery ${expect.ref}`);
+    }
+    // D-093: вид хода решает, какими фактами собирать повтор.
+    //
+    // 09.11 в 20:28 передача вопроса Warden'у не принялась ошибкой Arena, и
+    // минимальный повтор собрался через delivery.compact — профиль карточки. У
+    // вопроса нет `runId`: повтор упал на `missing_fact task.runId`, до Arena не
+    // дошёл и ушёл в разбор как «поломка транспорта». Цикл встал на ровном
+    // месте: вопрос в очереди был, ответа не было, отправлять было нечего.
+    //
+    // У приёмки миссии и у арбитра тоже нет runId — у них свой маркер и свои
+    // IDs. Поэтому повтор собирается ровно теми фактами, которые есть у вида
+    // хода, а профиль выбирает `select` (continuation.*). Ничего нового здесь не
+    // выдумывается: те же ID, что ушли в первый раз.
+    const answerLike = expect.kind === "answer" || expect.kind === "review" || expect.kind === "arbiter";
+    if (answerLike) {
+      const role = { fn: expect.roleFn || "Reviewer", name: expect.roleName || "" };
+      if (expect.kind === "answer") {
+        return compileOrPause({
+          kind: "answer", role, turnId: expect.turnId || "",
+          mission: { id: expect.missionId || "" },
+          question: { id: expect.ref, turnId: expect.turnId || "" },
+          delivery: { tier: "compact", attempt },
+        }, `retry ${expect.ref}`);
+      }
+      if (expect.kind === "review") {
+        return compileOrPause({
+          kind: "review", role, mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
+          delivery: { tier: "compact", attempt },
+        }, `retry ${expect.ref}`);
+      }
+      return compileOrPause({
+        kind: "arbiter", role, turnId: expect.turnId || "",
+        mission: { id: expect.missionId || "" },
+        arbiter: { cardId: expect.ref, cardTitle: expect.title || "", ...(expect.arbiter || {}) },
+        delivery: { tier: "compact", attempt },
+      }, `retry ${expect.ref}`);
+    }
+    // Обычная выдача: здесь runId есть, и профиль карточки — правильный.
+    // Если его всё же нет (старое ожидание из прежней сборки), повтор не
+    // отправляем: собранный «на пустом месте» промпт хуже честной паузы.
+    if (!String(expect.runId || "").trim()) {
+      pause(
+        `Повтор задания «${expect.title || expect.ref}» невозможен: в ожидании нет run_id этой выдачи. ` +
+          "Без него агент не сможет ответить маркером, а собирать промпт без фактов — врать самому себе. " +
+          "Карточка и ожидание сохранены; нужен новый ход Координатора.",
+        { kind: "retry-no-run", ref: expect.ref, runId: "" },
+      );
+      return null;
     }
     return compileOrPause({
       kind: "retry", profileId: "delivery.compact",
       role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
       task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
-      delivery: { tier: "compact", attempt: (Number(expect.arenaResend) || 0) + 1 },
+      delivery: { tier: "compact", attempt },
     }, `retry ${expect.ref}`);
   }
 
@@ -10260,7 +10309,12 @@
       ].join("\n");
     } });
     def("marker.review", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
-      if (c.delivery?.tier === "tool_limit") return [
+      // D-093: короткий вариант нужен не только продолжению после лимита
+      // инструментов, но и повтору после ошибки Arena (`compact`). У вопроса,
+      // приёмки и арбитража повтора раньше не было вовсе — они падали на фактах
+      // карточки; теперь он есть, а профиль continuation.* держит overhead 700,
+      // в который полный текст маркера не влезает (815).
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
         "Если доказательств не хватает — не принимай миссию.",
         `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
@@ -10274,7 +10328,7 @@
     def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
       const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
-      if (c.delivery?.tier === "tool_limit") return [
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
         "Решение по карточке обязательно: resolve с action или master.",
         resolve,
@@ -10289,7 +10343,7 @@
       ].join("\n");
     } });
     def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
-      if (c.delivery?.tier === "tool_limit") return [
+      if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
         "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
         `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,
@@ -10612,6 +10666,20 @@
       if (kind === "provision") return "admin.provision";
       // D-073: разбор транспорта — свой профиль без маркера, не dispatch и не review.
       if (kind === "heal") return "heal.report";
+      // D-093: человек — не единственный адресат повторной отправки. Строка
+      // выше ловит только «лимит инструментов», а минимальный повтор собирался
+      // через delivery.compact, который требует task.runId. У вопроса, у приёмки
+      // и у арбитра runId нет и быть не может — повтор падал на своих же фактах
+      // (`missing_fact task.runId`) и звал разбор вместо отправки. Вид хода
+      // решает профиль, и для нерабочих видов это continuation: он собирается из
+      // question.id/turnId (mission.id/turnId, arbiter.cardId), без карточки и
+      // без git.
+      if (kind === "answer" || kind === "review" || kind === "arbiter") {
+        if (tier === "compact" || tier === "retry") {
+          return kind === "answer" ? "continuation.answer"
+            : kind === "review" ? "continuation.review" : "continuation.arbiter";
+        }
+      }
       // tool-call limit — продолжение того же хода, не compact/retry/reminder.
       if (tier === "tool_limit") {
         if (kind === "pilot") return "continuation.pilot";
@@ -18051,6 +18119,10 @@
     // ни разу (09.11: маркер CF_ANSWER_RESULT был виден в тексте Warden, а
     // транспорт дважды отрапортовал «без маркера»). Ход уходит Maintainer'у, у
     // него дифф и проба; предохранитель C.healMaintainerMax остаётся.
+    // D-093: повтор задания без run_id — не «поломка транспорта», а состояние
+    // ожидания: чинить в профиле нечего, нужен новый ход Координатора. Это
+    // работа приёмки (постановка и очередь — её предмет), а не человека.
+    "retry-no-run": "master",
     marker: "transport",
     "marker-mismatch": "master",
     "poll-loop": "master",

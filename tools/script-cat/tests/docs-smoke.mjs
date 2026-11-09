@@ -358,6 +358,27 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(heal, /per100/, 'метрика измеряется на сто ходов');
 }
 
+// 17-тер. D-093 (1.14.22): повтор собирается фактами своего вида хода.
+{
+  const d093 = contract.d093;
+  assert.ok(d093, 'D-093 записан в контракт');
+  assert.match(d093.version || '', /^1\.14\.22$/, 'D-093 относится к сборке 1.14.22');
+  assert.equal(d093.budgetsRaised, false, 'D-093 не поднимал бюджеты');
+  assert.match(d093.protocolNote || '', /остаётся 1\.11/, 'D-093: версия контракта не менялась');
+  const fix = (d093.fix || []).join(' ');
+  assert.match(fix, /minimalPrompt/, 'виновник назван: сборка повтора');
+  assert.match(fix, /continuation\.answer/, 'свой профиль для вопроса назван');
+  const safety = (d093.safety || []).join(' ');
+  assert.match(safety, /маркер повтора тот же/, 'маркер повтора сверяется с ожиданием');
+  assert.match(safety, /arenaResendMax=1/, 'предохранитель повтора сохранён');
+  assert.match(d093.evidence?.probe || '', /relay-retry-facts-smoke/, 'проба названа');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-093 \(1\.14\.22\)/, 'D-093 есть в журнале решений');
+  assert.match(decisions, /missing_fact/, 'боевая строка паузы сохранена как факт');
+  const marker = readFileSync(join(root, 'tools/script-cat/src/14-missing-marker.js'), 'utf8');
+  assert.match(marker, /const answerLike = expect\.kind === "answer"/, 'вид хода различается до сборки');
+}
+
 // 17. D-085 (1.14.14): бюджет сжимает данные, а не останавливает ход.
 {
   const d085 = contract.d085;
