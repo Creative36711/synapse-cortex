@@ -129,7 +129,7 @@ const norm = (x) => String(x || '').replace(/-/g, '').toLowerCase();
   const { PromptCompiler, dispatchRequest, planRequest } = await import('./helpers/prompt-env.mjs');
   const executor = PromptCompiler.compile(dispatchRequest('Executor')).text;
   const coordinator = PromptCompiler.compile(planRequest()).text;
-  assert.match(executor, /Вопрос — question в маркере/, 'канал вопроса назван в общем правиле');
+  assert.match(executor, /Обратная связь — question в маркере/, 'канал назван в общем правиле и называется «обратной связью»');
   assert.match(executor, /Опрос в чате — остановка/, 'запрет опроса в чате цел');
   assert.match(coordinator, /Обратную связь в Notion руками не пиши/,
     'Координатору прямо запрещено писать строку в базу: именно он это и сделал 09.11');

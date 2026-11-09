@@ -288,5 +288,26 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(blocks, /c\.role\?\.fn === "Coordinator"/, 'запрет адресный, а не в общем блоке');
 }
 
+// 15. D-083: прямой вопрос к роли — канал, а не остановка.
+{
+  const d083 = contract.d083;
+  assert.ok(d083, 'D-083 записан в контракт');
+  assert.match(d083.version || '', /^1\.14\.11$/, 'D-083 относится к сборке 1.14.11');
+  assert.match(d083.evidence?.probe || '', /relay-direct-answer-smoke/, 'проба названа');
+  const safety = (d083.safety || []).join(' ');
+  assert.match(safety, /need читается только вместе с gate/, 'мягкость не отменяет правило «вопрос ≠ остановка»');
+  assert.match(safety, /не отдаётся другой роли/, 'неготовый адресат не крадёт вопрос');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-083 \(1\.14\.11\)/, 'D-083 есть в журнале решений');
+  const adr = readFileSync(join(root, 'tools/script-cat/src/25-legacy-adr.js'), 'utf8');
+  // Главный дефект: вопрос при остановке выбрасывался. Проверяем, что ветки
+  // вопроса больше нет под условием next.
+  assert.doesNotMatch(adr, /if \(norm\(decision\.next\) !== "blocked"\) \{\s*\/\/ Та же история/,
+    'вопрос Координатора читается при любом next');
+  assert.match(adr, /if \(blocked\) asked\.question\.gate = true;/, 'при остановке вопрос держит ход');
+  const answers = readFileSync(join(root, 'tools/script-cat/src/27-review-answers.js'), 'utf8');
+  assert.match(answers, /need: q\.gate === true \? String\(q\.need \|\| ""\) : ""/, 'адресат переживает очередь');
+}
+
 
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

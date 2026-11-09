@@ -649,7 +649,11 @@
     // Отметка «ждёт ответа» — переносчик `gate` в базу (D-081). Строка, а не
     // константа: пробы собирают эти функции из бандла по фрагментам и внешних
     // `const` не видят — тогда `questionProps` падал бы с ReferenceError.
-    const blocks = [q.blocks, q.gate ? "ждёт ответа" : ""].filter(Boolean).join(" · ");
+    // D-083: адресат виден в самой строке. Без него Мастер, открыв «Обратную
+    // связь», видел вопрос без пометки «кому» — и не мог понять, почему ответа
+    // нет. Метка держится в том же поле, где и признак остановки.
+    const blocks = [q.blocks, q.gate ? "ждёт ответа" : "", q.gate && q.need ? `нужен ответ «${q.need}»` : ""]
+      .filter(Boolean).join(" · ");
     if (blocks) props["Что блокирует"] = text(blocks);
     if (q.options.length) props["Варианты"] = text(q.options.join(" · "));
     const url = questionMaterial(q.url, `${q.text || ""} ${q.fullText || ""}`);

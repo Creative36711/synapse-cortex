@@ -288,7 +288,9 @@ assert.match(tickBlock.slice(0, pollAt), /if \(!auto && !fromToggle\) return;/, 
 const { PromptCompiler, dispatchRequest, planRequest } = await import('./helpers/prompt-env.mjs');
 const rules = PromptCompiler.compile(dispatchRequest('Executor')).text;
 assert.match(rules, /Scope расширяет на ход/, 'зона — рамка по умолчанию');
-assert.match(rules, /Вопрос — question в маркере/, 'вопрос только полем маркера');
+// D-083: канал назван «обратной связью» — это то же поле, но слово то, которым
+// Мастер и агенты его называют: «вопрос» читалось как «строка в базе».
+assert.match(rules, /Обратная связь — question в маркере/, 'обратная связь только полем маркера');
 assert.match(rules, /default обязателен/, 'без варианта по умолчанию вопрос не принимается');
 assert.match(rules, /в чате — остановка, не делай/, 'опрос в чате по-прежнему запрещён');
 assert.doesNotMatch(rules, /Не задавай вопросов, не создавай опросов/, 'старый полный запрет убран');
@@ -299,10 +301,12 @@ assert.match(coordRules, /next:"blocked"/, 'право остановить ци
 // ── 6. Маркер blocked ставит паузу, а не ищет роль с таким именем ──────────
 const coordFrom = src.indexOf('  async function coordinatorStep(');
 const coordBlock = src.slice(coordFrom, src.indexOf('  /**\n   * Запрос хода Координатора.', coordFrom));
-assert.match(coordBlock, /if \(norm\(decision\.next\) === "blocked"\) \{/, 'blocked разбирается до маршрута');
+// D-083: `blocked` считается один раз вверху (`const blocked = …`), потому что
+// от него зависит ещё и разбор вопроса: при остановке вопрос держит ход.
+assert.match(coordBlock, /const blocked = norm\(decision\.next\) === "blocked";/, 'blocked разбирается до маршрута');
 assert.match(coordBlock, /kind: "blocked-role"/, 'отдельный вид паузы');
 assert.ok(
-  coordBlock.indexOf('=== "blocked"') < coordBlock.indexOf('decisionRoute('),
+  coordBlock.indexOf('const blocked = norm(decision.next)') < coordBlock.indexOf('decisionRoute('),
   'до поиска роли по имени',
 );
 
