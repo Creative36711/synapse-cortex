@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.4
+// @version      1.14.5
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -74,7 +74,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "0df79747cfbe54b6",
+    buildFingerprint: "fe02c9d3b5ea6486",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -705,7 +705,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.4";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.5";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -8268,11 +8268,24 @@
         GM_setValue(K.pending, { ...pending, busySince: Date.now() });
         pendingSay(
           pending,
-          `Агент ещё отвечает: задание из очереди подождёт и уйдёт, как только он закончит (${busyLabel(busy)}).`,
+          `Агент ещё отвечает: задание из очереди подождёт и уйдёт, как только он закончит (${busyLabel(busy)}). ` +
+            `Предел ожидания — ${Math.round(C.pendingBusyMaxMs / 60000)} мин, потом пауза.`,
         );
         return true;
       }
       const waitedMs = Date.now() - waitSince;
+      // Отсчёт виден в журнале, пока идёт. Без этого 09.11 была одна строка в
+      // 13:31 и двенадцать часов тишины: Мастер не мог отличить «идёт долгая
+      // работа» от «цикл встал», а `pendingSay` пишет ровно один раз на
+      // очередь (ключ — `pending.at`). Напоминаем редко — раз в 10 минут, как
+      // у прочих долгих ожиданий, чтобы журнал оставался читаемым.
+      logThrottled(
+        `pending-busy:${pending.at}`,
+        `Задание ждёт ${Math.round(waitedMs / 60000)} мин: адресат всё ещё числится работающим ` +
+          `(${busyLabel(busy)}). Пауза будет через ${Math.max(0, Math.round((C.pendingBusyMaxMs - waitedMs) / 60000))} мин.`,
+        false,
+        Math.min(C.pendingBusyMaxMs, C.longWaitNoticeMs),
+      );
       if (waitedMs > C.pendingBusyMaxMs) {
         GM_setValue(K.pending, { ...pending, busySince: 0 });
         pause(

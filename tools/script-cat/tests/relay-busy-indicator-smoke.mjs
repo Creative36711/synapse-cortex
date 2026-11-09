@@ -178,19 +178,20 @@ assert.equal(makeBusy({ marks: [el('Thought for 12s')] }).busyReason?.() ?? null
     }`;
     const fn = new Function(
       'GM_getValue', 'GM_setValue', 'K', 'C', 'busySettled', 'busyLabel', 'pendingSay', 'log', 'pause',
-      'firstLine', 'Date',
+      'firstLine', 'logThrottled', 'Date',
       code,
     )(
       (key, fallback) => (store.has(key) ? store.get(key) : fallback),
       (key, value) => store.set(key, value),
       { pending: 'cfn-pending' },
-      { pendingBusyMaxMs: 30 * MIN },
+      { pendingBusyMaxMs: 30 * MIN, longWaitNoticeMs: 10 * MIN },
       async () => busy,
       (reason) => `кнопка «${reason?.label || ''}»`,
       (p, text, error) => logs.push({ text, error }),
       () => {},
       (reason, context) => pauses.push({ reason, context }),
       (text, max = 80) => String(text || '').slice(0, max),
+      (key, text, error) => logs.push({ text, error, throttled: key }),
       class extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } },
     );
     return { pending, store, logs, pauses, fn };
@@ -203,6 +204,7 @@ assert.equal(makeBusy({ marks: [el('Thought for 12s')] }).busyReason?.() ?? null
     assert.ok(store.get('cfn-pending').busySince > 0, 'момент начала занятости запомнен');
     assert.equal(pauses.length, 0, 'первый заход паузы не ставит');
     assert.match(logs[0].text, /подождёт и уйдёт/, 'Мастер видит, что происходит');
+    assert.match(logs[0].text, /Предел ожидания — 30 мин/, 'предел назван с первого же сообщения');
   }
   // Занят 5 минут — ждём дальше, но уже с числом и пределом.
   {
@@ -210,8 +212,13 @@ assert.equal(makeBusy({ marks: [el('Thought for 12s')] }).busyReason?.() ?? null
     const { logs, pauses, fn } = run({ busySince: now - 5 * MIN, now });
     assert.equal(await fn({ roleId: 'a', at: 1, busySince: now - 5 * MIN }), true, 'ещё ждём');
     assert.equal(pauses.length, 0, 'пять минут — не поломка');
-    assert.match(logs[0].text, /5 мин/, 'в журнале видно, сколько уже ждём');
-    assert.match(logs[0].text, /Предел ожидания — 30 мин/, 'и сколько ещё будем');
+    // Тишина — тоже дефект: 09.11 после одной строки было 12 часов молчания.
+    const beat = logs.find((row) => row.throttled);
+    assert.ok(beat, 'пока идёт отсчёт, журнал не молчит');
+    assert.match(beat.text, /Задание ждёт 5 мин/, 'видно, сколько уже ждём');
+    assert.match(beat.text, /Пауза будет через 25 мин/, 'и сколько осталось до паузы');
+    assert.ok(logs.some((row) => /Предел ожидания — 30 мин/.test(row.text)),
+      'предел назван в журнале, а не только в коде');
   }
   // Занят 31 минуту — это уже зависание: пауза, а не молчание.
   {
