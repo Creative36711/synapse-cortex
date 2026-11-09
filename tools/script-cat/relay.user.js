@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.7
+// @version      1.14.8
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "57401749c4ab7af4",
+    buildFingerprint: "01c6a851a7f0638a",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -712,7 +712,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.7";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.8";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -2275,10 +2275,19 @@
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
         { "Dispatch State": ["Draft", "Ready", "Running", "Submitted", "Accepted", "Rework", "Blocked"], "Check": ["pass", "fail"] }],
-      ["Обратная связь", C.questions, { "Вопрос": "title", "Статус": "select", "По умолчанию": "rich_text", "Ответ": "rich_text", "Варианты": "rich_text", "Срок": "date", "Доставлено": "date", "Материал": "url", "Роль": "rich_text", "Карточка": "rich_text", "Миссия": "rich_text", "Что блокирует": "rich_text" },
-        { "Статус": ["Ждёт", "Решено", "Принят дефолт", "Отменён"] }],
+      // D-080: единственное место, где описана схема «Обратной связи». Раньше
+      // `Тип` жил только формулой в NOTION-TEMPLATE.json → afterCreate, и код в
+      // Notion писал поле, которого в этой таблице не было.
+      //
+      // `Срок` остаётся в схеме: транспорт его больше не пишет (сроков нет), но
+      // старые строки хранят дату и она нужна истории. `Тип` — select: значение
+      // ставит транспорт (`questionProps`), потому что формула не отличает
+      // «вопрос про ADR» от «предложения ADR».
+      ["Обратная связь", C.questions, { "Вопрос": "title", "Статус": "select", "Тип": "select", "По умолчанию": "rich_text", "Ответ": "rich_text", "Варианты": "rich_text", "Срок": "date", "Доставлено": "date", "Материал": "url", "Роль": "rich_text", "Карточка": "rich_text", "Миссия": "rich_text", "Что блокирует": "rich_text" },
+        { "Статус": ["Ждёт", "Решено", "Принят дефолт", "Отменён"], "Тип": ["Вопрос", "Предложение"] }],
     ];
     const schemas = {};
+    const warnings = [];
     try {
       for (const [label, id, fields, options] of contracts) {
         const source = await request("GET", `https://api.notion.com/v1/data_sources/${id}`, headers);
@@ -2297,6 +2306,12 @@
           if (!Array.isArray(actual)) errors.push(`${name}: нет списка select`);
           else for (const value of required) if (!actual.some((option) => option.name === value)) errors.push(`${name}: нет «${value}»`);
         }
+        // D-080: лишние поля — не отказ, а подсказка Мастеру. Живую схему правит
+        // только он; транспорт сообщает, что видит поле, которого нет в этой
+        // таблице, чтобы поле не выглядело рабочим. Разница «живое || схема»
+        // молчала: `Тип` был в живой базе, но не здесь, и код писал его в пустоту.
+        const extra = Object.keys(source.properties || {}).filter((name) => !(name in fields) && !["Repository", "Репозиторий"].includes(name));
+        if (extra.length) warnings.push(`«${label}»: лишние поля — ${extra.join(", ")} (схема их не знает; правьте схему в Notion только сами).`);
         if (errors.length) throw new Error(`«${label}»: ${errors.join(", ")}.`);
         schemas[label] = source.properties;
         await new Promise((resolve) => setTimeout(resolve, 350));
@@ -2354,7 +2369,8 @@
       }
       const branch = await request("GET", `https://api.github.com/repos/${C.repo}/branches/${encodeURIComponent(C.branch)}`, githubHeaders(settings.github));
       if (!branch || branch.name !== C.branch) throw new Error(`GitHub не подтвердил ветку ${C.branch}.`);
-      return { ok: true, text: "Основные поля, варианты select, роли и базовая ветка читаются. Права записи и содержимое старых карточек не проверялись." };
+      const base = "Основные поля, варианты select, роли и базовая ветка читаются. Права записи и содержимое старых карточек не проверялись.";
+      return { ok: true, text: warnings.length ? `${base} ${warnings.join(" ")}` : base };
     } catch (e) {
       return { ok: false, text: `Схема или роли не прошли проверку: ${connectionProblem(e, settings)}` };
     }
@@ -9829,8 +9845,19 @@
       return "ЗАДАНИЕ: карточка и есть задание (поля выше).";
     } });
 
-    def("questions.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
-      'Вопрос — полем question в маркере {"text","options","default","hours"}; default обязателен (работа идёт по нему), пиши его целиком — длина не ограничена; ответ придёт строкой; ≤1 за ход. Опрос «можно?» в чате — остановка, не делай.' });
+    // D-080: у вопроса два режима, и разница между ними названа прямо.
+    //
+    // До 1.14.8 любой вопрос останавливал ход: промпт обещал «работа идёт по
+    // default», а транспорт переключал цикл на приёмку. Плюс поле `hours` со
+    // сроком, которое ничего не решало (приёмка отвечает за один ход) и создавало
+    // третью модель «молчание = решение». Теперь:
+    //   • обычный вопрос — ход ИДЁТ ДАЛЬШЕ по default, ответ придёт следующим
+    //     промптом (у исполнителя — в его же карточке, блок answers.mine);
+    //   • `gate: true` — ход стоит, пока не ответят; для случая «без этого
+    //     мнения следующий шаг невозможен». Ставить только тогда: это остановка.
+    // Сроков нет: открытый вопрос остаётся открытым, пока на него не ответят.
+    def("questions.protocol", { version: 2, ruleIds: ["R-QUESTIONS"], render: () =>
+      'Вопрос — question в маркере {"text","options","default","gate","need"}; default обязателен, пиши его целиком (длина не ограничена); ≤1/ход; ответ строкой. Просто вопрос ход НЕ держит; "gate":true ("need") — без ответа нельзя. Опрос в чате — остановка, не делай.' });
 
     def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
       "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
@@ -9845,6 +9872,22 @@
       "Поля карточки (Dispatch State, Run ID, Output Drive File ID, Recipient Agent ID, Started At, Submitted At, PR, Check) ставит скрипт; отчёт — поле report маркера." });
 
     def("answers.delta", { verbatim: true, render: (c) => [c.queue?.answersLine, c.queue?.openLine, c.queue?.answerLine].filter(Boolean).join("\n") });
+
+    // D-080: ответ на СВОЙ вопрос приходит тому, кто его задал.
+    //
+    // До 1.14.8 ответы уходили только Координатору («Ответы на вопросы» в плане),
+    // а исполнитель и аудитор, задав вопрос, ответа не видели вообще — при том
+    // что промпт обещал «ответ придёт строкой». Это и была вторая половина
+    // противоречия: спрашивать было можно, а узнать ответ — только через
+    // Координатора. Блок verbatim: это данные из базы, а не инструкции.
+    def("answers.mine", { verbatim: true, audience: ["Executor", "Auditor"], render: (c) => {
+      const mine = c.queue?.answersMine;
+      if (!mine) return "";
+      // Заголовок — не украшение, а бюджет: он стоит в каждой карточке, а
+      // `answersMineLine` уже начинает строку словами «Ответы на твои вопросы».
+      // Второй заголовок был бы платой за красоту из overhead профиля.
+      return mine;
+    } });
     def("queue.snapshot", { verbatim: true, render: (c) => [
       c.queue?.summary ? `Очередь: ${c.queue.summary}` : "",
       c.queue?.ready, c.queue?.rework, c.queue?.draft,
@@ -10124,14 +10167,14 @@
 
     def("executor.card", {
       audience: ["Executor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.executor", "git.executor", "evidence.rule", "card.fields", "drive.artifacts", "task.intent", "task.invariants", "task.acceptance", "task.scope", "task.freedom", "task.assignment", "answers.mine", "questions.protocol", "adr.protocol", "phases.bans", "i18n.rule", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["queue.coordinator", "review.protocol", "pilot.brief", "pilot.stop"],
       budget: { overhead: 2800 },
     });
     def("auditor.card", {
       audience: ["Auditor"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.protocol", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "repo.boundary", "role.zone", "authority.core", "authority.auditor", "git.auditor", "evidence.rule", "card.fields", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "answers.mine", "questions.protocol", "marker.agent"],
       requiredFacts: ["role.name", "role.fn", "target.repo", "target.baseBranch", "task.id", "task.runId"],
       forbidden: ["git.executor", "queue.coordinator", "pilot.brief"],
       budget: { overhead: 2200 },
@@ -10725,6 +10768,11 @@
       mission: missionId ? { id: missionId } : undefined,
       // D-035: адрес папки артефактов — иначе исполнитель/аудитор кладёт в корень.
       drive: { project: C.driveFolder || C.projectName || "" },
+      // D-080: ответ на свой вопрос этот агент видит в своём же промпте, а не
+      // только через Координатора. Строка готовится вызывающей стороной
+      // (`dispatchTask`), потому что база читается асинхронно, а сборка промпта
+      // — чистая функция.
+      queue: ctx.answersMine ? { answersMine: ctx.answersMine } : undefined,
       delivery: { tier: "full", attempt: 1 },
     };
     const delivery = PromptCompiler.forDelivery(request, {
@@ -12048,6 +12096,18 @@
    * Жёстко только необходимое: текст и вариант по умолчанию. Остальное —
    * подробности для Мастера, их отсутствие вопрос не отменяет.
    */
+  /**
+   * `gate` из ответа модели — единственный признак «ход стоит».
+   *
+   * Модель пишет булево как придётся: `true`, `"true"`, `"да"`, `1`. Принимаем
+   * все явные «да» и не считаем остановкой ничего невнятного: молчаливая
+   * остановка хода дороже, чем лишний вопрос без неё.
+   */
+  function questionGate(raw) {
+    const value = typeof raw === "string" ? raw.trim().toLowerCase() : raw;
+    return value === true || value === "true" || value === "да" || value === "yes" || value === 1 || value === "1";
+  }
+
   function parseQuestion(raw) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const text = questionTitle(raw.text, C.questionTextMax);
@@ -12056,7 +12116,13 @@
     const allOptions = questionOptions(raw.options);
     const fullText = questionWithOptions(raw.text, allOptions);
     const options = allOptions.slice(0, 4);
-    const hours = Number(raw.hours);
+    // D-080: `gate` — единственный признак «мне нужен ответ, чтобы продолжить».
+    // Раньше таким признаком был сам вопрос: любой вопрос переключал ход на
+    // приёмку, и цикл стоял до ответа, хотя промпт обещал «работа идёт по
+    // default». Теперь вопрос по умолчанию НЕ останавливает ход, а остановку
+    // просит явное поле (`gate: true` + `need`).
+    const gate = questionGate(raw.gate);
+    const need = gate ? oneLine(raw.need, 80) : "";
     return {
       text,
       fullText,
@@ -12064,7 +12130,8 @@
       options,
       url: questionMaterial(raw.url, raw.text),
       blocks: oneLine(raw.blocks, 200),
-      hours: Number.isFinite(hours) && hours >= 1 ? Math.min(hours, 168) : C.questionHours,
+      gate,
+      need,
     };
   }
 
@@ -12094,7 +12161,7 @@
     if (asked) return { kind: "asked", question: asked };
     const allOptions = questionOptions(obj.options);
     const options = allOptions.slice(0, 4);
-    const hours = Number(obj.hours);
+    const gate = questionGate(obj.gate);
     return {
       kind: "text",
       question: {
@@ -12103,21 +12170,28 @@
         options,
         url: questionMaterial(obj.url, rawText),
         blocks: oneLine(obj.blocks, 200),
-        hours: Number.isFinite(hours) && hours >= 1 ? Math.min(hours, 168) : C.questionHours,
+        gate,
+        need: gate ? oneLine(obj.need, 80) : "",
         fallback: questionFallback(fallback) || "Работа идёт по решению агента",
       },
     };
   }
 
-  /** Срок: когда молчание Мастера превращается в вариант по умолчанию. */
-  const questionDeadline = (hours, now = Date.now()) => new Date(now + hours * 3_600_000).toISOString();
-
-  /** Открытые вопросы, у которых срок уже вышел. */
-  function expiredQuestions(rows, now = Date.now()) {
+  // D-080: сроков у обратной связи больше нет.
+  //
+  // Прежняя механика (`Срок` + `Принят дефолт` + `closeExpired`) задумывалась,
+  // когда вопросы ждали Мастера сутками. С 1.4.80 на вопрос отвечает приёмка,
+  // и отвечает за один ход: срок не успевал сработать ни разу, а в базе и в
+  // промпте создавал третью, несуществующую модель («молчание = решение»).
+  // Поэтому транспорт больше не пишет `Срок` и не закрывает строки по времени:
+  // открытый вопрос остаётся открытым, пока на него не ответят.
+  // Поле `Срок` в самом Notion не удаляется — это история; его просто никто не
+  // читает (Notion не умеет надёжно удалять свойства, а история нужна).
+  /** Строки, которые старый транспорт закрывал по сроку: только для отчёта. */
+  function expiredQuestions(rows) {
     return (rows || []).filter((row) => {
       if (sel(row.properties?.["Статус"]) !== Q.wait) return false;
-      const due = row.properties?.["Срок"]?.date?.start || "";
-      return Boolean(due) && Date.parse(due) < now;
+      return Boolean(row.properties?.["Срок"]?.date?.start);
     });
   }
 
@@ -12159,6 +12233,31 @@
     // Половина общего порога — ответам, половина — открытым вопросам и журналу:
     // так обе части влезают вместе, а не по отдельности (см. fitBrief).
     return head + fitBrief(shown, more, head, all.length, Math.floor(C.answerBriefMax / 2));
+  }
+
+  /**
+   * D-080: ответы на вопросы КОНКРЕТНОЙ роли — для её собственного промпта.
+   *
+   * `answersLine` собирает ответы для плана Координатора и берёт всё подряд.
+   * Исполнителю и аудитору нужны только их строки: ответ на чужой вопрос — не
+   * его дело, а в бюджет он влезает как обычный балласт. Строка-источник
+   * (`Роль` в базе) пишется транспортом при записи вопроса, поэтому фильтр
+   * точный, а не по догадке.
+   */
+  function answersMineLine(rows, roleName) {
+    const mine = String(roleName || "").trim();
+    if (!mine) return "";
+    const own = (rows || []).filter((row) => norm(rt(row.properties?.["Роль"])) === norm(mine));
+    if (!own.length) return "";
+    const shown = own.slice(0, C.questionLineMax).map((row) => {
+      const title = rt(row.properties["Вопрос"]);
+      const answer = rt(row.properties["Ответ"]);
+      return `«${title}» → ${answer}`;
+    });
+    const more = own.length > shown.length ? `; и ещё ${own.length - shown.length}` : "";
+    // Тот же общий порог брифинга: ответы — данные, и они не должны съесть
+    // инструкции профиля (D-078). Половина порога — как у answersLine.
+    return fitBrief(shown, more, "", own.length, Math.floor(C.answerBriefMax / 2));
   }
 
   /**
@@ -12205,16 +12304,34 @@
   }
 
   /** Свойства строки базы «Вопросы». */
+  /**
+   * `Тип` строки: «Предложение» — всё, что про ADR, остальное «Вопрос».
+   *
+   * Правило то же, что несла формула в живой базе: ссылка на `docs/decisions/`
+   * или явное слово «предложение»/«ADR». Поле не влияет на решения — это
+   * подсказка Мастеру и Координатору, поэтому правило простое и проверяемое.
+   */
+  function questionType(q) {
+    if (q && q.proposal) return "Предложение";
+    const text = `${(q && q.text) || ""} ${(q && q.url) || ""} ${(q && q.fullText) || ""}`;
+    return /docs\/decisions\/|предложени|\badr\b/i.test(text) ? "Предложение" : "Вопрос";
+  }
+
   function questionProps(q, ctx = {}) {
     const text = (value) => ({ rich_text: richText(value) });
     const props = {
       "Вопрос": { title: [{ type: "text", text: { content: q.text } }] },
       "Статус": { select: { name: Q.wait } },
       "По умолчанию": text(q.fallback),
-      "Срок": { date: { start: questionDeadline(q.hours) } },
+      // D-080: `Срок` больше не пишется — механики сроков нет (см. комментарий
+      // у expiredQuestions). Поле остаётся в базе как история старых строк.
       "Роль": text(ctx.roleName || ""),
       "Карточка": text(ctx.card || "—"),
       "Миссия": text(ctx.mission || ""),
+      // D-080: `Тип` — select, значение ставит транспорт. В живой базе поле было
+      // формулой с ровно этим правилом; select делает то же самое, но его видно
+      // в схеме и он не спорит с проверкой подключения.
+      "Тип": { select: { name: questionType(q) } },
     };
     if (q.blocks) props["Что блокирует"] = text(q.blocks);
     if (q.options.length) props["Варианты"] = text(q.options.join(" · "));
@@ -12514,11 +12631,17 @@
           noteQuestionAsked(row, item.q);
           const bodySaved = await appendQuestionBody(row, item.q, item.ctx || {});
           if (bodySaved === false) return "body-pending";
-          queueAnswer(row, item.q, item.ctx || {});
-          log(`Отложенный вопрос записался: «${item.q.text}» — отвечает приёмка.`, false, {
-            ntfy: "quiet",
-            title: "Relay: вопрос приёмке",
-          });
+          // D-080: восстановленный из очереди вопрос ведёт себя так же, как
+          // только что заданный: держит ход только с `gate`.
+          const gate = item.q.gate === true || (item.ctx || {}).forceAnswer;
+          if (gate) queueAnswer(row, item.q, item.ctx || {});
+          log(
+            gate
+              ? `Отложенный вопрос записался: «${item.q.text}» — держит ход, ждёт ответа.`
+              : `Отложенный вопрос записался: «${item.q.text}» — ход идёт по «${item.q.fallback}», ответ придёт следующим промптом.`,
+            false,
+            { ntfy: "quiet", title: gate ? "Relay: вопрос держит ход" : "Relay: вопрос записан" },
+          );
           return "saved";
         } catch (e) {
           // Ошибка проверки дубля тоже означает повтор, а не запись вслепую.
@@ -12588,7 +12711,10 @@
     ]
       .filter(Boolean)
       .join("\n");
-    return { text, fullText: full, fallback, options, url, hours: 168 };
+    // `gate` восстанавливается по строке: он записан в «Что блокирует» как
+    // явная отметка. Вопрос без неё — обычный: работа идёт по default.
+    const gate = /\bждёт ответа\b/i.test(blocks) && Boolean(blocks.trim());
+    return { text, fullText: full, fallback, options, url, gate, need: "" };
   }
 
   /** Отметка «эту строку приёмке уже передавали» — чтобы не гонять её кругом. */
@@ -12663,7 +12789,12 @@
         const askedBefore = GM_getValue(key, false);
         // Для обычного маркера ключ защищает от повтора хода. Сторож ADR всё
         // равно сверяет Notion: строку могли отменить или удалить после записи.
-        if (askedBefore && !q.autoAdr) return null;
+        if (askedBefore && !q.autoAdr) {
+          // D-080: повтор того же вопроса не пишет строку второй раз, но
+          // `gate` обязан дойти до вызывающего: иначе «этот вопрос держит ход»
+          // терялся бы ровно на повторе — там, где он нужнее всего.
+          return q.gate ? { id: "", text: q.text, gate: true, need: q.need || "", repeat: true } : null;
+        }
         const same = await sameQuestionRow(q.text, {
           automatic: Boolean(q.autoAdr),
           material: questionMaterial(q.url, q.fullText || q.text),
@@ -12732,14 +12863,29 @@
           log(`Полный материал вопроса «${q.text}» отложен до записи в Notion; приёмку пока не вызываю.`, true, { ntfy: "quiet" });
           return row;
         }
-        // Вопрос сразу ставится в очередь приёмки: она отвечает вместо Мастера
-        // (1.4.80). Громкого пуша нет — вопрос больше не требует человека.
-        queueAnswer(row, q, ctx);
         forgetQuestionIntent(q, ctx);
-        log(`Вопрос записан: «${q.text}». По умолчанию: ${q.fallback} — отвечает приёмка.`, false, {
-          ntfy: "quiet",
-          title: "Relay: вопрос приёмке",
-        });
+        // D-080: приёмку зовёт только вопрос, который ДЕРЖИТ ход (`gate`).
+        // Обычный вопрос записывается и живёт строкой в базе: ход идёт дальше
+        // по своему варианту по умолчанию, как и обещает промпт. Раньше любой
+        // вопрос переключал цикл на приёмку, и «ступор, чтобы услышать мнение»
+        // выглядел так же, как «вопрос между делом», — разницы не было.
+        if (!q.gate && !ctx.forceAnswer) {
+          log(
+            `Вопрос записан: «${q.text}». По умолчанию работа идёт по нему: ${q.fallback}. ` +
+              "Ход не останавливается — ответ придёт в следующий промпт.",
+            false,
+            { ntfy: "quiet", title: "Relay: вопрос записан" },
+          );
+          return row;
+        }
+        // Gate: ход стоит, пока приёмка не ответит.
+        queueAnswer(row, q, ctx);
+        log(
+          `Вопрос записан: «${q.text}». Ход ждёт ответа${q.need ? ` от «${q.need}»` : ""} — ` +
+            `по умолчанию, если ответа не будет: ${q.fallback}.`,
+          false,
+          { ntfy: "quiet", title: "Relay: вопрос держит ход" },
+        );
         return row;
       } catch (e) {
         // Запись, которая уже не повторится, — потерянный вопрос: Мастер увидит
@@ -12756,67 +12902,64 @@
     });
   }
 
-  /** Отметить ответы доставленными — только после того, как промпт ушёл. */
-  async function markDelivered(rows, now = Date.now()) {
+  /**
+   * Отметить ответы доставленными — только после того, как промпт ушёл.
+   *
+   * D-080: отметка адресная. Пока ответы получал один Координатор, «Доставлено»
+   * значило «этот ответ обработан». С 1.14.8 ответ на свой вопрос получает ещё и
+   * автор вопроса, и одна общая отметка заставляла бы его получать ответ
+   * бесконечно: Координатор промпт отправил — строка «доставлена» навсегда, —
+   * а роль свою копию так и не увидела.
+   *
+   * Правило: `markDelivered(rows)` ставит дату и означает «ответ доставлен всем,
+   * кому он адресован». `markDelivered(rows, now, roleName)` пишет дату только
+   * если она ещё не стоит и только для строк этой роли: получатель один.
+   */
+  async function markDelivered(rows, now = Date.now(), roleName = "") {
+    const mine = String(roleName || "").trim();
     for (const row of rows || []) {
       try {
+        if (mine && norm(rt(row.properties?.["Роль"])) !== norm(mine)) continue;
+        if (mine && row.properties?.["Доставлено"]?.date?.start) continue;
         await patch(row.id, { "Доставлено": { date: { start: new Date(now).toISOString() } } });
+        // Своя копия строки больше не «свежая»: второй раз в тот же промпт она
+        // не попадёт, даже если цикл перечитает базу раньше Notion.
+        try {
+          if (row.properties) row.properties["Доставлено"] = { date: { start: new Date(now).toISOString() } };
+        } catch (e) {
+          dbg("ответы: локальная отметка не поставлена", e.message);
+        }
       } catch (e) {
         log(`Отметка о доставке ответа не записалась: ${e.message}`, true);
       }
     }
   }
 
-  /** Срок вышел — закрываем обычный вопрос вариантом по умолчанию, но не молча. */
+  /**
+   * D-080: вопрос НЕ закрывается по времени — ни частично, ни «по умолчанию».
+   *
+   * Прежняя версия закрывала строку статусом «Принят дефолт» и подставляла в
+   * «Ответ» вариант по умолчанию. Это третья модель обратной связи, которой
+   * больше нет: при живом маршруте «вопрос → приёмка» ответ приходит за один
+   * ход, а срок не срабатывал ни разу — зато в базе и в промпте он выглядел как
+   * настоящее решение. Открытый вопрос теперь остаётся открытым, пока на него
+   * не ответят.
+   *
+   * Функция сохранена (пробы и внешние вызовы), но всегда ничего не делает и
+   * считает только то, что ей передали: молча подменять поведение нельзя —
+   * вызывающий должен видеть ноль.
+   */
   async function closeExpired(rows, closedIds = null) {
-    let closed = 0;
-    for (const row of rows || []) {
-      const title = rt(row.properties["Вопрос"]);
-      if ((typeof questionBodyPending === "function" && questionBodyPending(row.id)) ||
-          (typeof questionQueuedForRow === "function" && questionQueuedForRow(row))) continue;
-      // ADR никогда не закрывается по сроку, даже если ссылка только в URL.
-      if (!rt(row.properties["По умолчанию"]) ||
-          /\bADR\b|docs\/decisions\//i.test(`${title} ${row.properties?.["Материал"]?.url || ""}`)) continue;
-      try {
-        const result = await withQuestionWriteLock(async () => {
-          // Снимок списка может устареть: Мастер уже ответил или срок изменён.
-          // Перечитываем прямо перед PATCH и не перезаписываем чужое решение.
-          const latest = await notion("GET", `pages/${row.id}`);
-          const state = sel(latest?.properties?.["Статус"]);
-          if (!state) throw new Error("статус строки не прочитан");
-          if (state !== Q.wait) {
-            recordQuestionChange(row.id, null);
-            if (closedIds) closedIds.add(row.id);
-            return null;
-          }
-          const props = latest.properties;
-          const freshTitle = rt(props["Вопрос"]);
-          const fallback = rt(props["По умолчанию"]);
-          const due = props["Срок"]?.date?.start || "";
-          if (rt(props["Ответ"]).trim() || !fallback || !due || !(Date.parse(due) < Date.now()) ||
-              (typeof questionBodyPending === "function" && questionBodyPending(row.id)) ||
-              (typeof questionQueuedForRow === "function" && questionQueuedForRow(latest)) ||
-              /\bADR\b|docs\/decisions\//i.test(`${freshTitle} ${props["Материал"]?.url || ""}`)) return null;
-          await patch(row.id, {
-            "Статус": { select: { name: Q.byDefault } },
-            "Ответ": { rich_text: richText(fallback) },
-          });
-          recordQuestionChange(row.id, null);
-          if (closedIds) closedIds.add(row.id);
-          return { freshTitle, fallback };
-        });
-        if (!result) continue;
-        closed += 1;
-        log(
-          `Вопрос «${result.freshTitle}» ждал дольше срока — принят вариант по умолчанию: ${result.fallback}.`,
-          false,
-          { ntfy: "quiet", title: "Relay: вопрос закрыт по умолчанию" },
-        );
-      } catch (e) {
-        log(`Вопрос «${title}» не закрылся по сроку: ${e.message}`, true);
-      }
+    const pending = (rows || []).filter((row) => row && row.id);
+    if (pending.length) {
+      log(
+        `Открытых вопросов со старым полем «Срок»: ${pending.length}. По сроку они больше не закрываются — ` +
+          "на вопрос отвечает приёмка, а «Принят дефолт» больше не ставится (D-080).",
+        false,
+        { ntfy: false },
+      );
     }
-    return closed;
+    return 0;
   }
 
   /** Строки базы «Вопросы» с нужным статусом, в пределах миссии. */
@@ -12846,7 +12989,12 @@
       ]);
       const fresh = answered.filter((row) =>
         !row.properties?.["Доставлено"]?.date?.start && rt(row.properties?.["Ответ"]).trim());
-      return { fresh, openLine: openQuestionsLine(open), answersLine: answersLine(fresh) };
+      return {
+        fresh,
+        openLine: openQuestionsLine(open),
+        answersLine: answersLine(fresh),
+        answersMine: (roleName) => answersMineLine(fresh, roleName),
+      };
     } catch (e) {
       log(`База «Обратная связь» не читается: ${e.message}`, true);
       return { fresh: [], openLine: "", answersLine: "" };
@@ -12987,7 +13135,12 @@
         .join("\n")),
       fallback: "оставить как есть",
       options: ["принять", "отклонить", "оставить как есть"],
-      hours: 168,
+      // D-080: ADR — единственный вид вопроса, который ДЕРЖИТ ход по своей
+      // природе: решение приёмки по контракту нельзя заменить вариантом по
+      // умолчанию. Теперь это сказано явно (`gate`), а не выводилось из
+      // «вопрос вообще существует».
+      gate: true,
+      need: "",
     };
   }
 
@@ -13724,12 +13877,26 @@
           });
         }
       }
-      // Вопрос не «висит» до конца хода: ход сразу переходит приёмке, а next из
-      // этого маркера не применяется — он посчитан без ответа. Ответ придёт
-      // Координатору следующим планом, строкой «Ответы на вопросы».
-      if (askedRow) {
+      // D-080: вопрос больше не съедает ход.
+      //
+      // Раньше здесь стояло «next не применяется — он посчитан без ответа»:
+      // любой вопрос Координатора останавливал план и отдавал ход приёмке. Так
+      // и выходило противоречие, на которое указал Мастер: чтобы услышать
+      // мнение Warden, Координатор обязан был встать, а «спросить между делом»
+      // и «встать в ступор» были одним и тем же действием.
+      // Теперь ход продолжается своим next, если вопрос НЕ держит ход.
+      // Держит — только явный `gate`.
+      if (askedRow && (askedRow.gate === true || askedRow.need)) {
         const item = answerQueue().find((row) => row.id === askedRow.id);
         if (item && (await startAnswer(mission, item))) return true;
+      }
+      if (askedRow) {
+        log(
+          `Вопрос Координатора записан («${oneLine(askedRow.text, 90)}») — ход идёт дальше по ` +
+            `next «${decision.next}»: ответ придёт следующим планом.`,
+          false,
+          { ntfy: "quiet" },
+        );
       }
       if (norm(decision.next) === "blocked") {
         // Право Координатора остановить цикл. Повод ровно один: нужной роли
@@ -13804,7 +13971,10 @@
             ...ask,
             text: typeof rawAsk === "object" && rawAsk ? rawAsk.text : rawAsk,
             default: questionFallback(ask.default) || "Ответ Мастера: цикл уже остановлен и ждёт его",
-            hours: Number(ask.hours) || 168,
+            // Вопрос при `blocked` задаётся уже стоящему циклу: он ждёт Мастера
+            // по определению, поэтому gate здесь не про «остановиться», а про
+            // «этот вопрос не закрывается сам».
+            gate: true,
           });
           if (asked) {
             askRow = await askQuestion(asked, {
@@ -15253,11 +15423,25 @@
       dispatchCtx.payloadPointer = payloadPointer;
     }
     let compileProblem = "";
+    // D-080: ответы на вопросы ЭТОЙ роли. Читаются здесь, а не в сборщике:
+    // сборка промпта — чистая функция, а база «Обратная связь» — сеть.
+    // Ошибка чтения не отменяет выдачу: карточка важнее брифинга.
+    let answersMine = "";
+    try {
+      const briefing = await questionBriefing(mission).catch(() => null);
+      answersMine = briefing?.answersMine ? briefing.answersMine(role.name) : "";
+    } catch (e) {
+      dbg("ответы роли не прочитаны", e.message);
+    }
     // logId в промпт не входит; журнал создаётся только после успешной сборки.
     const prompt = executorPrompt(fresh, role, payload, "", runId, mission?.id || "", {
       ...dispatchCtx,
+      answersMine,
       onCompileError: (reason) => { compileProblem = reason; },
     });
+    // Ответ, который ушёл роли в этом промпте, отмечается ей же — после того,
+    // как отправка подтвердилась (ниже). Здесь только запоминаем, что показали.
+    const answersShown = answersMine ? fresh : [];
     if (!prompt) {
       // Это отказ сборки, а не дубль и не сетевой сбой. Счётчик промахов ещё
       // не сброшен: Координатор получает причину через plan.note (D-042), а
@@ -15278,6 +15462,10 @@
         `статус не меняю, созданный пустой журнал ${logId} оставлен для проверки`;
     }
     GM_setValue("cfn-dispatch-miss", 0);
+    // D-080: промпт собран и карточка уходит в Running — ответы, показанные
+    // этой роли, считаются доставленными ей. Общая отметка (для Координатора)
+    // поставится его планом; здесь — только её собственные строки.
+    if (answersShown.length) await markDelivered(answersShown, Date.now(), role.name);
     await patch(card.id, {
       "Dispatch State": { select: { name: "Running" } },
       "Run ID": { rich_text: [{ type: "text", text: { content: runId } }] },

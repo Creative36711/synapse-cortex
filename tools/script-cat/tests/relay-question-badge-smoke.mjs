@@ -97,7 +97,7 @@ assert.doesNotThrow(() => api.paintQuestions(cache.rows), 'без DOM рисов
 assert.match(src, /if \(norm\(decision\.next\) !== "blocked"\)/, 'общий разбор вопроса не трогает остановку');
 assert.match(src, /const rawAsk = decision\.question;/, 'в остановке вопрос читается отдельно');
 assert.match(src, /Ответ Мастера: цикл уже остановлен и ждёт его/, 'прямой вариант по умолчанию — ждать Мастера');
-assert.match(src, /hours: Number\(ask\.hours\) \|\| 168/, 'срок остановочного вопроса — неделя, а не сутки');
+assert.match(src, /gate: true/, 'вопрос при остановке держит ход — сроков больше нет (D-080)');
 assert.match(src, /askRow = await askQuestion\(asked, \{/, 'вопрос записывается в базу «Вопросы»');
 assert.match(src, /ask: askText, asked: Boolean\(askRow\)/, 'и попадает в текст паузы');
 assert.match(src, /Координатор спрашивает: «\$\{ask\}»/, 'пауза называет суть вопроса словами Координатора');
@@ -110,10 +110,17 @@ assert.doesNotMatch(src, /cfn-q-check-at/, 'старый счётчик из т�
 assert.match(src, /paintQuestions\(openQuestions\(\)\.rows\);\n\s+watchQuestions\(\);/, 'панель показывает число сразу при сборке');
 
 // Вопрос задан — он уходит тихо: отвечает приёмка, а не человек (1.4.80).
+// D-080: Мастера не будит ни один вопрос. Держит ход только `gate`; обычный
+// вопрос пишется строкой и уходит в следующий промпт без пуша.
 assert.match(
   src,
-  /queueAnswer\(row, q, ctx\);\s*forgetQuestionIntent\(q, ctx\);\s*log\(`Вопрос записан:[\s\S]{0,260}?ntfy: "quiet"/,
-  'создание вопроса не будит Мастера, а ставит его в очередь приёмки',
+  /if \(!q\.gate && !ctx\.forceAnswer\) \{\s*\n\s*log\(\s*`Вопрос записан:[\s\S]{0,300}?ntfy: "quiet"/,
+  'обычный вопрос не будит Мастера и не держит ход',
+);
+assert.match(
+  src,
+  /queueAnswer\(row, q, ctx\);\s*\n\s*log\(\s*`Вопрос записан:[\s\S]{0,300}?ntfy: "quiet"/,
+  'вопрос с gate тоже пишется тихо',
 );
 
 console.log(

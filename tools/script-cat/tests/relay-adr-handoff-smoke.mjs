@@ -89,7 +89,7 @@ assert.match(asQuestion.fullText, /Вариант по умолчанию: ос�
 assert.equal(answerHandoffKey('row-wait'), 'cfn-q-handoff:row-wait', 'отметка о передаче привязана к строке');
 
 // ── 2. askQuestion не глушит висящую строку ───────────────────────────────
-const askSrc = cut('  async function askQuestion(q, ctx = {}) {', '  /** Отметить ответы доставленными');
+const askSrc = cut('  async function askQuestion(q, ctx = {}) {', '  /**\n   * Отметить ответы доставленными');
 assert.match(askSrc, /if \(status === Q\.wait && !answer\) \{/, 'различаются «Ждёт без ответа» и «решено»');
 assert.match(askSrc, /const complete = await questionFromRowComplete\(same\.row\);[\s\S]*?handWaitingRow\(same\.row, complete, ctx\);/, 'висящая строка ставится в очередь приёмки');
 assert.match(askSrc, /return same\.row;/, 'строка возвращается вызывающему, а не теряется');

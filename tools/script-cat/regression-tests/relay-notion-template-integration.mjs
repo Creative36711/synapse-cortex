@@ -35,11 +35,15 @@ for (const option of ['Черновик', 'Пауза']) {
   assert.ok(db.missions.properties['Состояние'].select.options.some(x => x.name === option));
 }
 assert.ok(db.requests.properties.Check.select.options.some(x => x.name === 'none'));
-assert.equal(db.feedback.properties['Тип'], undefined, 'зависимая формула создаётся отдельным шагом');
-const expression = template.afterCreate.feedback['Тип'].formula.expression;
-assert.match(expression, /prop\("Вопрос"\)/);
-assert.match(expression, /prop\("Материал"\)/);
-assert.match(expression, /Предложение/);
-assert.match(expression, /Вопрос/);
+// D-080: `Тип` — такой же select, как остальные поля: его пишет транспорт
+// (`questionProps`), а не формула. Раньше поле жило только в afterCreate, и
+// схема базы его не знала — проверка подключения о нём молчала.
+const typ = db.feedback.properties['Тип'];
+assert.ok(typ && typ.select, 'Тип — select в самой базе, а не формула в afterCreate');
+for (const option of ['Вопрос', 'Предложение']) {
+  assert.ok(typ.select.options.some((x) => x.name === option), `Тип: есть вариант «${option}»`);
+}
+assert.equal(template.afterCreate, undefined, 'отдельных шагов после создания не осталось');
+assert.equal(db.feedback.properties['Срок'].date !== undefined, true, 'Срок остаётся в схеме как история');
 assert.doesNotMatch(JSON.stringify(template), /ed076bfe|c84a3f11|11b41fcc|54ac1a79/, 'старые ID не копируются');
 console.log('relay-notion-template-integration: ok (контракт и дополнительные поля; без Notion API)');

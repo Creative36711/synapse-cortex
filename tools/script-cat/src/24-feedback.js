@@ -382,6 +382,18 @@
    * Жёстко только необходимое: текст и вариант по умолчанию. Остальное —
    * подробности для Мастера, их отсутствие вопрос не отменяет.
    */
+  /**
+   * `gate` из ответа модели — единственный признак «ход стоит».
+   *
+   * Модель пишет булево как придётся: `true`, `"true"`, `"да"`, `1`. Принимаем
+   * все явные «да» и не считаем остановкой ничего невнятного: молчаливая
+   * остановка хода дороже, чем лишний вопрос без неё.
+   */
+  function questionGate(raw) {
+    const value = typeof raw === "string" ? raw.trim().toLowerCase() : raw;
+    return value === true || value === "true" || value === "да" || value === "yes" || value === 1 || value === "1";
+  }
+
   function parseQuestion(raw) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const text = questionTitle(raw.text, C.questionTextMax);
@@ -390,7 +402,13 @@
     const allOptions = questionOptions(raw.options);
     const fullText = questionWithOptions(raw.text, allOptions);
     const options = allOptions.slice(0, 4);
-    const hours = Number(raw.hours);
+    // D-080: `gate` — единственный признак «мне нужен ответ, чтобы продолжить».
+    // Раньше таким признаком был сам вопрос: любой вопрос переключал ход на
+    // приёмку, и цикл стоял до ответа, хотя промпт обещал «работа идёт по
+    // default». Теперь вопрос по умолчанию НЕ останавливает ход, а остановку
+    // просит явное поле (`gate: true` + `need`).
+    const gate = questionGate(raw.gate);
+    const need = gate ? oneLine(raw.need, 80) : "";
     return {
       text,
       fullText,
@@ -398,7 +416,8 @@
       options,
       url: questionMaterial(raw.url, raw.text),
       blocks: oneLine(raw.blocks, 200),
-      hours: Number.isFinite(hours) && hours >= 1 ? Math.min(hours, 168) : C.questionHours,
+      gate,
+      need,
     };
   }
 
@@ -428,7 +447,7 @@
     if (asked) return { kind: "asked", question: asked };
     const allOptions = questionOptions(obj.options);
     const options = allOptions.slice(0, 4);
-    const hours = Number(obj.hours);
+    const gate = questionGate(obj.gate);
     return {
       kind: "text",
       question: {
@@ -437,21 +456,28 @@
         options,
         url: questionMaterial(obj.url, rawText),
         blocks: oneLine(obj.blocks, 200),
-        hours: Number.isFinite(hours) && hours >= 1 ? Math.min(hours, 168) : C.questionHours,
+        gate,
+        need: gate ? oneLine(obj.need, 80) : "",
         fallback: questionFallback(fallback) || "Работа идёт по решению агента",
       },
     };
   }
 
-  /** Срок: когда молчание Мастера превращается в вариант по умолчанию. */
-  const questionDeadline = (hours, now = Date.now()) => new Date(now + hours * 3_600_000).toISOString();
-
-  /** Открытые вопросы, у которых срок уже вышел. */
-  function expiredQuestions(rows, now = Date.now()) {
+  // D-080: сроков у обратной связи больше нет.
+  //
+  // Прежняя механика (`Срок` + `Принят дефолт` + `closeExpired`) задумывалась,
+  // когда вопросы ждали Мастера сутками. С 1.4.80 на вопрос отвечает приёмка,
+  // и отвечает за один ход: срок не успевал сработать ни разу, а в базе и в
+  // промпте создавал третью, несуществующую модель («молчание = решение»).
+  // Поэтому транспорт больше не пишет `Срок` и не закрывает строки по времени:
+  // открытый вопрос остаётся открытым, пока на него не ответят.
+  // Поле `Срок` в самом Notion не удаляется — это история; его просто никто не
+  // читает (Notion не умеет надёжно удалять свойства, а история нужна).
+  /** Строки, которые старый транспорт закрывал по сроку: только для отчёта. */
+  function expiredQuestions(rows) {
     return (rows || []).filter((row) => {
       if (sel(row.properties?.["Статус"]) !== Q.wait) return false;
-      const due = row.properties?.["Срок"]?.date?.start || "";
-      return Boolean(due) && Date.parse(due) < now;
+      return Boolean(row.properties?.["Срок"]?.date?.start);
     });
   }
 
@@ -493,6 +519,31 @@
     // Половина общего порога — ответам, половина — открытым вопросам и журналу:
     // так обе части влезают вместе, а не по отдельности (см. fitBrief).
     return head + fitBrief(shown, more, head, all.length, Math.floor(C.answerBriefMax / 2));
+  }
+
+  /**
+   * D-080: ответы на вопросы КОНКРЕТНОЙ роли — для её собственного промпта.
+   *
+   * `answersLine` собирает ответы для плана Координатора и берёт всё подряд.
+   * Исполнителю и аудитору нужны только их строки: ответ на чужой вопрос — не
+   * его дело, а в бюджет он влезает как обычный балласт. Строка-источник
+   * (`Роль` в базе) пишется транспортом при записи вопроса, поэтому фильтр
+   * точный, а не по догадке.
+   */
+  function answersMineLine(rows, roleName) {
+    const mine = String(roleName || "").trim();
+    if (!mine) return "";
+    const own = (rows || []).filter((row) => norm(rt(row.properties?.["Роль"])) === norm(mine));
+    if (!own.length) return "";
+    const shown = own.slice(0, C.questionLineMax).map((row) => {
+      const title = rt(row.properties["Вопрос"]);
+      const answer = rt(row.properties["Ответ"]);
+      return `«${title}» → ${answer}`;
+    });
+    const more = own.length > shown.length ? `; и ещё ${own.length - shown.length}` : "";
+    // Тот же общий порог брифинга: ответы — данные, и они не должны съесть
+    // инструкции профиля (D-078). Половина порога — как у answersLine.
+    return fitBrief(shown, more, "", own.length, Math.floor(C.answerBriefMax / 2));
   }
 
   /**
@@ -539,16 +590,34 @@
   }
 
   /** Свойства строки базы «Вопросы». */
+  /**
+   * `Тип` строки: «Предложение» — всё, что про ADR, остальное «Вопрос».
+   *
+   * Правило то же, что несла формула в живой базе: ссылка на `docs/decisions/`
+   * или явное слово «предложение»/«ADR». Поле не влияет на решения — это
+   * подсказка Мастеру и Координатору, поэтому правило простое и проверяемое.
+   */
+  function questionType(q) {
+    if (q && q.proposal) return "Предложение";
+    const text = `${(q && q.text) || ""} ${(q && q.url) || ""} ${(q && q.fullText) || ""}`;
+    return /docs\/decisions\/|предложени|\badr\b/i.test(text) ? "Предложение" : "Вопрос";
+  }
+
   function questionProps(q, ctx = {}) {
     const text = (value) => ({ rich_text: richText(value) });
     const props = {
       "Вопрос": { title: [{ type: "text", text: { content: q.text } }] },
       "Статус": { select: { name: Q.wait } },
       "По умолчанию": text(q.fallback),
-      "Срок": { date: { start: questionDeadline(q.hours) } },
+      // D-080: `Срок` больше не пишется — механики сроков нет (см. комментарий
+      // у expiredQuestions). Поле остаётся в базе как история старых строк.
       "Роль": text(ctx.roleName || ""),
       "Карточка": text(ctx.card || "—"),
       "Миссия": text(ctx.mission || ""),
+      // D-080: `Тип` — select, значение ставит транспорт. В живой базе поле было
+      // формулой с ровно этим правилом; select делает то же самое, но его видно
+      // в схеме и он не спорит с проверкой подключения.
+      "Тип": { select: { name: questionType(q) } },
     };
     if (q.blocks) props["Что блокирует"] = text(q.blocks);
     if (q.options.length) props["Варианты"] = text(q.options.join(" · "));
@@ -848,11 +917,17 @@
           noteQuestionAsked(row, item.q);
           const bodySaved = await appendQuestionBody(row, item.q, item.ctx || {});
           if (bodySaved === false) return "body-pending";
-          queueAnswer(row, item.q, item.ctx || {});
-          log(`Отложенный вопрос записался: «${item.q.text}» — отвечает приёмка.`, false, {
-            ntfy: "quiet",
-            title: "Relay: вопрос приёмке",
-          });
+          // D-080: восстановленный из очереди вопрос ведёт себя так же, как
+          // только что заданный: держит ход только с `gate`.
+          const gate = item.q.gate === true || (item.ctx || {}).forceAnswer;
+          if (gate) queueAnswer(row, item.q, item.ctx || {});
+          log(
+            gate
+              ? `Отложенный вопрос записался: «${item.q.text}» — держит ход, ждёт ответа.`
+              : `Отложенный вопрос записался: «${item.q.text}» — ход идёт по «${item.q.fallback}», ответ придёт следующим промптом.`,
+            false,
+            { ntfy: "quiet", title: gate ? "Relay: вопрос держит ход" : "Relay: вопрос записан" },
+          );
           return "saved";
         } catch (e) {
           // Ошибка проверки дубля тоже означает повтор, а не запись вслепую.
@@ -922,7 +997,10 @@
     ]
       .filter(Boolean)
       .join("\n");
-    return { text, fullText: full, fallback, options, url, hours: 168 };
+    // `gate` восстанавливается по строке: он записан в «Что блокирует» как
+    // явная отметка. Вопрос без неё — обычный: работа идёт по default.
+    const gate = /\bждёт ответа\b/i.test(blocks) && Boolean(blocks.trim());
+    return { text, fullText: full, fallback, options, url, gate, need: "" };
   }
 
   /** Отметка «эту строку приёмке уже передавали» — чтобы не гонять её кругом. */
@@ -997,7 +1075,12 @@
         const askedBefore = GM_getValue(key, false);
         // Для обычного маркера ключ защищает от повтора хода. Сторож ADR всё
         // равно сверяет Notion: строку могли отменить или удалить после записи.
-        if (askedBefore && !q.autoAdr) return null;
+        if (askedBefore && !q.autoAdr) {
+          // D-080: повтор того же вопроса не пишет строку второй раз, но
+          // `gate` обязан дойти до вызывающего: иначе «этот вопрос держит ход»
+          // терялся бы ровно на повторе — там, где он нужнее всего.
+          return q.gate ? { id: "", text: q.text, gate: true, need: q.need || "", repeat: true } : null;
+        }
         const same = await sameQuestionRow(q.text, {
           automatic: Boolean(q.autoAdr),
           material: questionMaterial(q.url, q.fullText || q.text),
@@ -1066,14 +1149,29 @@
           log(`Полный материал вопроса «${q.text}» отложен до записи в Notion; приёмку пока не вызываю.`, true, { ntfy: "quiet" });
           return row;
         }
-        // Вопрос сразу ставится в очередь приёмки: она отвечает вместо Мастера
-        // (1.4.80). Громкого пуша нет — вопрос больше не требует человека.
-        queueAnswer(row, q, ctx);
         forgetQuestionIntent(q, ctx);
-        log(`Вопрос записан: «${q.text}». По умолчанию: ${q.fallback} — отвечает приёмка.`, false, {
-          ntfy: "quiet",
-          title: "Relay: вопрос приёмке",
-        });
+        // D-080: приёмку зовёт только вопрос, который ДЕРЖИТ ход (`gate`).
+        // Обычный вопрос записывается и живёт строкой в базе: ход идёт дальше
+        // по своему варианту по умолчанию, как и обещает промпт. Раньше любой
+        // вопрос переключал цикл на приёмку, и «ступор, чтобы услышать мнение»
+        // выглядел так же, как «вопрос между делом», — разницы не было.
+        if (!q.gate && !ctx.forceAnswer) {
+          log(
+            `Вопрос записан: «${q.text}». По умолчанию работа идёт по нему: ${q.fallback}. ` +
+              "Ход не останавливается — ответ придёт в следующий промпт.",
+            false,
+            { ntfy: "quiet", title: "Relay: вопрос записан" },
+          );
+          return row;
+        }
+        // Gate: ход стоит, пока приёмка не ответит.
+        queueAnswer(row, q, ctx);
+        log(
+          `Вопрос записан: «${q.text}». Ход ждёт ответа${q.need ? ` от «${q.need}»` : ""} — ` +
+            `по умолчанию, если ответа не будет: ${q.fallback}.`,
+          false,
+          { ntfy: "quiet", title: "Relay: вопрос держит ход" },
+        );
         return row;
       } catch (e) {
         // Запись, которая уже не повторится, — потерянный вопрос: Мастер увидит
@@ -1090,67 +1188,64 @@
     });
   }
 
-  /** Отметить ответы доставленными — только после того, как промпт ушёл. */
-  async function markDelivered(rows, now = Date.now()) {
+  /**
+   * Отметить ответы доставленными — только после того, как промпт ушёл.
+   *
+   * D-080: отметка адресная. Пока ответы получал один Координатор, «Доставлено»
+   * значило «этот ответ обработан». С 1.14.8 ответ на свой вопрос получает ещё и
+   * автор вопроса, и одна общая отметка заставляла бы его получать ответ
+   * бесконечно: Координатор промпт отправил — строка «доставлена» навсегда, —
+   * а роль свою копию так и не увидела.
+   *
+   * Правило: `markDelivered(rows)` ставит дату и означает «ответ доставлен всем,
+   * кому он адресован». `markDelivered(rows, now, roleName)` пишет дату только
+   * если она ещё не стоит и только для строк этой роли: получатель один.
+   */
+  async function markDelivered(rows, now = Date.now(), roleName = "") {
+    const mine = String(roleName || "").trim();
     for (const row of rows || []) {
       try {
+        if (mine && norm(rt(row.properties?.["Роль"])) !== norm(mine)) continue;
+        if (mine && row.properties?.["Доставлено"]?.date?.start) continue;
         await patch(row.id, { "Доставлено": { date: { start: new Date(now).toISOString() } } });
+        // Своя копия строки больше не «свежая»: второй раз в тот же промпт она
+        // не попадёт, даже если цикл перечитает базу раньше Notion.
+        try {
+          if (row.properties) row.properties["Доставлено"] = { date: { start: new Date(now).toISOString() } };
+        } catch (e) {
+          dbg("ответы: локальная отметка не поставлена", e.message);
+        }
       } catch (e) {
         log(`Отметка о доставке ответа не записалась: ${e.message}`, true);
       }
     }
   }
 
-  /** Срок вышел — закрываем обычный вопрос вариантом по умолчанию, но не молча. */
+  /**
+   * D-080: вопрос НЕ закрывается по времени — ни частично, ни «по умолчанию».
+   *
+   * Прежняя версия закрывала строку статусом «Принят дефолт» и подставляла в
+   * «Ответ» вариант по умолчанию. Это третья модель обратной связи, которой
+   * больше нет: при живом маршруте «вопрос → приёмка» ответ приходит за один
+   * ход, а срок не срабатывал ни разу — зато в базе и в промпте он выглядел как
+   * настоящее решение. Открытый вопрос теперь остаётся открытым, пока на него
+   * не ответят.
+   *
+   * Функция сохранена (пробы и внешние вызовы), но всегда ничего не делает и
+   * считает только то, что ей передали: молча подменять поведение нельзя —
+   * вызывающий должен видеть ноль.
+   */
   async function closeExpired(rows, closedIds = null) {
-    let closed = 0;
-    for (const row of rows || []) {
-      const title = rt(row.properties["Вопрос"]);
-      if ((typeof questionBodyPending === "function" && questionBodyPending(row.id)) ||
-          (typeof questionQueuedForRow === "function" && questionQueuedForRow(row))) continue;
-      // ADR никогда не закрывается по сроку, даже если ссылка только в URL.
-      if (!rt(row.properties["По умолчанию"]) ||
-          /\bADR\b|docs\/decisions\//i.test(`${title} ${row.properties?.["Материал"]?.url || ""}`)) continue;
-      try {
-        const result = await withQuestionWriteLock(async () => {
-          // Снимок списка может устареть: Мастер уже ответил или срок изменён.
-          // Перечитываем прямо перед PATCH и не перезаписываем чужое решение.
-          const latest = await notion("GET", `pages/${row.id}`);
-          const state = sel(latest?.properties?.["Статус"]);
-          if (!state) throw new Error("статус строки не прочитан");
-          if (state !== Q.wait) {
-            recordQuestionChange(row.id, null);
-            if (closedIds) closedIds.add(row.id);
-            return null;
-          }
-          const props = latest.properties;
-          const freshTitle = rt(props["Вопрос"]);
-          const fallback = rt(props["По умолчанию"]);
-          const due = props["Срок"]?.date?.start || "";
-          if (rt(props["Ответ"]).trim() || !fallback || !due || !(Date.parse(due) < Date.now()) ||
-              (typeof questionBodyPending === "function" && questionBodyPending(row.id)) ||
-              (typeof questionQueuedForRow === "function" && questionQueuedForRow(latest)) ||
-              /\bADR\b|docs\/decisions\//i.test(`${freshTitle} ${props["Материал"]?.url || ""}`)) return null;
-          await patch(row.id, {
-            "Статус": { select: { name: Q.byDefault } },
-            "Ответ": { rich_text: richText(fallback) },
-          });
-          recordQuestionChange(row.id, null);
-          if (closedIds) closedIds.add(row.id);
-          return { freshTitle, fallback };
-        });
-        if (!result) continue;
-        closed += 1;
-        log(
-          `Вопрос «${result.freshTitle}» ждал дольше срока — принят вариант по умолчанию: ${result.fallback}.`,
-          false,
-          { ntfy: "quiet", title: "Relay: вопрос закрыт по умолчанию" },
-        );
-      } catch (e) {
-        log(`Вопрос «${title}» не закрылся по сроку: ${e.message}`, true);
-      }
+    const pending = (rows || []).filter((row) => row && row.id);
+    if (pending.length) {
+      log(
+        `Открытых вопросов со старым полем «Срок»: ${pending.length}. По сроку они больше не закрываются — ` +
+          "на вопрос отвечает приёмка, а «Принят дефолт» больше не ставится (D-080).",
+        false,
+        { ntfy: false },
+      );
     }
-    return closed;
+    return 0;
   }
 
   /** Строки базы «Вопросы» с нужным статусом, в пределах миссии. */
@@ -1180,7 +1275,12 @@
       ]);
       const fresh = answered.filter((row) =>
         !row.properties?.["Доставлено"]?.date?.start && rt(row.properties?.["Ответ"]).trim());
-      return { fresh, openLine: openQuestionsLine(open), answersLine: answersLine(fresh) };
+      return {
+        fresh,
+        openLine: openQuestionsLine(open),
+        answersLine: answersLine(fresh),
+        answersMine: (roleName) => answersMineLine(fresh, roleName),
+      };
     } catch (e) {
       log(`База «Обратная связь» не читается: ${e.message}`, true);
       return { fresh: [], openLine: "", answersLine: "" };

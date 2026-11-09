@@ -132,7 +132,7 @@ has('Ready с меньшим Sequence не обходи', 'правило зап
 // ── 3. Дедупликация вопросов поведением ───────────────────────────────────
 const intentSrc = cut('  const questionIntents = () => {', '  function queueQuestion(q, ctx = {}) {');
 const dedupeSrc = cut('  const adrRefsOf = (text) => {', '  async function askQuestion(q, ctx = {}) {');
-const askSrc = cut('  async function askQuestion(q, ctx = {}) {', '  /** Отметить ответы доставленными');
+const askSrc = cut('  async function askQuestion(q, ctx = {}) {', '  /**\n   * Отметить ответы доставленными');
 const extractAdrRefs = new Function(`${dedupeSrc}\nreturn adrRefsOf;`)();
 assert.ok(extractAdrRefs('ORBIT_X-7.19').has('adr:orbit_x-7.19'), 'ссылки другого проекта распознаются');
 assert.equal(extractAdrRefs('ORBIT_X-7').size, 0, 'номер миссии не склеивает разные предложения');

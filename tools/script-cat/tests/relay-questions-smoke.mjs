@@ -38,7 +38,7 @@ const liveRows = new Map();
 const api = new Function(
   'C', 'rt', 'sel', 'norm', 'GM_getValue', 'GM_setValue', 'notion', 'patch', 'log', 'K', 'noteQuestionAsked', 'dbg', 'queueAnswer', 'richText', 'query',
   `${block}
-   return { Q, parseQuestion, questionDeadline, expiredQuestions, openQuestionsLine, answersLine, questionProps, askQuestion, markDelivered, closeExpired };`,
+   return { Q, parseQuestion, expiredQuestions, openQuestionsLine, answersLine, questionProps, askQuestion, markDelivered, closeExpired };`,
 )(
   { questionHours: 24, questionLineMax: 3, questionTextMax: 180, questionDefaultMax: 200, questions: 'ds-questions' },
   (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || '').join(''),
@@ -84,7 +84,7 @@ const props = (over = {}) => ({
   'Ответ': { rich_text: over.answer ? [{ plain_text: over.answer }] : [] },
   'Срок': { date: over.due === undefined ? { start: '2026-10-26T10:00:00.000Z' } : over.due ? { start: over.due } : null },
   'Доставлено': { date: over.delivered ? { start: over.delivered } : null },
-  'Роль': { rich_text: [] },
+  'Роль': { rich_text: over.role ? [{ plain_text: over.role }] : [] },
   'Карточка': { rich_text: [] },
   'Миссия': { rich_text: [{ plain_text: 'NAR-2' }] },
   'Варианты': { rich_text: [] },
@@ -93,11 +93,14 @@ const props = (over = {}) => ({
 
 // ── 1. Разбор поля question ────────────────────────────────────────────────
 {
-  const q = api.parseQuestion({ text: '  Менять ли   оракул? ', default: 'не менять', options: ['A', 'B', 'C'], hours: 6 });
+  const q = api.parseQuestion({ text: '  Менять ли   оракул? ', default: 'не менять', options: ['A', 'B', 'C'], gate: true, need: 'Warden' });
   assert.equal(q.text, 'Менять ли оракул?', 'текст в одну строку');
   assert.equal(q.fallback, 'не менять', 'вариант по умолчанию');
   assert.deepEqual(q.options, ['A', 'B', 'C'], 'варианты сохранены');
-  assert.equal(q.hours, 6, 'срок из вопроса');
+  // D-080: сроков нет, ход останавливает только gate.
+  assert.equal(q.gate, true, 'gate читается из вопроса');
+  assert.equal(q.need, 'Warden', 'need называет, чьё мнение нужно');
+  assert.equal(api.parseQuestion({ text: 'Вопрос?', default: 'A' }).gate, false, 'обычный вопрос ход не держит');
 
   assert.equal(api.parseQuestion({ text: 'Вопрос без дефолта' }), null, 'без варианта по умолчанию — не вопрос');
   assert.equal(api.parseQuestion({ default: 'A' }), null, 'без текста — не вопрос');
@@ -107,19 +110,21 @@ const props = (over = {}) => ({
 
   const many = api.parseQuestion({ text: 'q', default: 'a', options: ['1', '2', '3', '4', '5', '6'] });
   assert.equal(many.options.length, 4, 'вариантов не больше четырёх');
-  assert.equal(api.parseQuestion({ text: 'q', default: 'a', hours: 0 }).hours, 24, 'нулевой срок — по умолчанию');
-  assert.equal(api.parseQuestion({ text: 'q', default: 'a', hours: 9999 }).hours, 168, 'срок не длиннее недели');
+  assert.equal(api.parseQuestion({ text: 'q', default: 'a', gate: 'да' }).gate, true, 'gate строкой — это да');
+  assert.equal(api.parseQuestion({ text: 'q', default: 'a' }).hours, undefined, 'срока в вопросе больше нет');
   assert.ok(api.parseQuestion({ text: 'x'.repeat(500), default: 'a' }).text.length <= 180, 'текст обрезан');
 }
 
 // ── 2. Строка записи: статус, срок, вариант по умолчанию ───────────────────
 {
-  const q = api.parseQuestion({ text: 'Сжигать ли старую копию?', default: 'оставить', options: ['A', 'B'], hours: 2, blocks: 'NAR-2.6' });
+  const q = api.parseQuestion({ text: 'Сжигать ли старую копию?', default: 'оставить', options: ['A', 'B'], blocks: 'NAR-2.6' });
   const properties = api.questionProps(q, { roleName: 'Coordinator', card: 'NAR-2.6', mission: 'NAR-2' });
   assert.equal(properties['Статус'].select.name, 'Ждёт', 'ждёт ответа');
   assert.equal(properties['Вопрос'].title[0].text.content, 'Сжигать ли старую копию?', 'текст — заголовок строки');
   assert.equal(properties['По умолчанию'].rich_text[0].text.content, 'оставить', 'вариант по умолчанию в строке');
-  assert.match(properties['Срок'].date.start, /^\d{4}-\d{2}-\d{2}T/, 'срок — дата');
+  // D-080: поле «Срок» в базе осталось историей, транспорт его больше не пишет.
+  assert.equal(properties['Срок'], undefined, 'срок не пишется: сроков в поведении нет');
+  assert.equal(properties['Тип'].select.name, 'Вопрос', 'тип строки ставит транспорт');
   assert.equal(properties['Варианты'].rich_text[0].text.content, 'A · B', 'варианты одной строкой');
   assert.equal(properties['Что блокирует'].rich_text[0].text.content, 'NAR-2.6', 'что блокирует');
   assert.equal(properties['Роль'].rich_text[0].text.content, 'Coordinator', 'роль автора');
@@ -139,7 +144,9 @@ const props = (over = {}) => ({
     { id: 'c', properties: props({ status: 'Решено', due: '2026-10-20T00:00:00.000Z' }) },
     { id: 'd', properties: props({ status: 'Ждёт', due: null }) },
   ];
-  assert.deepEqual(api.expiredQuestions(rows, now).map((r) => r.id), ['a'], 'истёк только один');
+  // D-080: сроков нет. Функция осталась только как «есть старый Срок» — для
+  // предупреждения при подключении; закрывать по ней нечего.
+  assert.deepEqual(api.expiredQuestions(rows, now).map((r) => r.id), ['a', 'b'], 'старый срок виден у всех, кто ждёт');
   assert.deepEqual(api.expiredQuestions([], now), [], 'пусто — пусто');
 }
 
@@ -194,7 +201,10 @@ const run = async () => {
   assert.equal(created[0].path, 'pages', 'через pages');
   assert.equal(created[0].body.parent.data_source_id, 'ds-questions', 'пишем в базу «Вопросы»');
   assert.equal(created[0].body.parent.type, 'data_source_id', 'родитель — источник данных');
-  assert.match(lines.at(-1), /По умолчанию: оставить — отвечает приёмка/, 'в журнале сказано, кто отвечает');
+  // D-080: обычный вопрос не зовёт приёмку и не держит ход — журнал говорит
+  // прямо, что ход идёт дальше и ответ придёт в следующий промпт.
+  assert.match(lines.at(-1), /По умолчанию работа идёт по нему: оставить/, 'в журнале есть вариант, по которому идём');
+  assert.match(lines.at(-1), /Ход не останавливается/, 'и сказано, что ход не стоит');
 
   await api.askQuestion(q, { key: 'turn-1' });
   assert.equal(created.length, 1, 'повторный маркер того же хода не создаёт вторую строку');
@@ -239,11 +249,19 @@ const run = async () => {
   assert.equal(none, null, 'ошибка записи не возвращает строку');
   assert.match(lines.at(-1), /идёт по варианту по умолчанию/, 'и не срывает ход');
 
-  // ── 6. Доставка ответа и закрытие по сроку ───────────────────────────────
+  // ── 6. Доставка ответа адресная, закрытия по сроку нет (D-080) ───────────
   patched.length = 0;
-  await api.markDelivered([{ id: 'row-3' }, { id: 'row-4' }]);
-  assert.equal(patched.length, 2, 'отметка ставится каждой строке');
+  const deliveredRows = [
+    { id: 'row-3', properties: props({ role: 'Executor' }) },
+    { id: 'row-4', properties: props({ role: 'Auditor' }) },
+  ];
+  await api.markDelivered(deliveredRows, Date.now(), 'Executor');
+  assert.equal(patched.length, 1, 'отметка ставится только тому, кому доставлено');
   assert.match(patched[0].properties['Доставлено'].date.start, /^\d{4}-/, 'дата доставки записана');
+
+  patched.length = 0;
+  await api.markDelivered(deliveredRows);
+  assert.equal(patched.length, 2, 'без роли отметка ставится всем адресатам');
 
   patched.length = 0;
   const expiredRows = [
@@ -252,10 +270,9 @@ const run = async () => {
   ];
   for (const row of expiredRows) liveRows.set(row.id, row);
   const closed = await api.closeExpired(expiredRows);
-  assert.equal(closed, 1, 'закрыт только тот, у кого есть вариант по умолчанию');
-  assert.equal(patched[0].properties['Статус'].select.name, 'Принят дефолт', 'статус — принят дефолт');
-  assert.equal(patched[0].properties['Ответ'].rich_text[0].text.content, 'не менять', 'ответ — вариант по умолчанию');
-  assert.match(lines.find((line) => /ждал дольше срока/.test(line)), /принят вариант по умолчанию/, 'закрытие не молчит');
+  assert.equal(closed, 0, 'по сроку не закрывается ничего');
+  assert.equal(patched.length, 0, 'ни статус, ни ответ не переписываются');
+  assert.match(lines.at(-1), /больше не закрываются/, 'предупреждение о старом поле «Срок» не молчит');
 
   // ── 7. Подключение к ходу ────────────────────────────────────────────────
   assert.match(src, /questionInMarker\(decision\.question, "Работа идёт по решению Координатора"\)/, 'вопрос Координатора разбирается из маркера');

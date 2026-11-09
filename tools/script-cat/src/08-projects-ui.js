@@ -83,10 +83,19 @@
         { "Состояние": ["Активна", "Возвращена", "Завершена", "Провалена"] }],
       ["Запросы", C.requests, { "Запрос": "title", "Миссия": "rich_text", "Mission ID": "rich_text", "Dependency": "rich_text", "Кому": "select", "Sequence": "number", "Dispatch State": "select", "Run ID": "rich_text", "Recipient Agent ID": "rich_text", "Started At": "date", "Submitted At": "date", "PR": "url", "Check": "select", "Output Drive File ID": "rich_text", "Payload Drive File ID": "rich_text", "Намерение": "rich_text", "Инварианты": "rich_text", "Acceptance": "rich_text", "Свободно": "rich_text", "Scope": "rich_text", "Ответ": "rich_text", "Branch": "rich_text", "Report SHA": "rich_text" },
         { "Dispatch State": ["Draft", "Ready", "Running", "Submitted", "Accepted", "Rework", "Blocked"], "Check": ["pass", "fail"] }],
-      ["Обратная связь", C.questions, { "Вопрос": "title", "Статус": "select", "По умолчанию": "rich_text", "Ответ": "rich_text", "Варианты": "rich_text", "Срок": "date", "Доставлено": "date", "Материал": "url", "Роль": "rich_text", "Карточка": "rich_text", "Миссия": "rich_text", "Что блокирует": "rich_text" },
-        { "Статус": ["Ждёт", "Решено", "Принят дефолт", "Отменён"] }],
+      // D-080: единственное место, где описана схема «Обратной связи». Раньше
+      // `Тип` жил только формулой в NOTION-TEMPLATE.json → afterCreate, и код в
+      // Notion писал поле, которого в этой таблице не было.
+      //
+      // `Срок` остаётся в схеме: транспорт его больше не пишет (сроков нет), но
+      // старые строки хранят дату и она нужна истории. `Тип` — select: значение
+      // ставит транспорт (`questionProps`), потому что формула не отличает
+      // «вопрос про ADR» от «предложения ADR».
+      ["Обратная связь", C.questions, { "Вопрос": "title", "Статус": "select", "Тип": "select", "По умолчанию": "rich_text", "Ответ": "rich_text", "Варианты": "rich_text", "Срок": "date", "Доставлено": "date", "Материал": "url", "Роль": "rich_text", "Карточка": "rich_text", "Миссия": "rich_text", "Что блокирует": "rich_text" },
+        { "Статус": ["Ждёт", "Решено", "Принят дефолт", "Отменён"], "Тип": ["Вопрос", "Предложение"] }],
     ];
     const schemas = {};
+    const warnings = [];
     try {
       for (const [label, id, fields, options] of contracts) {
         const source = await request("GET", `https://api.notion.com/v1/data_sources/${id}`, headers);
@@ -105,6 +114,12 @@
           if (!Array.isArray(actual)) errors.push(`${name}: нет списка select`);
           else for (const value of required) if (!actual.some((option) => option.name === value)) errors.push(`${name}: нет «${value}»`);
         }
+        // D-080: лишние поля — не отказ, а подсказка Мастеру. Живую схему правит
+        // только он; транспорт сообщает, что видит поле, которого нет в этой
+        // таблице, чтобы поле не выглядело рабочим. Разница «живое || схема»
+        // молчала: `Тип` был в живой базе, но не здесь, и код писал его в пустоту.
+        const extra = Object.keys(source.properties || {}).filter((name) => !(name in fields) && !["Repository", "Репозиторий"].includes(name));
+        if (extra.length) warnings.push(`«${label}»: лишние поля — ${extra.join(", ")} (схема их не знает; правьте схему в Notion только сами).`);
         if (errors.length) throw new Error(`«${label}»: ${errors.join(", ")}.`);
         schemas[label] = source.properties;
         await new Promise((resolve) => setTimeout(resolve, 350));
@@ -162,7 +177,8 @@
       }
       const branch = await request("GET", `https://api.github.com/repos/${C.repo}/branches/${encodeURIComponent(C.branch)}`, githubHeaders(settings.github));
       if (!branch || branch.name !== C.branch) throw new Error(`GitHub не подтвердил ветку ${C.branch}.`);
-      return { ok: true, text: "Основные поля, варианты select, роли и базовая ветка читаются. Права записи и содержимое старых карточек не проверялись." };
+      const base = "Основные поля, варианты select, роли и базовая ветка читаются. Права записи и содержимое старых карточек не проверялись.";
+      return { ok: true, text: warnings.length ? `${base} ${warnings.join(" ")}` : base };
     } catch (e) {
       return { ok: false, text: `Схема или роли не прошли проверку: ${connectionProblem(e, settings)}` };
     }

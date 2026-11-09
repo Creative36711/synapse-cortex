@@ -73,11 +73,14 @@ assert.match(
   /queueAnswer\(row, q, ctx\);/,
   'askQuestion ставит вопрос в очередь приёмки',
 );
+// D-080: ход уходит приёмке только когда вопрос держит ход (`gate`/`need`).
+// Обычный вопрос записывается, а план идёт по своему next.
 assert.match(
   src,
-  /if \(askedRow\) \{\s*\n\s*const item = answerQueue\(\)\.find\(\(row\) => row\.id === askedRow\.id\);\s*\n\s*if \(item && \(await startAnswer\(mission, item\)\)\) return true;/,
-  'после вопроса ход сразу уходит приёмке, а next не применяется',
+  /if \(askedRow && \(askedRow\.gate === true \|\| askedRow\.need\)\) \{\s*\n\s*const item = answerQueue\(\)\.find\(\(row\) => row\.id === askedRow\.id\);\s*\n\s*if \(item && \(await startAnswer\(mission, item\)\)\) return true;/,
+  'ход уходит приёмке только по gate, иначе next применяется',
 );
+assert.match(src, /ход идёт дальше по /, 'и в журнале сказано, что ход продолжается');
 assert.match(
   src,
   /if \(expect\.kind === "answer"\) await answerStep\(me, expect, fromToggle\);/,
@@ -111,7 +114,9 @@ assert.match(src, /verdict === "master"/, 'приёмка может позва�
 assert.match(src, /kind: "answer-needs-master"/, 'вызов Мастера из ответа — отдельная пауза');
 
 // ── 3. Тихие пуши там, где человек больше не нужен ─────────────────────────
-assert.match(src, /queueAnswer\(row, q, ctx\);[\s\S]{0,400}?ntfy: "quiet",\s*\n\s*title: "Relay: вопрос приёмке",/);
+// D-080: тихое уведомление осталось, но называется по-новому — вопрос либо
+// держит ход («вопрос держит ход»), либо просто записан.
+assert.match(src, /queueAnswer\(row, q, ctx\);[\s\S]{0,500}?ntfy: "quiet", title: "Relay: вопрос держит ход"/, 'тихий пуш у вопроса, который держит ход');
 assert.match(
   src,
   /kind: "closed-unreviewed",\n\s+ref: closed\.id,\n\s+quiet: true,/,

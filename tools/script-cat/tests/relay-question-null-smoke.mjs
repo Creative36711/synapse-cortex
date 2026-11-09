@@ -60,7 +60,9 @@ assert.doesNotMatch(
 
 // ── 2. Песочница: oneLine + parseQuestion + questionInMarker ───────────────
 const from = src.indexOf('const oneLine = (value, max) =>');
-const to = src.indexOf('const questionDeadline');
+const to = src.indexOf('  /**\n   * Полный текст вопроса — в тело страницы.') > 0
+  ? src.indexOf('  /**\n   * Полный текст вопроса — в тело страницы.')
+  : src.indexOf('  function questionRows(');
 assert.ok(from > 0 && to > from, 'разбор вопроса на месте');
 
 const api = new Function(
@@ -83,12 +85,15 @@ for (const empty of [undefined, null, '', '   ', {}, { text: '' }, { text: '  ',
 // 2.2. Нормальный вопрос с вариантом по умолчанию — как было.
 {
   const got = api.questionInMarker(
-    { text: 'Поднять лимит гайда до 294912?', options: ['Да', 'Нет'], default: 'Да', hours: 48 },
+    { text: 'Поднять лимит гайда до 294912?', options: ['Да', 'Нет'], default: 'Да', gate: true, need: 'Warden' },
     FALLBACK,
   );
   assert.equal(got.kind, 'asked', 'вопрос с вариантом принят');
   assert.equal(got.question.fallback, 'Да', 'вариант агента не перебит');
-  assert.equal(got.question.hours, 48, 'срок агента сохранён');
+  // D-080: срока нет; сохранены признаки остановки.
+  assert.equal(got.question.gate, true, 'gate агента сохранён');
+  assert.equal(got.question.need, 'Warden', 'need агента сохранён');
+  assert.equal(got.question.hours, undefined, 'срока в вопросе нет');
   assert.deepEqual(got.question.options, ['Да', 'Нет'], 'варианты сохранены');
 }
 
@@ -99,13 +104,14 @@ for (const empty of [undefined, null, '', '   ', {}, { text: '' }, { text: '  ',
   assert.equal(got.question.text, 'Поднять лимит гайда до 294912?', 'текст сохранён');
   assert.equal(got.question.fallback, FALLBACK, 'вариант по умолчанию честный');
   assert.deepEqual(got.question.options, [], 'вариантов нет — пустой список, а не undefined');
-  assert.equal(got.question.hours, 168, 'слишком длинный срок подрезан до недели');
+  assert.equal(got.question.gate, false, 'без gate ход не держится (D-080)');
+  assert.equal(got.question.hours, undefined, 'срока больше нет');
   assert.equal(typeof got.question.blocks, 'string', 'поле «что блокирует» готово к записи');
 }
 {
   const got = api.questionInMarker({ text: 'Что делать?', default: '', hours: 0 }, FALLBACK);
   assert.equal(got.kind, 'text', 'пустой default — это «без варианта», а не «нет вопроса»');
-  assert.equal(got.question.hours, 24, 'hours: 0 не превращается в срок в прошлом');
+  assert.equal(got.question.fallback, FALLBACK, 'подставлен честный вариант по умолчанию');
 }
 
 // 2.4. Голой строкой вопрос тоже понимается — так агенты иногда пишут.
