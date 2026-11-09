@@ -154,4 +154,21 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(decisions, /draft is not defined/, 'повод назван по журналу Мастера');
 }
 
+// 9. D-077: признак занятости обязан кончиться, и это записано словами.
+{
+  const d077 = contract.d077;
+  assert.ok(d077, 'D-077 записан в контракт');
+  assert.match(d077.version || '', /^1\.14\.4$/, 'D-077 относится к сборке 1.14.4');
+  assert.match(d077.evidence?.probe || '', /relay-busy-indicator-smoke/, 'проба названа');
+  assert.match(d077.fix || '', /busySince/, 'потолок ожидания назван в контракте');
+  assert.match(d077.fix || '', /fullLabel/, 'проверка по полному тексту названа');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-077 \(1\.14\.4\)/, 'D-077 есть в журнале решений');
+  assert.match(decisions, /length > 80/, 'мёртвая проверка названа по имени');
+  const config = readFileSync(join(root, 'tools/script-cat/src/01-config.js'), 'utf8');
+  assert.match(config, /pendingBusyMaxMs:\s*1800000/, 'потолок ожидания в конфиге');
+  const heal = readFileSync(join(root, 'tools/script-cat/src/40-heal-core.js'), 'utf8');
+  assert.match(heal, /"busy-stuck": "master"/, 'busy-stuck классифицирован как решение Мастера');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');
