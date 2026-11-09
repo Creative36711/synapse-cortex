@@ -379,6 +379,23 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(marker, /const answerLike = expect\.kind === "answer"/, 'вид хода различается до сборки');
 }
 
+// 17-кват. D-094 (1.14.23): разбор остановки не заклинивает сам себя.
+{
+  const d094 = contract.d094;
+  assert.ok(d094, 'D-094 записан в контракт');
+  assert.match(d094.version || '', /^1\.14\.23$/, 'D-094 относится к сборке 1.14.23');
+  assert.equal(d094.budgetsRaised, false, 'D-094 не поднимал бюджеты');
+  const fix = (d094.fix || []).join(' ');
+  assert.match(fix, /Передача: ход/, 'передача печатает свой ход');
+  assert.match(fix, /pauseCascadeMs/, 'каскад пауз назван настройкой');
+  assert.match(fix, /sameTextSubmission|по самому тексту/, 'сверка по тексту названа');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-094 \(1\.14\.23\)/, 'D-094 есть в журнале решений');
+  assert.match(decisions, /Что не исправлено/, 'граница правки названа честно');
+  assert.match(readFileSync(join(root, 'tools/script-cat/src/41-heal.js'), 'utf8'),
+    /Передача: ход/, 'код печатает номер передачи');
+}
+
 // 17. D-085 (1.14.14): бюджет сжимает данные, а не останавливает ход.
 {
   const d085 = contract.d085;

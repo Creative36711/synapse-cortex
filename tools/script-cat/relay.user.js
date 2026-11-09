@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.22
+// @version      1.14.23
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "d1c3eb82b2ca5fde",
+    buildFingerprint: "d29018c5f39b5ecc",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -101,6 +101,10 @@
     readyLineMax: 6, // сколько карточек Ready Координатор видит списком в промпте
     payloadInlineMax: 1500, // D-034: задание длиннее — в Drive payloads и указатель, не инлайн
     insertRetries: 3, // с какой попытки вставки в редактор звать Мастера (раньше — сами)
+    // D-094: сколько секунд вторая пауза той же карточки считается симптомом
+    // первой, а не новой остановкой. `arena-error` приходит через секунду после
+    // паузы сборки промпта; через полминуты та же карточка — уже новый случай.
+    pauseCascadeMs: 15000,
     composerGraceMs: 8000, // сколько ждём возврата поля ввода, если оно исчезло при перерисовке
     sendRetries: 3, // сколько тиков ждём дорисовку страницы, прежде чем звать Мастера
     sendReadyMs: 20000, // столько ждём активную кнопку Send на дорисовывающейся странице
@@ -724,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.22";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.23";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1153,6 +1157,9 @@
    * громкий пуш, а продолжает только Мастер — кнопкой «Продолжить».
    */
   function pause(reason, context = {}) {
+    // Причина, которая была ДО этой паузы: по ней решается, новый это инцидент
+    // или уточнение того же самого (D-094).
+    const before = String(GM_getValue(K.paused, "") || "");
     const info = {
       kind: context.kind || "error",
       reason: String(reason),
@@ -1192,6 +1199,52 @@
       info.with = "";
     }
     const forHuman = !info.with || info.with === "master";
+    // D-094: вторая пауза того же инцидента не подменяет первую.
+    //
+    // 09.11 в 23:27:22 пришли две паузы в одну секунду: `prompt-compile` и
+    // следом `arena-error` («Something went wrong»). Запись `K.paused` была
+    // безусловной, поэтому причина осталась от второй, а `resume()` читал
+    // контекст уже другой паузы — и в журнале появлялось «цикл на паузе ()» с
+    // пустой причиной. Хуже: heal запускался ОБА раза, то есть на один инцидент
+    // уходило два разбора и две передачи Maintainer'у.
+    //
+    // Теперь живая пауза того же инцидента остаётся на месте: причина и адресат
+    // уже записаны, повторно их не пишем и разбор второй раз не запускаем.
+    // Другая причина того же инцидента дописывается в контекст (`also`) — чтобы
+    // не потерять факт, но не подменять ответственного.
+    const live = GM_getValue(K.pause, null);
+    // Один инцидент — это либо буквально та же остановка (ключ совпал), либо
+    // каскад по той же карточке: `arena-error` приходит через секунду после
+    // `prompt-compile`, и причина у него своя. Вторая пауза каскада описывает
+    // симптом, а не новую поломку, поэтому ответственным остаётся первая.
+    // Окно короткое: через полминуты та же карточка может дать настоящую новую
+    // остановку, и склеивать её с прошлой нельзя.
+    // Признак каскада — не `ref` (у `arena-error` это id мёртвого сообщения, у
+    // паузы сборки — карточка), а сама передача: она всё ещё не доставлена.
+    // Пока один и тот же ход висит неотправленным, ошибка сайта через секунду —
+    // его симптом, а не новая поломка. Каскадом считается только `arena-error`:
+    // остальные остановки при неотправленном ходе говорят о своём и должны
+    // подменять причину как раньше.
+    const handoff = GM_getValue(K.expect, null) || GM_getValue(K.pending, null);
+    const undelivered = Boolean(handoff && handoff.verified !== true);
+    const cascade = info.kind === "arena-error" && undelivered && Number(live?.at) > 0 &&
+      info.at - Number(live.at) <= (Number(C.pauseCascadeMs) || 15000);
+    const sameIncident = Boolean(
+      before && live && (
+        (typeof healIncidentKey === "function" && healIncidentKey(info) === healIncidentKey(live)) ||
+        cascade
+      ),
+    );
+    if (sameIncident) {
+      const also = Array.isArray(live.also) ? live.also.slice(-4) : [];
+      if (!also.some((item) => item && item.reason === info.reason)) {
+        also.push({ kind: info.kind, reason: info.reason, at: info.at });
+      }
+      GM_setValue(K.pause, { ...live, also, lastAt: info.at });
+      log(`ПАУЗА (та же остановка, причина уточнена): ${info.reason}`, true, { skip: true, ntfy: false });
+      setStatus();
+      return;
+    }
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
     log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
@@ -7593,6 +7646,26 @@
     // снимать ли очередь (её не снимаем — ждём человека).
     if (captchaDialog()) return blocked();
 
+    // D-094: последняя сверка по самому тексту. Ключ, снимок и `deadSend` —
+    // всё это фильтры над транскриптом, и каждый может отбросить настоящую
+    // реплику: ключ у передач был общим, снимок снимается до клика, а `deadSend`
+    // переживает прошлую ошибку Arena. Если в чате стоит наша реплика с этим же
+    // текстом, а в поле — он же, отправка состоялась. Сказать «не появилось» в
+    // этом случае значит оставить текст черновиком и встать на паузу на ровном
+    // месте (09.11, 23:29).
+    const byText = sameTextSubmission(text);
+    if (byText) {
+      dbg("Send: своё сообщение нашлось по тексту, а не по ключу", { id: byText.id });
+      log(
+        `Своё сообщение нашёл по тексту, а не по ключу доставки (${byText.id || "id не прочитан"}): ` +
+          `ключ «${String(key).slice(0, 40)}» его не подтвердил (${whyNotProof(key, known, since)}). ` +
+          "Считаю отправку состоявшейся и убираю черновик.",
+        false,
+        { tone: "warn" },
+      );
+      return accepted({ ...byText, draftLeft: true });
+    }
+
     const now = composer();
     const button = now ? sendButton(now) : null;
     const dialog = openDialog();
@@ -7628,6 +7701,68 @@
         : "Кнопка Send неактивна или не найдена — редактор не принял текст",
       detail,
     };
+  }
+
+  /**
+   * D-094: своя реплика нашлась не по ключу, а по самому тексту задания.
+   *
+   * 09.11 в 23:29 передача Maintainer'у стояла в чате, а `deliver` объявил
+   * «Send нажат, но своё сообщение не появилось»: ключ доставки у передач был
+   * общим (первые 60 знаков), и подтверждение зависело от того, какую реплику
+   * фильтр посчитает новой. Сообщение при этом ушло, поле сохранило текст как
+   * черновик, а пауза выглядела как «Arena вернула текст обратно».
+   *
+   * Здесь последняя сверка, которая не зависит ни от ключа, ни от `deadSend`, ни
+   * от времени id: в чате есть наша реплика, которая ДОСЛОВНО содержит текст из
+   * поля ввода, а поле не длиннее этой реплики. Это может быть только наше же
+   * задание — значит доставка состоялась, а поле надо чистить.
+   */
+  function sameTextSubmission(text) {
+    const live = composer();
+    if (!live) return null;
+    const field = flat(composerText(live));
+    const mine = flat(text || "");
+    // Короткий текст совпадает у половины сообщений: сверять нечего.
+    if (field.length < 40 || !mine) return null;
+    const head = mine.slice(0, 80);
+    const nodes = userMessages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const bubble = flat(nodes[i].textContent || "");
+      if (!bubble.includes(head)) continue;
+      // Поле длиннее реплики — значит в нём другой, ещё не отправленный текст.
+      if (field.length > bubble.length) continue;
+      if (!bubble.includes(field)) continue;
+      return { id: nodeId(nodes[i]) || "", at: idTime(nodeId(nodes[i]) || "") };
+    }
+    return null;
+  }
+
+  /**
+   * Почему ключ не подтвердил доставку, хотя реплика могла быть в чате.
+   *
+   * Нужен только для журнала: без него разбор следующего случая начинается с
+   * нуля — как 09.11, когда «своё сообщение не появилось» сказали, а сказать,
+   * какой именно фильтр его отбросил, было нечем.
+   */
+  function whyNotProof(key, known, since) {
+    const seen = known instanceof Set ? known : new Set(known || []);
+    const dead = GM_getValue(K.deadSend, "");
+    const nodes = userMessages();
+    let byText = 0;
+    let bySnapshot = 0;
+    let byDead = 0;
+    let byTime = 0;
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      const id = String(node.id || "").replace("chat-message-", "");
+      if (!flat(node.textContent || "").includes(key)) continue;
+      byText += 1;
+      if (!id || seen.has(id)) { bySnapshot += 1; continue; }
+      if (dead && id === dead) { byDead += 1; continue; }
+      const at = idTime(id);
+      if (since && at && at < since - 120000) { byTime += 1; continue; }
+    }
+    return `реплик с ключом ${byText}, из них в снимке ${bySnapshot}, помечено ошибкой ${byDead}, старое id ${byTime}`;
   }
 
   /** Короткий хеш текста: нужен, чтобы не отправить одно и то же дважды. */
@@ -11023,13 +11158,27 @@
     // не требуется: 08.11 в 00:24 боевой цикл встал на budget_exceeded и
     // простоял до утра, хотя чинить должен был транспорт.
     const budget = result.error.code === "budget_exceeded";
+    // D-094: пауза не зовёт человека чинить руками. Проверка фактов и выбор
+    // профиля — это код сборки, а не данные Мастера; адресат такой остановки —
+    // транспорт (D-092). 09.11 совет «поправьте факты или профиль» увёл разбор в
+    // сторону постановки: искали, чего не хватает в карточке, хотя не хватало
+    // фактов в самом `minimalPrompt` (D-093). Мастеру тут делать нечего: текст
+    // паузы называет дефект сборки и адресата разбора.
+    const who = request?.profileId || label;
     pause(
       `Промпт не собран (${label}): ${result.error.code} — ${result.error.message}. ` +
         `${budgetBreakdownLine(result.error)}` +
         (budget
           ? "Отправка не выполнялась. Это поломка профиля промпта, а не фактов миссии: транспорт передаёт разбор Maintainer'у и продолжит сам, если разбор не потребует Мастера."
-          : "Отправка не выполнялась; исправьте факты или профиль — транспорт передаёт разбор Maintainer'у."),
-      { kind: "prompt-compile", ref: request?.task?.id || request?.mission?.id || request?.question?.id || "" },
+          : `Отправка не выполнялась. Это дефект сборки (${who}), а не задача Мастера: ` +
+            "транспорт передаёт разбор Maintainer'у и продолжит сам, если разбор не потребует Мастера."),
+      {
+        kind: "prompt-compile",
+        ref: request?.task?.id || request?.mission?.id || request?.question?.id || "",
+        // Ход — часть опознания инцидента: без него повтор той же поломки на
+        // другом ходе мог считаться тем же самым и расходовать чужой предохранитель.
+        turnId: request?.turnId || "",
+      },
     );
     return null;
   }
@@ -18917,7 +19066,7 @@
    * В промпт идут: класс и маршрут, причина паузы, структурный снимок, хвост
    * журнала попыток, версия и отпечаток сборки. Переписки здесь нет.
    */
-  function healDiagnosis(info, verdict, decision, upload) {
+  function healDiagnosis(info, verdict, decision, upload, handoffTurnId = "") {
     const built = buildHealTelemetry({
       phase: "maintainer",
       at: nowIso(),
@@ -18949,6 +19098,16 @@
       `ИНЦИДЕНТ ТРАНСПОРТА · класс ${verdict.cls} · ${verdict.why}.`,
       `Остановка: «${String(info.reason || "").slice(0, 300)}»`,
       `Вид паузы: ${info.kind || "пусто"}; карточка ${info.ref || "—"}; run ${info.runId || "—"}; ход ${info.turnId || "—"}.`,
+      // D-094: у передачи свой номер хода, и он обязан быть в тексте.
+      //
+      // Без него ключ доставки собирался из первых 60 знаков, а они у всех
+      // передач одинаковы («ИНЦИДЕНТ ТРАНСПОРТА · класс transport · …»).
+      // Подтверждением годилась любая прошлая реплика — и 09.11 в 23:29 две
+      // передачи подряд «не подтвердились», хотя стояли в чате: сообщение ушло,
+      // а скрипт счёл его старым, оставил текст в поле ввода и встал на паузу
+      // «Send нажат, но своё сообщение не появилось». Ход печатается отдельной
+      // строкой — по нему `sendKey` узнаёт именно эту передачу.
+      ...(handoffTurnId ? [`Передача: ход ${handoffTurnId}.`] : []),
       info.defect
         ? `Маркер «${info.defect.marker || "?"}» от «${info.defect.role || "?"}»: ${info.defect.hint || "чего не хватило — не названо"}. ` +
             "Хвост ответа — в телеметрии ниже; копия всего ответа сохранена локально."
@@ -19033,7 +19192,7 @@
     const role = found.role;
     const upload = GM_getValue("cfn-heal-last-upload", null) || {};
     const turnId = uid();
-    const text = healDiagnosis(info, verdict, decision, upload);
+    const text = healDiagnosis(info, verdict, decision, upload, turnId);
     const sent = await sendMaintainerTurn(role, text, turnId, info);
     if (!sent.ok) return sent;
     log(
@@ -19159,6 +19318,19 @@
   async function healAfterPause(info) {
     const verdict = classifyPause(info.kind, info.reason);
     const key = healIncidentKey(info);
+    // D-094: второй разбор на тот же инцидент сюда не доходит.
+    //
+    // 09.11 в 23:27:22 пауза `prompt-compile` и пауза `arena-error` пришли в одну
+    // секунду, и этот шаг запустился дважды: два разбора, две передачи
+    // Maintainer'у, две наши реплики в одном чате. Вторая передача «не нашлась»
+    // (ключ у передач был общим) и превратилась в «поломку самой доставки».
+    //
+    // Отсекает это `pause()`: вторую паузу того же инцидента он записывает в
+    // контекст первой и разбор не запускает. Здесь сторожа нет намеренно:
+    // предохранитель `healMaintainerMax` разрешает ВТОРОЙ разбор по тому же
+    // инциденту, когда первый закончился ничем, и запрет «пока висит передача»
+    // сломал бы именно этот честный повтор.
+
     const counters = healCounters(key);
     const decision = decideHeal(verdict, counters, C);
     // D-092: каждая остановка попадает в метрику с адресатом решения. Считается

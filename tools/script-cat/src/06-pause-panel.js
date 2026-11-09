@@ -47,6 +47,9 @@
    * громкий пуш, а продолжает только Мастер — кнопкой «Продолжить».
    */
   function pause(reason, context = {}) {
+    // Причина, которая была ДО этой паузы: по ней решается, новый это инцидент
+    // или уточнение того же самого (D-094).
+    const before = String(GM_getValue(K.paused, "") || "");
     const info = {
       kind: context.kind || "error",
       reason: String(reason),
@@ -86,6 +89,52 @@
       info.with = "";
     }
     const forHuman = !info.with || info.with === "master";
+    // D-094: вторая пауза того же инцидента не подменяет первую.
+    //
+    // 09.11 в 23:27:22 пришли две паузы в одну секунду: `prompt-compile` и
+    // следом `arena-error` («Something went wrong»). Запись `K.paused` была
+    // безусловной, поэтому причина осталась от второй, а `resume()` читал
+    // контекст уже другой паузы — и в журнале появлялось «цикл на паузе ()» с
+    // пустой причиной. Хуже: heal запускался ОБА раза, то есть на один инцидент
+    // уходило два разбора и две передачи Maintainer'у.
+    //
+    // Теперь живая пауза того же инцидента остаётся на месте: причина и адресат
+    // уже записаны, повторно их не пишем и разбор второй раз не запускаем.
+    // Другая причина того же инцидента дописывается в контекст (`also`) — чтобы
+    // не потерять факт, но не подменять ответственного.
+    const live = GM_getValue(K.pause, null);
+    // Один инцидент — это либо буквально та же остановка (ключ совпал), либо
+    // каскад по той же карточке: `arena-error` приходит через секунду после
+    // `prompt-compile`, и причина у него своя. Вторая пауза каскада описывает
+    // симптом, а не новую поломку, поэтому ответственным остаётся первая.
+    // Окно короткое: через полминуты та же карточка может дать настоящую новую
+    // остановку, и склеивать её с прошлой нельзя.
+    // Признак каскада — не `ref` (у `arena-error` это id мёртвого сообщения, у
+    // паузы сборки — карточка), а сама передача: она всё ещё не доставлена.
+    // Пока один и тот же ход висит неотправленным, ошибка сайта через секунду —
+    // его симптом, а не новая поломка. Каскадом считается только `arena-error`:
+    // остальные остановки при неотправленном ходе говорят о своём и должны
+    // подменять причину как раньше.
+    const handoff = GM_getValue(K.expect, null) || GM_getValue(K.pending, null);
+    const undelivered = Boolean(handoff && handoff.verified !== true);
+    const cascade = info.kind === "arena-error" && undelivered && Number(live?.at) > 0 &&
+      info.at - Number(live.at) <= (Number(C.pauseCascadeMs) || 15000);
+    const sameIncident = Boolean(
+      before && live && (
+        (typeof healIncidentKey === "function" && healIncidentKey(info) === healIncidentKey(live)) ||
+        cascade
+      ),
+    );
+    if (sameIncident) {
+      const also = Array.isArray(live.also) ? live.also.slice(-4) : [];
+      if (!also.some((item) => item && item.reason === info.reason)) {
+        also.push({ kind: info.kind, reason: info.reason, at: info.at });
+      }
+      GM_setValue(K.pause, { ...live, also, lastAt: info.at });
+      log(`ПАУЗА (та же остановка, причина уточнена): ${info.reason}`, true, { skip: true, ntfy: false });
+      setStatus();
+      return;
+    }
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
     log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
