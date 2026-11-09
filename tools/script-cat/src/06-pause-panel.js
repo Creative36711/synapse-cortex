@@ -60,20 +60,41 @@
       // его из состояния, а не из текста причины.
       defect: context.heal && context.heal.defect ? context.heal : null,
       wasAuto: autoOn(),
+      // D-092: кому адресована остановка. До этой правки адресат был один —
+      // человек, и различать было нечего. Теперь разбор восстановления решает,
+      // кто отвечает по существу: `master` (закрытый список, только человек),
+      // `warden` (постановка, зоны, очередь), `transport` (технический дефект),
+      // `self` (повтор). Поле попадает в состояние паузы, поэтому панель и
+      // телеметрия видят адресата, а не догадываются по тексту.
+      with: "",
       // D-073: какая сборка сломалась. По этому признаку гейт версии отличает
       // «установлена новая сборка» от «тот же номер, тот же бандл».
       version: SCRIPT_VERSION,
       fingerprint: C.buildFingerprint || "",
     };
+    // D-092: адресат остановки считается здесь, а не в панели.
+    //
+    // 08–09.11 телефон звонил двенадцать раз, и восемь из них были установкой
+    // сборки — событием, где человек ничего не решает. Громкий сигнал должен
+    // означать «без тебя физически нельзя», иначе он перестаёт что-либо
+    // означать. Поэтому громко — только когда адресат `master` (закрытый
+    // список MASTER_ONLY) или разбор не смог классифицировать остановку.
+    try {
+      const verdict = typeof classifyPause === "function" ? classifyPause(info.kind, info.reason) : null;
+      info.with = verdict ? String(verdict.with || "") : "";
+    } catch {
+      info.with = "";
+    }
+    const forHuman = !info.with || info.with === "master";
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
-    log(`ПАУЗА: ${info.reason}`, true, { skip: true });
+    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
     // Тихая пауза — для остановок, которые Мастер не разбирает: вопрос ушёл
     // приёмке, миссию закрыли в обход неё, приёмка сама решает по существу.
     // С 1.4.80 такие события не повод звонить в телефон: их закрывает приёмка,
     // а Мастер нужен только там, где без него физически нельзя (нет роли,
     // нет прав, предел доработок).
-    if (context.quiet) {
+    if (context.quiet || !forHuman) {
       notifyNtfy(`Цикл остановлен: ${info.reason}`, {
         title: context.notifyTitle || "Relay: пауза",
         priority: "2",
@@ -447,10 +468,16 @@
     const paused = GM_getValue(K.paused, "");
     const me = GM_getValue("cfn-me", "");
     const short = paused.length > 70 ? `${paused.slice(0, 70)}…` : paused;
-    const text = extra || (paused ? `Пауза: ${short}` : auto ? "Работает" : "Выключен");
+    // D-092: панель называет адресата. «Пауза» без адресата читается как
+    // «нужен Мастер», а теперь это не так: постановку разбирает приёмка,
+    // поломку — транспорт. Красный цвет — только тому, что правда ждёт человека.
+    const who = String(GM_getValue(K.pause, null)?.with || "");
+    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор" }[who] || "";
+    const text = extra || (paused ? `Пауза${label ? ` (${label})` : ""}: ${short}` : auto ? "Работает" : "Выключен");
     el.textContent = me ? `${text} · ${me}` : text;
     el.title = paused || text;
-    el.style.color = paused ? "#ff9a9a" : auto ? "#8ee28e" : "inherit";
+    // Красным — только пауза, которая действительно ждёт человека.
+    el.style.color = paused ? (who && who !== "master" ? "#e8d08a" : "#ff9a9a") : auto ? "#8ee28e" : "inherit";
     const toggle = document.getElementById(ui.toggle);
     if (toggle) {
       toggle.textContent = paused ? "▶ Продолжить" : auto ? "⏸ Стоп" : "▶ Включить";

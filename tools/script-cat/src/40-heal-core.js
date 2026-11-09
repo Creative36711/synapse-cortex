@@ -16,9 +16,57 @@
 
   const HEAL_CLASS_INFO = {
     momentary: { route: "retry", repair: "self", label: "временный сбой транспорта или сети" },
+    // D-092: сюда входит и то, что решает агент (постановка, очередь, зоны,
+    // петли), и то, что решает только человек. Маршрут один — решение, но
+    // адресат решения теперь разный, и различие несёт не класс, а
+    // `MASTER_ONLY` (см. ниже): класс отвечает на «чинить или решать»,
+    // адресат — на «кто решает».
     transport: { route: "maintainer", repair: "maintainer", label: "поломка транспорта" },
     arena: { route: "master", repair: "none", label: "сбой сайта Arena: чинить нечего" },
-    master: { route: "master", repair: "none", label: "решает только Мастер" },
+    master: { route: "master", repair: "none", label: "остановка без автоматического пути" },
+  };
+
+  /**
+   * D-092: ЗАКРЫТЫЙ список того, что решает только человек.
+   *
+   * До 1.92.0 человек был адресатом по умолчанию: 48 из 70 видов паузы имели
+   * класс `master`, и 12 из 17 фактических остановок за 08–09.11 упирались в
+   * Мастера. Ни одна из этих двенадцати не требовала решения по существу:
+   * восемь были установкой сборки, две — падением доставки агенту, одна —
+   * разбором маркера.
+   *
+   * Теперь список закрыт по смыслу: новый вид паузы не может попасть к Мастеру
+   * «по привычке» — только сюда, а проба не даёт таблице разойтись с ним.
+   * Четыре пункта и есть «технически невозможно»:
+   *   • install — установка userscript в браузер и действия в браузере;
+   *   • agent — создание агента в Arena, его Agent URL и доступы;
+   *   • money — лицензии, ToS, деньги, секреты;
+   *   • product — переход фазы, новая миссия, границы продукта.
+   * Код в `synapse` Мастеру не принадлежит — его пишет роль ядра; здесь его нет
+   * намеренно, иначе «только человек» стало бы списком прав человека на код.
+   */
+  const MASTER_ONLY = ["install", "agent", "money", "product"];
+
+  /** Вид паузы → пункт закрытого списка. Нет записи — Мастеру не показывать. */
+  const HEAL_MASTER_ONLY = {
+    // Установку сборки делает человек, но пауза за неё больше не поднимается
+    // (D-085): это отметка, а не остановка. Пункт нужен, чтобы `update-recovery`
+    // не ушёл агенту как «поломка транспорта».
+    "update-recovery": "install",
+    "heal-await-update": "install",
+    // Доступы и состав: строку «Роли», Agent URL и флаг правит Мастер.
+    "mission-roster": "agent",
+    provision: "agent",
+    "provision-no-admin": "agent",
+    "project-role-origin": "agent",
+    "no-reviewer": "agent",
+    "heal-no-maintainer": "agent",
+    // Решения уровня продукта и фаз.
+    "review-needs-master": "product",
+    "pilot-timeout": "product",
+    "pilot-tool-limit": "product",
+    // Вариант по умолчанию кончился, а вопрос — про продукт: решает человек.
+    "answer-needs-master": "product",
   };
 
   /**
@@ -116,6 +164,9 @@
     "pilot-timeout": "master",
     provision: "master",
     "provision-no-admin": "master",
+    // D-092: класс оставлен `master`, но пауза теперь поднимается только там,
+    // где нет очереди отправки (см. 18-state-recovery.js). Тот случай — сверка,
+    // а не решение; Мастеру он не показывается как вопрос (тихий).
     "update-recovery": "master",
     // D-075: нехватка роли — не поломка транспорта. Виды `reviewer-task-check`
     // и `reviewer-task-pending` по умолчанию остаются за транспортом (потеря
@@ -168,6 +219,42 @@
       "roster-row", "роль или её строка не готовы к выдаче"],
   ];
 
+  /**
+   * D-092: кто отвечает по существу — человек, Warden или транспорт.
+   *
+   * Раньше этот выбор был один на всё: класс `master` — значит человек. Но
+   * `master` отвечает на другой вопрос: «нужен ход рассуждения, а не повтор».
+   * Адресат рассуждения бывает разным: постановка, зоны и очередь — Warden,
+   * технический дефект — Maintainer, и только закрытый список (MASTER_ONLY) —
+   * человек.
+   *
+   * Инверсия здесь не косметическая: таблица `HEAL_PAUSE_CLASS` осталась та же,
+   * но её `master` больше не значит «Мастер». Поэтому проба проверяет не
+   * таблицу, а это решение.
+   */
+  function healResolveWith(kind, cls, config = {}) {
+    const key = String(kind || "");
+    const list = Array.isArray(config.masterOnly) && config.masterOnly.length ? config.masterOnly : MASTER_ONLY;
+    const point = HEAL_MASTER_ONLY[key];
+    if (point && list.includes(point)) return { with: "master", point };
+    // Капча и вход — физическое действие в браузере: его выполняет человек, но
+    // это не «решение», а действие. Отдельного пункта списка у него нет, и это
+    // осознанно: пункт списка даёт право решать, а нажать капчу — не решение.
+    if (cls === "arena") return { with: "master", point: "" };
+    if (cls === "momentary") return { with: "self", point: "" };
+    if (cls === "transport") return { with: "transport", point: "" };
+    if (cls === "master") {
+      // Решение уровня постановки: зоны, очередь, трактовка ТЗ, петля.
+      // Это D-027 п. 1 и D-066 г — предмет приёмки, а не человека.
+      if (/^(review|plan|dispatch|return|done|rework|arbiter|answer|blocked|redispatch|mission)/.test(key) ||
+          key === "no-reply" || key === "busy-stuck") {
+        return { with: "warden", point: "" };
+      }
+      // Всё прочее — техническая остановка без разбора: её снимает транспорт.
+      return { with: "transport", point: "" };
+    }
+    return { with: "transport", point: "" };
+  }
   function healMasterMatch(kind, text) {
     const label = String(kind || "");
     if (label !== "reviewer-task-check" && label !== "reviewer-task-pending") return null;
@@ -214,6 +301,10 @@
       repair: info.repair,
       retry: info.route === "retry",
       maintainer: info.route === "maintainer",
+      // D-092: «кто решает» отдельным полем вердикта. `route` оставлен как был:
+      // на него смотрит старый разбор состояния, и менять его значение значило
+      // бы переписать историю в телеметрии.
+      with: healResolveWith(kind, HEAL_CLASS_INFO[cls] ? cls : "master").with,
     };
   }
 
@@ -230,7 +321,16 @@
     const byText = healTextMatch(reason);
     if (byText) return healVerdict(key, byText.cls, byText.why, false, byText.reason, "text");
     const cls = HEAL_PAUSE_CLASS[key];
-    if (!cls) return healVerdict(key, "master", "вид остановки не распознан: не чиню наугад", true, key);
+    // D-092: инверсия адресата по умолчанию. Раньше нераспознанный вид уходил
+    // Мастеру — «безопасно». На практике это означало, что каждый новый дефект
+    // сначала зовёт человека, а агент разбирает только то, что ему разрешили
+    // задним числом. Теперь неизвестная остановка уходит транспорту: он снимет
+    // телеметрию и назовёт причину, а человек нужен лишь там, где без него
+    // физически нельзя (MASTER_ONLY).
+    // D-092: инверсия по умолчанию. Раньше здесь стояло «неизвестный вид — значит
+    // Мастер», и любая опечатка в имени паузы (а их 70) будила человека ночью.
+    // Неизвестное — это дефект таблицы или кода, то есть работа транспорта.
+    if (!cls) return healVerdict(key, "transport", "вид остановки не назван в таблице: разбирает транспорт, а не человек", true, key);
     return healVerdict(key, cls, HEAL_CLASS_INFO[cls].label, false, key);
   }
 
@@ -285,9 +385,43 @@
           why: `${v.why}: продолжаю сам (${retries + 1} из ${retryMax})`,
         };
       }
+      // D-092: повторяющийся «временный» сбой — это не решение человека, а
+      // дефект: два одинаковых обрыва подряд означают, что чинит не повтор, а
+      // правка. Уходит транспорту, у него дифф и проба.
+      return {
+        action: "maintainer",
+        attempt: escalations + 1, max: maintMax,
+        why: `временный сбой повторился ${retries} раз(а) (предел ${retryMax}): это дефект, а не случайность`,
+      };
+    }
+    // D-092: адресат решения. `master` больше не значит «человек»: закрытый
+    // список MASTER_ONLY отвечает за «только человек», а постановка, очередь и
+    // петли уходят приёмке. Порядок важен: сначала «кто решает», потом пределы
+    // этого адресата — иначе счётчик одного адресата тратился бы на другого.
+    if (v.with === "warden") {
+      const ticketMax = Number.isFinite(Number(config.masterTicketMax)) ? Number(config.masterTicketMax) : 1;
+      const tickets = Math.max(0, Number(counters.tickets) || 0);
+      if (tickets < ticketMax) {
+        return {
+          action: "warden", attempt: tickets + 1, max: ticketMax,
+          why: `${v.why}: передаю приёмке строкой в «Обратную связь», цикл продолжается`,
+        };
+      }
       return {
         action: "master",
-        why: `временный сбой повторился ${retries} раз(а) (предел ${retryMax}): продолжаю только по слову Мастера`,
+        why: `приёмка уже получала эту остановку ${tickets} раз(а) (предел ${ticketMax}) и решения нет: останавливаюсь`,
+      };
+    }
+    if (v.with === "transport" && v.route !== "retry") {
+      if (escalations < maintMax) {
+        return {
+          action: "maintainer", attempt: escalations + 1, max: maintMax,
+          why: `${v.why}: передаю Maintainer'у (${escalations + 1} из ${maintMax})`,
+        };
+      }
+      return {
+        action: "master",
+        why: `Maintainer уже ${escalations} раз(а) разбирал этот инцидент (предел ${maintMax}): останавливаю цикл`,
       };
     }
     if (v.route === "maintainer") {

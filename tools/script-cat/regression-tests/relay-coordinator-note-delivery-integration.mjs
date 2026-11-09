@@ -54,9 +54,10 @@ assert.ok(blank.ok && !blank.blocks.some((b) => b.id === 'plan.note'), 'проб
 
 // ── 5. заметка не раздувает overhead против плана без неё ──────────────────
 // Verbatim-блок не считает свой текст в overhead; добавляется лишь разделитель
-// «\n\n» между блоками (2 знака). Бюджет coordinator.plan (3200) не поднят.
+// «\n\n» между блоками (2 знака). Бюджет coordinator.plan — 3400 с D-092
+// (подъём за инструкцию о процессных полях «Ролей», контракт d092).
 assert.ok(full.metrics.overheadChars <= empty.metrics.overheadChars + 2, 'plan.note добавляет только разделитель, не свой текст');
-assert.ok(full.metrics.overheadChars <= 3200, 'план с заметкой остаётся в бюджете overhead 3200');
+assert.ok(full.metrics.overheadChars <= 3400, 'план с заметкой остаётся в бюджете overhead 3400 (D-092)');
 
 // ── 6. отказ Reviewer исполним: поле «Кому», рабочие роли, пауза сохранена ─
 const routing = cut('  function decisionRoute(next,', '  // ───────────────────────────── вопросы к Мастеру');

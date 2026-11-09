@@ -23,7 +23,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 |---|---|---|---|
 | executor.card | Executor | CF_AGENT_RESULT | ≤2800 |
 | auditor.card | Auditor | CF_AGENT_RESULT | ≤2200 |
-| coordinator.plan | Coordinator | CF_COORDINATOR_RESULT | ≤3200 |
+| coordinator.plan | Coordinator | CF_COORDINATOR_RESULT | ≤3400 |
 | coordinator.recovery | Coordinator | CF_COORDINATOR_RESULT | ≤1500 |
 | reviewer.mission | Reviewer | CF_REVIEW_RESULT | ≤2400 |
 | reviewer.answer | Reviewer | CF_ANSWER_RESULT | ≤1800 |
@@ -163,7 +163,11 @@ dispatch-miss, Submitted/Rework, reviewer-отказ.
 ADR и правка файлов названы работой исполнителя. Защита не ослаблена: Reviewer
 по-прежнему не получает карточку (`ask`, не dispatch), пауза после трёх попыток
 сохранена; `note` не подменяет решение и не конвертирует карточку в вопрос/done.
-Бюджет overhead `coordinator.plan` (3200) **не поднят** — `plan.note` verbatim.
+Бюджет overhead `coordinator.plan` — **3400** с D-092: подъём на 200 знаков
+оплачивает права Координатора на процессные поля «Ролей» (Зона записи, Гейт,
+Репозиторий, Функция) по решению приёмки. Это инструкция, а не данные, поэтому
+она не сжимается (D-078); подъём записан в `contracts/agent-protocol.json` → `d092`.
+До D-092 бюджет был 3200 и не поднимался — `plan.note` verbatim.
 **protocolVersion 1.10** (аддитивно). Регрессия —
 `relay-coordinator-note-delivery-integration`.
 

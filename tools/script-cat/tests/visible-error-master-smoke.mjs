@@ -106,10 +106,12 @@ const makeMonitor = ({ alert = null, card = '', expect = null, retryResult = fal
   const ui = makeMonitor({ card: 'Unexpected UI error card' });
   assert.equal(ui.monitor(), true, 'visible UI card is handled');
   assert.equal(ui.calls.pause.length, 1);
-  assert.deepEqual(ui.calls.pause[0], [
-    'Необработанная ошибка интерфейса: Unexpected UI error card.',
-    { kind: 'ui-error' },
-  ]);
+  // D-092: пауза теперь несёт адресата решения (`with`), поэтому сравниваем
+  // причину и вид паузы, а не весь объект: состав контекста — не контракт пробы.
+  assert.deepEqual(
+    [ui.calls.pause[0][0], ui.calls.pause[0][1].kind],
+    ['Необработанная ошибка интерфейса: Unexpected UI error card.', 'ui-error'],
+  );
   assert.equal(ui.monitor(), false, 'same UI card does not cause a second pause');
   assert.equal(ui.calls.pause.length, 1);
 }
@@ -172,6 +174,10 @@ const pauseFn = new Function(
     // D-084: пауза несёт дефект ответа (null — дефекта нет), он переживает
     // перезагрузку и попадает в разбор транспорта.
     defect: null,
+    // D-092: адресат остановки. Здесь `classifyPause` не подключён, поэтому
+    // поле пустое — и пустое значение читается как «решает человек», то есть
+    // пауза остаётся громкой. Ошибка Arena и должна оставаться громкой.
+    with: '',
     version: '1.13.0', fingerprint: 'abc123',
   });
   assert.equal(calls.notify[0][1].priority, '5', 'Master pause is urgent');

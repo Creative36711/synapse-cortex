@@ -132,7 +132,8 @@ assert.match(
   /kind: "closed-unreviewed",\n\s+ref: closed\.id,\n\s+quiet: true,/,
   'закрытие в обход приёмки — тихая пауза, а не ночной звонок',
 );
-assert.match(src, /if \(context\.quiet\) \{/, 'пауза умеет молчать');
+// D-092: молчание паузы определяется адресатом: `quiet` или «решает не человек».
+assert.match(src, /if \(context\.quiet \|\| !forHuman\) \{/, 'пауза умеет молчать и молчит, когда решает агент');
 assert.match(
   src,
   /ntfy: failed && \(running \|\| waited\) \? "loud" : "quiet",/,

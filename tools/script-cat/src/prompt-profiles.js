@@ -26,7 +26,11 @@
       blocks: ["coordinator.prime", "identity.mission", "mission.returned", "plan.note", "repo.boundary", "role.zone", "authority.core", "authority.coordinator", "queue.snapshot", "answers.delta", "queue.coordinator", "drive.layout", "questions.protocol", "adr.protocol", "phases.bans", "marker.coordinator"],
       requiredFacts: ["role.name", "mission.id", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "pilot.brief"],
-      budget: { overhead: 3200 },
+      // D-092: 3200 → 3400. Прибавка — права Координатора на процессные поля
+      // «Ролей» (Зона записи, Гейт, Репозиторий, Функция) по решению приёмки.
+      // Это инструкция, а не данные: сжимать её нельзя (D-078), поэтому бюджет
+      // поднят явно и записан в контракте, а не выведен из сжатия соседей.
+      budget: { overhead: 3400 },
     });
     def("coordinator.recovery", {
       audience: ["Coordinator"], marker: "CF_COORDINATOR_RESULT",
