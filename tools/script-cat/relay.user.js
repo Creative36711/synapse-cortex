@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.17
+// @version      1.14.18
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "23036c10f026d4b0",
+    buildFingerprint: "72f0aeb425efbdc4",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -724,7 +724,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.17";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.18";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -13581,22 +13581,73 @@
    * прямо в перечислении номеров: обычная ссылка на уже принятое решение вида
    * «см. D-077» — нормальная работа, а не заявка на номер.
    */
-  function decisionNumberConflict(answer, taken) {
+  /**
+   * Заявка на номер решения или просто упоминание — это разные вещи.
+   *
+   * D-088: прежняя версия смотрела на 120 знаков вокруг каждого `D-NNN` и падала на
+   * любое слово «свободен/номер/решение». Живой ответ 09.11 (18:00Z) перечислял,
+   * какие номера уже заняты и что в объявлении Warden было «свободны D-085 и D-086» —
+   * это точный пересказ, а не заявка. Гейт остановил верный ответ и увёл ход
+   * Maintainer'у (инцидент `answer-decisions`, 1 из 2).
+   *
+   * Поэтому «заявка» ищется только в форме присвоения: `D-087 =`, `D-087:`, `D-087 —`
+   * или в предложении, где номер стоит подлежащим при глаголе присвоения
+   * («номер D-087 занят», «беру D-088»). Простое перечисление занятых номеров и
+   * цитата не считаются. Отрицание («D-087 не занят») заявкой тоже не считается.
+   */
+  const DECISION_LOOKBEHIND = /(?:^|[\s(«"',.;:—-])((?:D-)(\d{3}))(?![\d])/g;
+
+  function decisionClaim(answer) {
     const text = String(answer || "");
-    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
-    if (!text || !free.size) return "";
-    const claimed = [];
-    for (const m of text.matchAll(/D-(\d{3})/g)) {
-      const id = `D-${m[1]}`;
-      const around = text.slice(Math.max(0, m.index - 120), m.index + 160);
-      if (/свобод|занима|нов(ый|ое|ого)\s+(решени|номер)|номер(а|ом)?\s+(решени|D-)/i.test(around) && free.has(id.toUpperCase())) {
-        claimed.push(id);
+    if (!text) return [];
+    const out = [];
+    for (const m of text.matchAll(DECISION_LOOKBEHIND)) {
+      const id = m[1];
+      const after = text.slice(m.index + m[0].length, m.index + m[0].length + 40);
+      const before = text.slice(Math.max(0, m.index - 90), m.index);
+      // Прямое присвоение: «D-087 = …», «D-087: …», «D-087 — …».
+      if (/^\s*(?:=|:|—|–|-)\s*\S/.test(after)) { out.push(id); continue; }
+      // Глагол присвоения рядом с номером. Отрицание («D-088 не занят») — не заявка.
+      // Границы слова — пробел/край строки, а не `\b`: в JS `\b` считается по ASCII,
+      // и на кириллице («занят») не срабатывает вовсе.
+      const verb = /(?:^|[\s(«"—])(занят|занято|занятый|свободен|свободно|беру|берём|назначаю|назначаем|выдаю|резервирую|закрепляю)(?=[\s,.;:)—]|$)/i.exec(after);
+      if (verb) {
+        const verbStart = verb.index + verb[0].indexOf(verb[1]);
+        const lead = after.slice(0, verbStart);
+        // «не занят» перед номером — это сообщение о свободе, а не заявка.
+        // Хвост после номера тоже важен: «…, сейчас оба заняты» — пересказ списка,
+        // а не заявка; заявка говорит о номере в единственном числе.
+        const tail = after.slice(verbStart + verb[1].length, verbStart + verb[1].length + 20);
+        const plural = /^\s*[.,;:]?\s*(оба|все|уже|тоже|также|сейчас|пока)\b/i.test(tail);
+        const verbAtQuestion = /^\s*\S+\s+/.test(after.slice(0, verbStart));
+        if (verbStart <= 24 && !/(?:^|\s)не\s*$/i.test(lead) && !plural && !verbAtQuestion) {
+          out.push(id);
+          continue;
+        }
       }
+      // Английская форма заявки: «decision D-088».
+      if (/\bdecision\s*$/i.test(before)) { out.push(id); continue; }
+      // «номер решения — D-087», «решение D-087», «решение о зонах §7 = D-087».
+      // Вторая форма — именно то, как пишет приёмка: «решение о зонах §7 = D-087».
+      if (/(?:номер\w*\s+(?:решени\w*|ADR)?|решени\w*)[^.!?\n]{0,40}[=—:-]\s*$/i.test(before)) {
+        out.push(id);
+        continue;
+      }
+      if (/=\s*$/i.test(before) && /^\s*(?:[,.;)]|$)/.test(after)) out.push(id);
     }
-    const unique = [...new Set(claimed)];
-    if (!unique.length) return "";
-    return `Ответ заявляет номером решения ${unique.join(", ")}, но в docs/DECISIONS.md этот номер уже занят. ` +
-      "Номер берётся из репозитория, а не из памяти: назови следующий свободный (последний + 1) и повтори ответ.";
+    return [...new Set(out)];
+  }
+
+  function decisionNumberConflict(answer, taken) {
+    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
+    if (!free.size) return "";
+    const claimed = decisionClaim(answer).filter((id) => free.has(id.toUpperCase()));
+    if (!claimed.length) return "";
+    const last = [...free].map((x) => Number(String(x).replace(/\D/g, "")) || 0).sort((a, b) => b - a)[0] || 0;
+    const next = `D-${String(last + 1).padStart(3, "0")}`;
+    return `Ответ заявляет номером решения ${claimed.join(", ")}, но в docs/DECISIONS.md этот номер уже занят ` +
+      `(последний занятый — D-${String(last).padStart(3, "0")}). Свободный номер сейчас ${next}: возьми его и повтори ответ. ` +
+      "Упоминание занятых номеров в объяснении конфликтом не считается.";
   }
 
   /**

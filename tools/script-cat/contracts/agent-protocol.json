@@ -1429,5 +1429,55 @@
         "suites": 107
       }
     }
+  },
+  "d088": {
+    "version": "1.14.18",
+    "title": "Занятый номер решения останавливает заявку, а не пересказ",
+    "date": "2026-11-09",
+    "decision": [
+      "25-legacy-adr.decisionClaim",
+      "25-legacy-adr.decisionNumberConflict"
+    ],
+    "incident": {
+      "at": "2026-11-09T18:00:29.589Z",
+      "kind": "answer-decisions",
+      "cls": "transport",
+      "route": "maintainer",
+      "reason": "верный ответ остановлен за перечисление занятых номеров"
+    },
+    "evidence": {
+      "probe": "tests/relay-decision-claim-smoke.mjs",
+      "suites": 109
+    },
+    "safety": [
+      "правило «номер из репозитория» в силе",
+      "сбой чтения списка не блокирует ответ",
+      "пауза остаётся transport"
+    ]
+  },
+  "d089": {
+    "version": "1.14.18",
+    "title": "Занятый номер решения останавливает заявку, а не пересказ",
+    "date": "2026-11-09",
+    "decision": [
+      "25-legacy-adr.decisionClaim",
+      "25-legacy-adr.decisionNumberConflict"
+    ],
+    "incident": {
+      "at": "2026-11-09T18:00:29.589Z",
+      "kind": "answer-decisions",
+      "cls": "transport",
+      "route": "maintainer",
+      "reason": "верный ответ остановлен за перечисление занятых номеров"
+    },
+    "evidence": {
+      "probe": "tests/relay-decision-claim-smoke.mjs",
+      "suites": 109
+    },
+    "safety": [
+      "правило «номер из репозитория» в силе",
+      "сбой чтения списка не блокирует ответ",
+      "пауза остаётся transport"
+    ]
   }
 }
