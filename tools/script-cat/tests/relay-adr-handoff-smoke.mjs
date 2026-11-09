@@ -96,7 +96,7 @@ assert.match(askSrc, /return same\.row;/, 'строка возвращается
 assert.match(askSrc, /приёмка уже ответила/, 'в журнале сказано, кто отвечает');
 
 const flushSrc = cut('  async function flushQuestionQueue() {', '  /**\n   * Ссылки на решения в тексте вопроса');
-assert.match(flushSrc, /complete = await questionFromRowComplete\(same\.row\);[\s\S]*?const handled = handWaitingRow\(same\.row, complete, item\.ctx \|\| \{\}\);/, 'очередь тоже передаёт висящую строку');
+assert.match(flushSrc, /complete = await questionFromRowComplete\(same\.row\);[\s\S]*?const handled = handWaitingRow\(same\.row, complete \|\| questionFromRow\(same\.row\), item\.ctx \|\| \{\}\);/, 'очередь тоже передаёт висящую строку');
 assert.match(src, /const adopted = mine\.filter\(/, 'загрузка страницы подбирает строки, созданные прошлыми версиями');
 assert.match(src, /!GM_getValue\(answerHandoffKey\(row\.id\), 0\)/, 'повторно вопрос не гоняется');
 

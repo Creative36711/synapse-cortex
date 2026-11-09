@@ -86,11 +86,19 @@ assert.match(
   /if \(expect\.kind === "answer"\) await answerStep\(me, expect, fromToggle\);/,
   'в тике ход-ответ подключён к приёмке',
 );
+// D-081: очередь приёмки проверяется ДО ветки «ожидание принадлежит другой
+// роли». Раньше проверка стояла ниже, и пока цикл чего-то ждал, вопрос в
+// приёмку не попадал вовсе — Координатор спрашивал, а Warden не получал хода.
 assert.match(
   src,
-  /if \(!expect && me\.fn !== "Reviewer"\) \{\s*\n\s*const item = answerPending\(\);/,
-  'незавершённый ответ важнее нового хода',
+  /if \(me\.fn !== "Reviewer" && \(fromToggle \|\| autoOn\(\)\)\) \{\s*\n\s*const waiting = answerPending\(\);/,
+  'очередь приёмки читается до выбора страницы',
 );
+{
+  const at = src.indexOf('const waiting = answerPending();');
+  const ownerBranch = src.indexOf('if (expect && norm(expect.roleId) !== norm(me.id)) {');
+  assert.ok(at > 0 && ownerBranch > 0 && at < ownerBranch, 'и стоит раньше ветки чужого ожидания');
+}
 {
   const { PromptCompiler, reminderRequest, UUID } = await import('./helpers/prompt-env.mjs');
   const rem = PromptCompiler.compile(reminderRequest('Reviewer', 'CF_ANSWER_RESULT')).text;
