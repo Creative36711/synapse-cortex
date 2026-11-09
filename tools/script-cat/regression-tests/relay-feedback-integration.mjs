@@ -155,21 +155,23 @@ assert.equal(longParsed.fallback, longDefault, 'вариант сохранён 
 assert.throws(() => api.parseQuestion({ text:'тест', default:'x'.repeat(12001) }), /по умолчанию длиннее/);
 
 // Обычный вопрос — в прежний источник и старые поля, ссылка необязательна.
-const ordinary = api.parseQuestion({ text: 'Какой формат отчёта выбрать?', options: ['A', 'B'], default: 'A', hours: 24 });
+const ordinary = api.parseQuestion({ text: 'Какой формат отчёта выбрать?', options: ['A', 'B'], default: 'A' });
 const ordinaryRow = await api.askQuestion(ordinary, { key: 'turn:ordinary', mission: 'TEST-1', roleName: 'Tools' });
 assert(ordinaryRow?.id);
 assert.equal(posts[0].properties['Вопрос'].title[0].text.content, ordinary.text);
 assert.equal(posts[0].properties['Статус'].select.name, 'Ждёт');
 assert.equal(posts[0].properties['По умолчанию'].rich_text[0].text.content, 'A');
 assert.equal(posts[0].properties['Варианты'].rich_text[0].text.content, 'A · B');
-assert.match(posts[0].properties['Срок'].date.start, /^\d{4}-\d\d-\d\dT/);
+// D-080: сроков нет — «Срок» не пишется, а «Тип» ставит транспорт.
+assert.equal(posts[0].properties['Срок'], undefined, 'срок не пишется');
+assert.equal(posts[0].properties['Тип'].select.name, 'Вопрос', 'тип строки — вопрос');
 assert.equal(posts[0].properties['Материал'], undefined);
 
 // Маркер и сторож одновременно обнаруживают один ADR разными фразами.
 // Критическая секция не позволяет создать две строки в одной вкладке.
 const agentProposal = api.parseQuestion({
   text: `Как решить ADR ${adrPath}? ${'Подробный контекст. '.repeat(12)}`, default: 'оставить как есть',
-  options: ['принять', 'отклонить', 'оставить как есть'], hours: 168,
+  options: ['принять', 'отклонить', 'оставить как есть'], gate: true,
 });
 const [proposalRow] = await Promise.all([
   api.askQuestion(agentProposal, { key: 'agent:turn-2', mission: 'TEST-1', roleName: 'Architect' }),
@@ -179,7 +181,9 @@ assert(proposalRow?.id);
 assert.equal(db.length, 2, 'вопрос и предложение дают две строки, а не три');
 assert.equal(posts.filter((post) => rt(post.properties['Вопрос']).includes(adrFile)).length, 1);
 assert.equal(posts[1].properties['Материал'].url, adrUrl, 'ссылка формируется для старого маркера без url');
-assert.deepEqual(api.answerQueue().map((row) => row.id).sort(), [ordinaryRow.id, proposalRow.id].sort());
+// D-080: в очередь приёмки попадает только вопрос с `gate` (ADR-предложение).
+// Обычный вопрос живёт строкой в базе и ответ приходит следующим промптом.
+assert.deepEqual(api.answerQueue().map((row) => row.id), [proposalRow.id], 'приёмку зовёт только gate');
 const proposalItem = api.answerQueue().find((row) => row.id === proposalRow.id);
 const prompt = api.answerPrompt(mission, { name: 'Warden', fn: 'Reviewer' }, proposalItem, 'turn-2').text;
 assert(prompt.includes(adrUrl), 'приёмка видит ссылку на материал');
@@ -396,7 +400,8 @@ assert(api.answerQueue().some((r) => r.id === legacyOpen.id), 'найденна�
 
 // Сбой перечитывания или записи ответа не снимает ожидание и очередь; после
 // восстановления обрабатывается прежний маркер, не перезаписывая ответ вслепую.
-const recoverable = await api.askQuestion(api.parseQuestion({ text: 'Можно ли продолжать после сбоя?', default: 'ждать' }),
+// D-080: приёмку зовёт только вопрос с gate — без него строки в очереди нет.
+const recoverable = await api.askQuestion(api.parseQuestion({ text: 'Можно ли продолжать после сбоя?', default: 'ждать', gate: true }),
   { key: 'answer-retry', mission: 'TEST-1' });
 messages = [{ raw: `CF_ANSWER_RESULT ${JSON.stringify({ question_id: recoverable.id, turn_id: 'turn-retry', verdict: 'answer', answer: 'Продолжить после проверки.' })}` }];
 const expect = { kind: 'answer', ref: recoverable.id, turnId: 'turn-retry', watermark: 'w-retry' };

@@ -12,7 +12,7 @@ function cut(a, b) {
 const decisionBlock = cut('  function adrKeysOf(text) {', '  /** `Статус:` из шапки ADR');
 const expireBlock = cut('  async function closeExpired(rows, closedIds = null) {', '  /** Строки базы «Вопросы»');
 const intentBlock = cut('  const questionIntents = () => {', '  function queueQuestion(q, ctx = {}) {');
-const questionBlock = cut('  const adrRefsOf = (text) => {', '  /** Отметить ответы доставленными');
+const questionBlock = cut('  const adrRefsOf = (text) => {', '  /**\n   * Отметить ответы доставленными');
 const proposalBlock = cut('  function proposalQuestion(row, missionName = "") {', '  async function refreshDecisions');
 const Q = { wait: 'Ждёт', done: 'Решено', byDefault: 'Принят дефолт' };
 const rt = (p) => (p?.rich_text || p?.title || []).map((x) => x.plain_text || x.text?.content || '').join('');
@@ -43,10 +43,12 @@ const unanswered = question('missing', 'Предложение docs/decisions/NA
   const adr1 = question('adr1', 'ADR STAB-1.32: изменить оракул?', Q.wait);
   const adr2 = question('adr2', 'Предложение docs/decisions/STAB-1.34.md: принять?', Q.wait);
   const closedIds = new Set();
-  assert.equal(await closeExpired([ordinary, adr1, adr2], closedIds), 1);
-  assert.deepEqual([...closedIds], ['ordinary']);
-  assert.deepEqual(patches.map((p) => p.id), ['ordinary']);
-  assert.equal(patches[0].data['Статус'].select.name, Q.byDefault);
+  // D-080: сроков в поведении нет. Ни обычный вопрос, ни ADR-предложение по
+  // сроку не закрываются: открытый вопрос остаётся открытым, пока на него не
+  // ответят, и «Принят дефолт» больше не ставится никому.
+  assert.equal(await closeExpired([ordinary, adr1, adr2], closedIds), 0);
+  assert.deepEqual([...closedIds], []);
+  assert.deepEqual(patches.map((p) => p.id), []);
 }
 
 
@@ -80,10 +82,14 @@ const unanswered = question('missing', 'Предложение docs/decisions/NA
     (key, value) => output.set(key, value), () => {}, 0, (rows) => rows, () => false, () => {},
   );
   const open = await run({ force: true });
-  assert.deepEqual(patched, ['ordinary']);
-  assert.deepEqual(adopted, ['adr', 'failed']);
-  assert.deepEqual(open.map((r) => r.id), ['adr', 'failed']);
-  assert.deepEqual(output.get('cfn-q-open').rows.map((r) => r.id), ['adr', 'failed']);
+  // D-080: закрывать по сроку нечего, поэтому и «не удалось закрыть» не бывает:
+  // ни одной PATCH, все строки остаются открытыми и видны Координатору.
+  assert.deepEqual(patched, [], 'по сроку ничего не закрыто');
+  // Раз закрытия нет, «не закрылось» тоже нет: каждая ждущая строка сразу
+  // передаётся приёмке, и ни одна не пропадает из открытых.
+  assert.deepEqual(adopted, ['ordinary', 'adr', 'failed'], 'все ждущие строки переданы приёмке');
+  assert.deepEqual(open.map((r) => r.id), ['ordinary', 'adr', 'failed']);
+  assert.deepEqual(output.get('cfn-q-open').rows.map((r) => r.id), ['ordinary', 'adr', 'failed']);
 }
 
 // Старый автоматически закрытый ADR нельзя выдать Координатору как ответ.

@@ -360,15 +360,20 @@
               }
             ]
           }
-        }
-      }
-    }
-  },
-  "afterCreate": {
-    "feedback": {
-      "Тип": {
-        "formula": {
-          "expression": "if(or(contains(lower(prop(\"Вопрос\")), \"предложени\"), contains(lower(prop(\"Вопрос\")), \"docs/decisions/\"), contains(lower(prop(\"Вопрос\")), \"adr\"), contains(lower(prop(\"Материал\")), \"docs/decisions/\")), \"Предложение\", \"Вопрос\")"
+        },
+        "Тип": {
+          "select": {
+            "options": [
+              {
+                "name": "Вопрос",
+                "color": "blue"
+              },
+              {
+                "name": "Предложение",
+                "color": "purple"
+              }
+            ]
+          }
         }
       }
     }

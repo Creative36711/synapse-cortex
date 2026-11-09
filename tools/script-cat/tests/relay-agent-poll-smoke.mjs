@@ -288,7 +288,7 @@ assert.match(tickBlock.slice(0, pollAt), /if \(!auto && !fromToggle\) return;/, 
 const { PromptCompiler, dispatchRequest, planRequest } = await import('./helpers/prompt-env.mjs');
 const rules = PromptCompiler.compile(dispatchRequest('Executor')).text;
 assert.match(rules, /Scope расширяет на ход/, 'зона — рамка по умолчанию');
-assert.match(rules, /Вопрос — полем question в маркере/, 'вопрос только полем маркера');
+assert.match(rules, /Вопрос — question в маркере/, 'вопрос только полем маркера');
 assert.match(rules, /default обязателен/, 'без варианта по умолчанию вопрос не принимается');
 assert.match(rules, /в чате — остановка, не делай/, 'опрос в чате по-прежнему запрещён');
 assert.doesNotMatch(rules, /Не задавай вопросов, не создавай опросов/, 'старый полный запрет убран');

@@ -1172,5 +1172,47 @@
         "sha256": "833545dfa29e17f725d76d3fccfcff93b3c90042a3677ba3efbc84194717a886"
       }
     }
+  },
+  "d080": {
+    "decision": "D-080",
+    "version": "1.14.8",
+    "summary": "Вопрос спрашивает, а не останавливает: ход держит только gate, ответ приходит спросившему, сроки убраны из поведения",
+    "fix": "24-feedback.js: parseQuestion/questionInMarker читают gate (+need) вместо hours, questionGate принимает да/true/1; askQuestion зовёт queueAnswer только при gate, иначе пишет «Ход не останавливается»; closeExpired всегда возвращает 0 (имя сохранено), expiredQuestions = «есть старый Срок», Срок не пишется, «Принят дефолт» не ставится; markDelivered(rows, now, roleName) — адресная отметка по Роль; добавлен answersMineLine/questionBriefing(...).answersMine(role); questionProps пишет Тип (select) через questionType. 25-legacy-adr.js: startAnswer только по gate/need. prompt-blocks.js: новый блок answers.mine в executor.card и auditor.card, questions.protocol v2. 27-review-answers.js: answersMine читается перед сборкой, отметка ставится после отправки. 08-projects-ui.js: Тип — select в единой схеме, лишние поля живой базы называются в «Проверить подключения». NOTION-TEMPLATE.json: afterCreate.feedback убран, Тип переехал в базу.",
+    "safety": [
+      "обычный вопрос не останавливает ход: работа идёт по default, ответ приходит следующим промптом",
+      "остановка только явная (gate:true + need): молчаливой остановки из невнятного значения нет",
+      "срок больше не закрывает вопрос и не ставит «Принят дефолт»: открытый вопрос остаётся открытым",
+      "отметка «Доставлено» адресная: чужая роль и повторная доставка дату не получают",
+      "бюджеты промптов не подняты: questions.protocol 231 → 276 знаков, answers.mine без заголовка, executor.card 2794 ≤ 2800, auditor.card 2029 ≤ 2050",
+      "живую схему Notion транспорт не правит: лишние поля только называются"
+    ],
+    "evidence": {
+      "probe": "tests/relay-question-gate-smoke.mjs",
+      "probe_fails_on": "бандл 1.14.7: ReferenceError: questionGate is not defined",
+      "runs": {
+        "tests": 124,
+        "regression": 22,
+        "delivery": 2
+      },
+      "source": "обратная связь Мастера 04.11: «агент обязан выдать конкретный next, а вопрос должен вставать в ступор ради мнения (Warden)», «Координатор не знает, что ответ доставляется сразу», сроки устарели",
+      "measurements": {
+        "questions_protocol_chars": {
+          "before": 231,
+          "after": 276
+        },
+        "overhead": {
+          "executor_card": 2794,
+          "auditor_card": 2029,
+          "k43": 2796
+        },
+        "hours_field": "не пишется; closeExpired = 0"
+      },
+      "build": {
+        "version": "1.14.8",
+        "fingerprint": "01c6a851a7f0638a",
+        "bytes": 1214937,
+        "sha256": "e7e9c8fc4cd16c25d0aa3d13c2bfa5ab4f2071953ebd9780eb769cc8078fffa0"
+      }
+    }
   }
 }

@@ -81,6 +81,11 @@
       mission: missionId ? { id: missionId } : undefined,
       // D-035: адрес папки артефактов — иначе исполнитель/аудитор кладёт в корень.
       drive: { project: C.driveFolder || C.projectName || "" },
+      // D-080: ответ на свой вопрос этот агент видит в своём же промпте, а не
+      // только через Координатора. Строка готовится вызывающей стороной
+      // (`dispatchTask`), потому что база читается асинхронно, а сборка промпта
+      // — чистая функция.
+      queue: ctx.answersMine ? { answersMine: ctx.answersMine } : undefined,
       delivery: { tier: "full", attempt: 1 },
     };
     const delivery = PromptCompiler.forDelivery(request, {

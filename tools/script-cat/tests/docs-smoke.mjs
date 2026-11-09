@@ -212,4 +212,31 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(polls, /!holdsText && rewrites < 2/, 'в непустое поле текст не пишется');
 }
 
+// 12. D-080: вопрос спрашивает, а не останавливает.
+{
+  const d080 = contract.d080;
+  assert.ok(d080, 'D-080 записан в контракт');
+  assert.match(d080.version || '', /^1\.14\.8$/, 'D-080 относится к сборке 1.14.8');
+  assert.match(d080.evidence?.probe || '', /relay-question-gate-smoke/, 'проба названа');
+  assert.match(d080.fix || '', /parseQuestion/, 'разбор gate назван');
+  assert.match(d080.fix || '', /answers\.mine/, 'адресные ответы названы');
+  assert.match(d080.fix || '', /closeExpired/, 'снятие сроков названо');
+  assert.match(d080.fix || '', /Тип — select/, 'перевод «Тип» в select назван');
+  const safety = (d080.safety || []).join(' ');
+  assert.match(safety, /не останавливает ход/, 'ход держит только gate');
+  assert.match(safety, /бюджеты промптов не подняты/, 'бюджеты не поднимались');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-080 \(1\.14\.8\)/, 'D-080 есть в журнале решений');
+  // Чья сторона — названа прямо: противоречие создал транспорт, а не агенты.
+  assert.match(decisions, /Наша, транспорта/, 'разбор заканчивается формулировкой «чья сторона»');
+  // Схема одна: «Тип» больше не живёт отдельным шагом после создания базы.
+  const template = JSON.parse(readFileSync(join(root, 'tools/script-cat/NOTION-TEMPLATE.json'), 'utf8'));
+  assert.equal(template.afterCreate, undefined, 'afterCreate убран из шаблона');
+  assert.ok(template.databases.feedback.properties['Тип']?.select, '«Тип» — select в самой базе');
+  // Сроки убраны из поведения, поле остаётся историей.
+  assert.match(readFileSync(join(root, 'tools/script-cat/src/24-feedback.js'), 'utf8'),
+    /Сроков нет|сроков нет|Срок.*больше не пишется|не пишется — механики сроков нет/, 'в коде сказано, что сроков нет');
+}
+
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

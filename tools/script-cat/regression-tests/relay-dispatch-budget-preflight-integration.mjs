@@ -99,7 +99,7 @@ const dispatchTo = src.indexOf('  // ──────────────�
 assert(dispatchFrom > 0 && dispatchTo > dispatchFrom);
 const dispatchTask = new Function(
   'roles', 'roleRows', 'norm', 'rt', 'gateway', 'patch', 'taskLogEntry', 'executorPrompt',
-  'log', 'taskTitle', 'uid', 'nowIso', 'sendToRole', 'notion', 'taskState', 'taskRole',
+  'log', 'dbg', 'taskTitle', 'uid', 'nowIso', 'sendToRole', 'notion', 'taskState', 'taskRole',
   'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue',
   'pause', 'K', 'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
   'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
@@ -116,6 +116,7 @@ const dispatchTask = new Function(
   () => { throw new Error('taskLogEntry вызван для несобранного промпта'); },
   executorPrompt,
   (message) => calls.push(`log:${message}`),
+  () => {},
   (page) => rt(page.properties['Запрос']),
   () => UUID.run, () => '2026-11-05T19:24:23.084Z',
   async () => { throw new Error('исполнителю ушёл несобранный/укороченный промпт'); },

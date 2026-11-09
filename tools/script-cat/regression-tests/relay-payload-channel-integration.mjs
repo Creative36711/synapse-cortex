@@ -49,7 +49,7 @@ function makeHarness({ payloadId = '', fileText = '', saveFails = false } = {}) 
   const executorPrompt = makeExecutorPrompt(pauses);
   const dispatchTask = new Function(
     'roles', 'roleRows', 'norm', 'rt', 'gateway', 'patch', 'taskLogEntry', 'executorPrompt',
-    'log', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
+    'log', 'dbg', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
     'notion', 'taskState', 'taskRole', 'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue', 'pause', 'K',
     'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
@@ -74,6 +74,7 @@ function makeHarness({ payloadId = '', fileText = '', saveFails = false } = {}) 
     (task, role, payload) => `LOG[${String(payload).slice(0, 40)}]`,
     executorPrompt,
     (text, error) => calls.push({ action: 'log', text, error }),
+    () => {},
     taskTitle,
     () => 'run-1',
     () => '2026-11-04T21:10:00.000Z',

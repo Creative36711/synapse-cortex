@@ -520,11 +520,25 @@
       dispatchCtx.payloadPointer = payloadPointer;
     }
     let compileProblem = "";
+    // D-080: ответы на вопросы ЭТОЙ роли. Читаются здесь, а не в сборщике:
+    // сборка промпта — чистая функция, а база «Обратная связь» — сеть.
+    // Ошибка чтения не отменяет выдачу: карточка важнее брифинга.
+    let answersMine = "";
+    try {
+      const briefing = await questionBriefing(mission).catch(() => null);
+      answersMine = briefing?.answersMine ? briefing.answersMine(role.name) : "";
+    } catch (e) {
+      dbg("ответы роли не прочитаны", e.message);
+    }
     // logId в промпт не входит; журнал создаётся только после успешной сборки.
     const prompt = executorPrompt(fresh, role, payload, "", runId, mission?.id || "", {
       ...dispatchCtx,
+      answersMine,
       onCompileError: (reason) => { compileProblem = reason; },
     });
+    // Ответ, который ушёл роли в этом промпте, отмечается ей же — после того,
+    // как отправка подтвердилась (ниже). Здесь только запоминаем, что показали.
+    const answersShown = answersMine ? fresh : [];
     if (!prompt) {
       // Это отказ сборки, а не дубль и не сетевой сбой. Счётчик промахов ещё
       // не сброшен: Координатор получает причину через plan.note (D-042), а
@@ -545,6 +559,10 @@
         `статус не меняю, созданный пустой журнал ${logId} оставлен для проверки`;
     }
     GM_setValue("cfn-dispatch-miss", 0);
+    // D-080: промпт собран и карточка уходит в Running — ответы, показанные
+    // этой роли, считаются доставленными ей. Общая отметка (для Координатора)
+    // поставится его планом; здесь — только её собственные строки.
+    if (answersShown.length) await markDelivered(answersShown, Date.now(), role.name);
     await patch(card.id, {
       "Dispatch State": { select: { name: "Running" } },
       "Run ID": { rich_text: [{ type: "text", text: { content: runId } }] },

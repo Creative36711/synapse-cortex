@@ -88,7 +88,10 @@ const question = {
   assert.equal(posted[0].body.parent.data_source_id, 'ds-questions', 'строка идёт в базу «Вопросы»');
   assert.equal(posted[0].body.properties['Вопрос'].title[0].text.content, question.text);
   assert.ok(logs.every((l) => l.ntfy !== 'loud'), 'громкого пуша нет: вопрос уходит приёмке');
-  assert.ok(logs.some((l) => l.text && l.text.includes('отвечает приёмка')), 'в журнале сказано, кто отвечает');
+  // D-080: без gate вопрос не держит ход — журнал говорит, по какому варианту
+  // идём и что ответ придёт следующим промптом.
+  assert.ok(logs.some((l) => l.text && l.text.includes('ход идёт по')), 'в журнале сказано, что ход продолжается');
+  assert.ok(logs.every((l) => l.ntfy !== 'loud'), 'громкого пуша нет: Мастера не будим');
   assert.ok(logs.some((l) => l.text && l.text.includes('Отложенный вопрос')), 'в журнал ушло объяснение');
 }
 

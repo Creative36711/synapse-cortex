@@ -49,7 +49,7 @@ function makeHarness({ payloadId = '', fileText = '', fileTexts = null, readFail
 
   const dispatchTask = new Function(
     'roles', 'roleRows', 'norm', 'rt', 'gateway', 'patch', 'taskLogEntry', 'executorPrompt',
-    'log', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
+    'log', 'dbg', 'taskTitle', 'uid', 'nowIso', 'sendToRole',
     'notion', 'taskState', 'taskRole', 'taskTargetRepository', 'reworkSeen', 'C', 'ACTIVE_PROFILE', 'GM_getValue', 'GM_setValue', 'pause', 'K',
     'profileSessionRepo', 'canonicalTargetRepository', 'profileRepoBranch',
     'redispatchClearProps', 'redispatchWhy', 'noteRedispatch', 'REDISPATCH_LIMIT',
@@ -76,6 +76,7 @@ function makeHarness({ payloadId = '', fileText = '', fileTexts = null, readFail
     (task, role, payload) => `LOG[${payload}]`,
     (task, role, payload) => `PROMPT[${payload}]`,
     (text, error) => calls.push({ action: 'log', text, error }),
+    () => {},
     (task) => (task.properties['Запрос']?.title || []).map((x) => x.plain_text).join(''),
     () => 'run-1',
     () => '2026-10-23T17:00:00.000Z',
