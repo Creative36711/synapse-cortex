@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.11
+// @version      1.14.12
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "9d45541d757e2660",
+    buildFingerprint: "42a396207183872f",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -712,7 +712,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.11";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.12";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1149,6 +1149,10 @@
       runId: context.runId || "",
       turnId: context.turnId || "",
       tries: context.tries ?? null,
+      // D-084: что не сошлось в ответе агента (маркер, имя, хвост). Поле
+      // переживает перезагрузку вместе с паузой: разбор восстановления читает
+      // его из состояния, а не из текста причины.
+      defect: context.heal && context.heal.defect ? context.heal : null,
       wasAuto: autoOn(),
       // D-073: какая сборка сломалась. По этому признаку гейт версии отличает
       // «установлена новая сборка» от «тот же номер, тот же бандл».
@@ -5175,6 +5179,25 @@
   }
 
   /**
+   * Чего именно не хватило в ответе — словами для разбора транспорта (D-084).
+   *
+   * Пауза больше не просит Мастера «проверить страницу агента»: она называет
+   * дефект, который транспорт ищет в своём разборе. Без этого Maintainer
+   * получал бы «маркера нет» там, где маркер виден в тексте.
+   */
+  function markerDefectHint(why, defect, markerName) {
+    const kind = String(defect || why || "");
+    if (kind === "thin") return `в ${markerName} нет отчёта (report) и ID этой выдачи`;
+    if (kind === "ids") return `в ${markerName} нет dispatch_id/run_id этой выдачи`;
+    if (kind === "pr-claim") return `в ${markerName} «pr:null» и «merged:true» одновременно`;
+    if (kind === "no-name") return `JSON решения есть, а имени ${markerName} в ответе нет`;
+    if (kind === "foreign-json") return `последний JSON в ответе принадлежит другому маркеру`;
+    if (kind === "placeholder") return `разбор счёл ${markerName} шаблоном из задания`;
+    if (kind === "loose-name") return `имя ${markerName} написано иначе, чем в задании`;
+    return `имени ${markerName} в ответе нет — разобрать нечего`;
+  }
+
+  /**
    * Признаки того, что агент ещё работает: кнопка Stop и «думающая» плашка.
    * Пока они видны, любой текст в чате — черновик, а не ответ.
    */
@@ -5559,22 +5582,35 @@
     const retained = retainRejectedResult(expect, "missing-marker", replies);
     const preservation = retained ? "Копия ответа сохранена локально; ожидание не снято." :
       "Ожидание не снято; локальную копию записать не удалось, сохраните ответ из чата вручную.";
+    // D-084: исчерпание напоминаний — не повод звать Мастера. Маркер виден в
+    // тексте, а транспорт его не разобрал — это дефект разбора или доставки, и
+    // чинит его транспорт (Transport Maintainer). Ход уходит ему: пауза
+    // `kind:"marker"` класса transport превращается в передачу разбора, а
+    // предохранитель C.healMaintainerMax не даёт крутиться по кругу.
     pause(
       (why === "thin"
-        ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: проверьте страницу агента. "
+        ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. `
         : why === "ids"
-        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
+        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. `
         : why === "pr-claim"
-        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
+        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. `
         : defect === "no-name"
-        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: строка решения есть, не хватает только имени маркера — его можно дописать в конец ответа. "
-        : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
-            `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
-      { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
+        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. `
+        : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний.${reject} `) +
+        "Это дефект разбора или доставки маркера, а не работа агента: передаю разбор транспорту — " +
+        `${markerDefectHint(why, defect, markerName)} ` + preservation,
+      {
+        kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent,
+        // Что именно не сошлось — в телеметрию и в бриф разбора: по одному
+        // «нет маркера» дефект не найти, а хвост ответа уже сохранён рядом.
+        heal: {
+          defect: String(defect || why || "missing").slice(0, 40),
+          hint: markerDefectHint(why, defect, markerName),
+          marker: String(markerName || ""),
+          role: String(role.name || ""),
+          tail: tail(last.text, 300),
+        },
+      },
     );
     return true;
   }
@@ -17235,7 +17271,12 @@
     "closed-unreviewed": "master",
     "mission-change-running": "master",
     "mission-change-answer": "master",
-    marker: "master",
+    // D-084: «ответ без маркера после всех напоминаний» — дефект разбора или
+    // доставки, а не решение человека. Мастер в таких случаях не понадобился
+    // ни разу (09.11: маркер CF_ANSWER_RESULT был виден в тексте Warden, а
+    // транспорт дважды отрапортовал «без маркера»). Ход уходит Maintainer'у, у
+    // него дифф и проба; предохранитель C.healMaintainerMax остаётся.
+    marker: "transport",
     "marker-mismatch": "master",
     "poll-loop": "master",
     "dispatch-mission": "master",
@@ -17404,8 +17445,13 @@
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 120);
+    // D-084: дефект маркера — часть ключа. «Нет отчёта» и «нет dispatch_id»
+    // чинятся разными правками и не должны считаться одним инцидентом, иначе
+    // предохранитель Maintainer'а сгорал бы на чужой поломке.
+    const defect = info.defect && (info.defect.kind || info.defect.marker)
+      ? `${info.defect.kind || ""}/${info.defect.marker || ""}` : "";
     return [String(info.kind || ""), String(info.ref || ""), String(info.runId || ""),
-      String(info.turnId || ""), core].join("|");
+      String(info.turnId || ""), core, defect].join("|");
   }
 
   const healBackoff = (retries, config = {}) => {
@@ -17847,6 +17893,14 @@
       incident: {
         kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
         turnId: String(info.turnId || ""), reason: String(info.reason || "").slice(0, 400),
+        // D-084: что именно не сошлось в ответе агента (дефект маркера, имя
+        // маркера, хвост текста). Без этого разбор начинается с нуля, хотя
+        // ответ уже прочитан транспортом.
+        defect: info.defect ? {
+          kind: String(info.defect.kind || ""), hint: String(info.defect.hint || "").slice(0, 300),
+          marker: String(info.defect.marker || ""), role: String(info.defect.role || ""),
+          tail: healRedact(String(info.defect.tail || "")).slice(0, 400),
+        } : null,
       },
       verdict: { ...verdict, decision },
       snapshot: healPageSnapshot(),
@@ -17860,6 +17914,10 @@
       `ИНЦИДЕНТ ТРАНСПОРТА · класс ${verdict.cls} · ${verdict.why}.`,
       `Остановка: «${String(info.reason || "").slice(0, 300)}»`,
       `Вид паузы: ${info.kind || "пусто"}; карточка ${info.ref || "—"}; run ${info.runId || "—"}; ход ${info.turnId || "—"}.`,
+      info.defect
+        ? `Маркер «${info.defect.marker || "?"}» от «${info.defect.role || "?"}»: ${info.defect.hint || "чего не хватило — не названо"}. ` +
+            "Хвост ответа — в телеметрии ниже; копия всего ответа сохранена локально."
+        : "Маркер разбирать не пришлось: причина названа видом остановки.",
       `Разбор ${decision.attempt} из ${decision.max}. Сборка ${SCRIPT_VERSION} @ ${C.buildFingerprint || "без отпечатка"}.`,
       where ? `Полная телеметрия: ${where}.` : "Полная телеметрия наружу не ушла — вложение ниже.",
       "СНИМОК СТРАНИЦЫ И ЖУРНАЛ ПОПЫТОК (без переписки и секретов):",
@@ -17882,7 +17940,10 @@
     const queued = await sendToRole(role, text, "heal", String(info.ref || turnId), {
       turnId,
       title: `транспорт: ${info.kind || "остановка"}`,
-      heal: { kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || "") },
+      heal: {
+        kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
+        ...(info.defect ? { defect: info.defect } : {}),
+      },
     });
     if (!queued) return { ok: false, why: "передача не поставлена в очередь" };
     const ready = await maintainerTurnReady(role, turnId, 45000);
@@ -17983,6 +18044,9 @@
       kind: pending.kind || expect.heal?.kind || "", ref: expect.ref || "",
       runId: pending.runId || expect.heal?.runId || "", turnId: expect.turnId || "",
       reason: pending.reason || "",
+      // D-084: дефект маркера переживает передачу. Иначе разбор «исправлено»
+      // нечем проверить: Maintainer не знает, что именно не сошлось.
+      defect: pending.defect || expect.heal?.defect || null,
     };
     // Передача закончилась: ожидание и очередь снимаются до применения решения,
     // иначе повторный тик применит его дважды.
@@ -17998,12 +18062,15 @@
         timeoutMs: Number(C.healVersionTimeoutMs) || 900000,
       });
       if (!gate.ok) {
-        const key = healIncidentKey(info);
-        healBump(key, "escalations");
         pause(
           `Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
             "Продолжение закрыто до установки новой сборки: установите её и нажмите «Продолжить».",
-          { kind: "heal-await-update", ref: info.ref, runId: info.runId, turnId: info.turnId },
+          {
+            kind: "heal-await-update", ref: info.ref, runId: info.runId, turnId: info.turnId,
+            // Дефект переезжает в следующую остановку: после установки сборки
+            // разбор должен видеть тот же ответ, а не пустую паузу.
+            heal: info.defect ? { defect: info.defect } : undefined,
+          },
         );
         return true;
       }
@@ -18018,7 +18085,14 @@
       `Maintainer «${role.name}» не смог исправить поломку: ${verdict.reason || "причина не названа"}. ` +
         "Цикл остановлен, ход не потерян: карточка и очередь на месте. Телеметрия выгружена — " +
         "посмотрите её и решите вручную.",
-      { kind: "heal-maintainer-done", ref: info.ref, runId: info.runId, turnId: info.turnId },
+      {
+        kind: "heal-maintainer-done", ref: info.ref, runId: info.runId, turnId: info.turnId,
+        // Сюда цикл доходит уже после разбора: Мастеру звонить не нужно, он
+        // увидит остановку в панели. Телефонный звонок остаётся только там, где
+        // без человека физически нельзя.
+        quiet: true,
+        heal: info.defect ? { defect: info.defect } : undefined,
+      },
     );
     return true;
   }
@@ -18089,6 +18163,7 @@
         pending: {
           kind: String(info.kind || ""), ref: String(info.ref || ""), runId: String(info.runId || ""),
           reason: String(info.reason || ""), cls: verdict.cls, at: nowIso(),
+          defect: info.defect || null,
         },
       });
       const sent = await escalateToMaintainer(info, verdict, decision);
@@ -18103,6 +18178,11 @@
         );
         return { verdict, decision, escalated: false, why: sent.why };
       }
+      // D-084: шаг передачи считается здесь, а не в ветке «доставка не удалась».
+      // Иначе один и тот же дефект маркера уходил бы транспортy бесконечно:
+      // каждое «FIXED» без новой сборки ставило heal-await-update, а после
+      // «Продолжить» счётчик оставался нулевым.
+      healBump(key, "escalations");
       return { verdict, decision, escalated: true };
     }
 

@@ -309,5 +309,24 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(answers, /need: q\.gate === true \? String\(q\.need \|\| ""\) : ""/, 'адресат переживает очередь');
 }
 
+// 16. D-084: «нет маркера» — поломка транспорта, а не повод звать Мастера.
+{
+  const d084 = contract.d084;
+  assert.ok(d084, 'D-084 записан в контракт');
+  assert.match(d084.version || '', /^1\.14\.12$/, 'D-084 относится к сборке 1.14.12');
+  assert.match(d084.evidence?.probe || '', /relay-marker-escalation-smoke/, 'проба названа');
+  const safety = (d084.safety || []).join(' ');
+  assert.match(safety, /предохранитель C\.healMaintainerMax/, 'предохранитель передачи назван');
+  assert.match(safety, /остаются классом master/, 'соседние паузы не сдвинулись');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-084 \(1\.14\.12\)/, 'D-084 есть в журнале решений');
+  const core = readFileSync(join(root, 'tools/script-cat/src/40-heal-core.js'), 'utf8');
+  assert.match(core, /\n    marker: "transport",/, 'вид паузы marker — класс transport');
+  assert.match(core, /\n    "marker-mismatch": "master",/, 'marker-mismatch остался за Мастером');
+  const ladder = readFileSync(join(root, 'tools/script-cat/src/14-missing-marker.js'), 'utf8');
+  assert.match(ladder, /markerDefectHint\(why, defect, markerName\)/, 'пауза называет дефект');
+  assert.ok(!/Нужен Мастер/.test(ladder.slice(ladder.indexOf('async function markerMissing('),
+    ladder.indexOf('// ───────────────────────── ошибка на экране'))), 'маркерная лестница Мастера не зовёт');
+}
 
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

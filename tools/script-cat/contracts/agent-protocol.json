@@ -1328,5 +1328,26 @@
       "build": "1 236 532 Б, отпечаток 6e37febe61c6c17d"
     },
     "revision": "Если Координатор снова «не может без Warden», смотреть на question.gate и question.need в его маркере: пустой need уводит вопрос к активному Reviewer, а отсутствующая в «Ролях» роль оставляет вопрос ждать в очереди"
+  },
+  "d084": {
+    "decision": "D-084",
+    "version": "1.14.12",
+    "summary": "Исчерпание напоминаний «ответ без маркера» звало Мастера там, где дефект был в разборе транспорта: ход уходит Transport Maintainer'у",
+    "fix": "40-heal-core.js: маркер паузы marker переведён из класса master в transport (маршрут maintainer); дефект маркера стал частью ключа инцидента (healIncidentKey). 14-missing-marker.js: терминальные ветки markerMissing больше не говорят «Нужен Мастер» — пауза называет дефект через markerDefectHint (нет отчёта, нет dispatch_id/run_id, pr:null при merged:true, JSON без имени, маркер-шаблон, чужой JSON, иное написание имени) и передаёт в pause({heal}) маркер, роль, подсказку и хвост ответа. 06-pause-panel.js: pause переносит defect в контекст паузы, чтобы он пережил перезагрузку. 41-heal.js: healDiagnosis печатает строку «Маркер «…» от «…»: чего не хватило», buildHealTelemetry получает incident.defect (хвост через healRedact); дефект лежит в heal.pending, в ожидании хода (sendMaintainerTurn) и переезжает в heal-await-update; шаг передачи засчитывается сразу после подтверждённой доставки (healBump escalations), а не только при отказе доставки; остановка heal-maintainer-done стала тихой (quiet).",
+    "safety": [
+      "маркер-лестница остаётся одна для всех маркеров и режима manual: правило не размножается по вызывающим",
+      "предохранитель C.healMaintainerMax (2 разбора на инцидент) сохранён: третий раз — heal-exhausted, а не бесконечная передача",
+      "копия ответа по-прежнему сохраняется локально (retainRejectedResult), ожидание не снимается",
+      "marker-mismatch, review-marker, answer-marker, arbiter-marker остаются классом master: это «маркер говорит не то», а не дефект разбора",
+      "Мастер вызывается только там, где без него физически нельзя (нет адресата Maintainer, исчерпан предохранитель, сбой Arena)",
+      "бюджеты промптов не подняты: coordinator.plan 3184/3200, executor.card 2721/2800, напоминание 487 overhead"
+    ],
+    "evidence": {
+      "probe": "tools/script-cat/tests/relay-marker-escalation-smoke.mjs",
+      "red_on": "1.14.11",
+      "green_on": "1.14.12",
+      "build": "1 243 004 Б, отпечаток 42a396207183872f"
+    },
+    "revision": "Если «нет маркера» снова зовёт Мастера — смотреть на маршрут в журнале разбора: cls transport / route maintainer и строку «Маркер «…» от «…» в брифе. heal-no-maintainer означает, что сломан сам адресат (нет активной строки Maintainer в «Ролях»), и кодом это не правится."
   }
 }

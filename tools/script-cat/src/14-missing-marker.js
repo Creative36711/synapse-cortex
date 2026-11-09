@@ -47,6 +47,25 @@
   }
 
   /**
+   * Чего именно не хватило в ответе — словами для разбора транспорта (D-084).
+   *
+   * Пауза больше не просит Мастера «проверить страницу агента»: она называет
+   * дефект, который транспорт ищет в своём разборе. Без этого Maintainer
+   * получал бы «маркера нет» там, где маркер виден в тексте.
+   */
+  function markerDefectHint(why, defect, markerName) {
+    const kind = String(defect || why || "");
+    if (kind === "thin") return `в ${markerName} нет отчёта (report) и ID этой выдачи`;
+    if (kind === "ids") return `в ${markerName} нет dispatch_id/run_id этой выдачи`;
+    if (kind === "pr-claim") return `в ${markerName} «pr:null» и «merged:true» одновременно`;
+    if (kind === "no-name") return `JSON решения есть, а имени ${markerName} в ответе нет`;
+    if (kind === "foreign-json") return `последний JSON в ответе принадлежит другому маркеру`;
+    if (kind === "placeholder") return `разбор счёл ${markerName} шаблоном из задания`;
+    if (kind === "loose-name") return `имя ${markerName} написано иначе, чем в задании`;
+    return `имени ${markerName} в ответе нет — разобрать нечего`;
+  }
+
+  /**
    * Признаки того, что агент ещё работает: кнопка Stop и «думающая» плашка.
    * Пока они видны, любой текст в чате — черновик, а не ответ.
    */
@@ -431,22 +450,35 @@
     const retained = retainRejectedResult(expect, "missing-marker", replies);
     const preservation = retained ? "Копия ответа сохранена локально; ожидание не снято." :
       "Ожидание не снято; локальную копию записать не удалось, сохраните ответ из чата вручную.";
+    // D-084: исчерпание напоминаний — не повод звать Мастера. Маркер виден в
+    // тексте, а транспорт его не разобрал — это дефект разбора или доставки, и
+    // чинит его транспорт (Transport Maintainer). Ход уходит ему: пауза
+    // `kind:"marker"` класса transport превращается в передачу разбора, а
+    // предохранитель C.healMaintainerMax не даёт крутиться по кругу.
     pause(
       (why === "thin"
-        ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: проверьте страницу агента. "
+        ? `${role.name} присылает только маркер ${markerName}, без отчёта, после ${C.markerReminders} напоминаний. `
         : why === "ids"
-        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: попросите агента повторить маркер с ID этой выдачи. "
+        ? `${role.name} присылает маркер ${markerName} без dispatch_id/run_id этой выдачи после ${C.markerReminders} напоминаний. `
         : why === "pr-claim"
-        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: если изменений не было — нужен merged:false, если PR слит — его номер. "
+        ? `${role.name} присылает маркер ${markerName} с «pr:null» и «merged:true» одновременно после ${C.markerReminders} напоминаний. `
         : defect === "no-name"
-        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. ` +
-            "Нужен Мастер: строка решения есть, не хватает только имени маркера — его можно дописать в конец ответа. "
-        : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний. ` +
-            `Нужен Мастер: проверьте страницу агента.${reject} `) + preservation,
-      { kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent },
+        ? `${role.name} присылает JSON решения без имени ${markerName} после ${C.markerReminders} напоминаний. `
+        : `${role.name} ответил без маркера ${markerName} после ${C.markerReminders} напоминаний.${reject} `) +
+        "Это дефект разбора или доставки маркера, а не работа агента: передаю разбор транспорту — " +
+        `${markerDefectHint(why, defect, markerName)} ` + preservation,
+      {
+        kind: "marker", ref: expect.ref, runId: expect.runId, turnId: expect.turnId, tries: sent,
+        // Что именно не сошлось — в телеметрию и в бриф разбора: по одному
+        // «нет маркера» дефект не найти, а хвост ответа уже сохранён рядом.
+        heal: {
+          defect: String(defect || why || "missing").slice(0, 40),
+          hint: markerDefectHint(why, defect, markerName),
+          marker: String(markerName || ""),
+          role: String(role.name || ""),
+          tail: tail(last.text, 300),
+        },
+      },
     );
     return true;
   }
