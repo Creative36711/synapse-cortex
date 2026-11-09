@@ -130,15 +130,37 @@
    * Notion и в git, а сверять их было некому. Здесь читается шапка очереди —
    * `Передача от Warden, 2026-11-08 (**редакция 1.7**, **ТЗ 1.5**)` — прямо из
    * репозитория. Это факт, а не догадка.
+   *
+   * 09.11 (2-я редакция): ролей два репозитория, и документы лежат не там, где
+   * работает роль. `synapse` — публичный репозиторий кода, `synapse-cortex` —
+   * приватный, и в Notion «Репозиторий» роли-приёмки (`Warden`) назван cortex.
+   * Поэтому читаем не `C.repo` (это репозиторий сессии роли), а
+   * `C.docsRepo` → репозиторий роли-приёмки → `C.repo`. Иначе сверка ищет
+   * документ не в том репозитории и всегда возвращает «не прочитано».
    */
+  function docsRepository() {
+    if (String(C.docsRepo || "").trim()) return String(C.docsRepo).trim();
+    try {
+      if (typeof roleRows === "function") {
+        // Синхронного доступа к строкам «Ролей» нет; кеш пишется при чтении базы.
+        const cache = GM_getValue(K.rolesCache, null);
+        const rows = cache && Array.isArray(cache.rows) ? cache.rows : [];
+        const owner = rows.find((r) => r && (r.fn === "Reviewer" || norm(r.name) === norm("Warden")) && String(r.repo || "").trim());
+        if (owner) return String(canonicalTargetRepository(owner.repo, C.repo));
+      }
+    } catch { /* репозиторий роли не прочитан — ниже фолбэк */ }
+    return String(C.repo || "");
+  }
+
   async function publishedTzVersion(file = C.queueDoc || "docs/handoff/syn-3-card-queue.md") {
     const cache = GM_getValue("cfn-tz-published", null);
     const now = Date.now();
-    if (cache && cache.file === file && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+    const repo = canonicalTargetRepository(docsRepository());
+    if (cache && cache.file === file && cache.repo === repo &&
+        now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
       return cache;
     }
     const token = GM_getValue(K.ghToken, "");
-    const repo = String(C.repo || "");
     if (!token || !repo) return cache && cache.file === file ? cache : null;
     try {
       const url = `https://api.github.com/repos/${repo}/contents/${file}?ref=${encodeURIComponent(C.branch || "main")}`;
@@ -147,7 +169,7 @@
       const tz = String(text || "").match(/ТЗ\s*\**\s*(\d+\.\d+)/i);
       const queue = String(text || "").match(/редакция\s*\**\s*(\d+\.\d+)/i);
       if (!tz && !queue) return null;
-      const out = { at: now, file, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
+      const out = { at: now, file, repo, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
       GM_setValue("cfn-tz-published", out);
       return out;
     } catch (e) {

@@ -511,6 +511,10 @@
     } else if (String(C.repo || "").toLowerCase() !== targetRepo.toLowerCase()) {
       return `репозиторий карточки ${targetRepo} не совпадает с legacy-профилем ${C.repo}; выдачу не начинаю`;
     }
+    // D-086: и последнее — репозиторий цели против подключения самой роли.
+    // «Кто к какому репозиторию подключён, тот тот и правит» (Мастер, 09.11).
+    const repoIssue = typeof roleRepoVerdict === "function" ? roleRepoVerdict(targetRepo, role) : "";
+    if (repoIssue) return repoIssue;
     const targetBranch = profileRepoBranch(targetRepo);
     if (fresh.properties?.Check?.select?.name === "fail" && !reworkSeen(fresh.id)) {
       // Не ставим общую паузу на первой попытке: coordinatorStep вернёт

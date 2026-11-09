@@ -350,7 +350,9 @@ for (const [role, file] of Object.entries(roleDoc)) {
 {
   const d086 = contract.d086;
   assert.ok(d086, 'D-086 записан в контракт');
-  assert.match(d086.version || '', /^1\.14\.15$/, 'D-086 относится к сборке 1.14.15');
+  assert.match(d086.version || '', /^1\.14\.16$/, 'D-086 относится к сборке 1.14.16 (2-я редакция)');
+  assert.ok(d086.revision, 'дополнение D-086 записано в контракт');
+  assert.match((d086.revision.changes || []).join(' '), /граница выдачи/, 'подключение роли — граница');
   assert.match(d086.evidence?.probe || '', /relay-publication-gap-smoke/, 'проба названа');
   const safety = (d086.safety || []).join(' ');
   assert.match(safety, /не публикуется мимо приёмки/, 'канал публикации назван');

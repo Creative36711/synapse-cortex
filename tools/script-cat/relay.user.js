@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.15
+// @version      1.14.16
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "c799cbc95ca0a65e",
+    buildFingerprint: "9e79a74253935a13",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -142,6 +142,11 @@
     // репозиторий проекта не должен получать служебные коммиты мимо приёмки.
     // Если нужен git-канал — отдельный приватный репозиторий, а не проект.
     telemetryRepo: "",
+    // D-086: репозиторий, где живут документы процесса (docs/). По умолчанию —
+    // репозиторий самой роли Warden из базы «Роли»: он и назван в Notion
+    // (`synapse-cortex`). Переменная нужна там, где роль сидит в другом
+    // репозитории (например, `synapse`), а редакции ТЗ всё равно лежат в cortex.
+    docsRepo: "",
     // D-086: файл, в шапке которого лежит опубликованная редакция ТЗ и очереди.
     // Читается из репозитория перед приёмкой ответа: «объявлено» ≠ «лежит в main».
     queueDoc: "docs/handoff/syn-3-card-queue.md",
@@ -719,7 +724,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.15";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.16";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9344,6 +9349,33 @@
     return matches.length === 1 ? String(matches[0].repo) : raw;
   }
 
+  /**
+   * D-086: может ли эта роль вообще править этот репозиторий.
+   *
+   * 09.11 Мастер назвал правило прямым текстом: «у нас два репозитория, кто к
+   * какому подключён, тот может тот и править; кто к чему подключён — смотри в
+   * Notion в базе «Роли», там есть Репозиторий». До сих пор `repo` роли был
+   * только источником значения по умолчанию: карточка с полем «Репозиторий»
+   * перебивала его, и роль, подключённая к публичному `synapse`, могла получить
+   * выдачу в приватный cortex (или наоборот) — ровно так выглядит «у роли не тот
+   * репозиторий», на который жалуются агенты.
+   *
+   * Правило мягкое там, где назначение неизвестно: нет поля у роли — берём repo
+   * сессии профиля, как раньше. Расхождение с объявленным репозиторием роли —
+   * отказ с названием обеих сторон, а не тихая выдача.
+   */
+  function roleRepoVerdict(targetRepo, role = null) {
+    const target = canonicalTargetRepository(targetRepo || C.repo || "");
+    if (!target) return "";
+    const declared = String((role && role.repo) || "").trim();
+    if (!declared) return "";
+    const allowed = canonicalTargetRepository(declared, C.repo);
+    if (!allowed || allowed.toLowerCase() === target.toLowerCase()) return "";
+    return `репозиторий карточки ${target} не тот, к которому подключена роль: в «Ролях» у ` +
+      `${(role && role.name) || "роли"} указан ${allowed}. Выдачу не начинаю — ` +
+      "правь поле «Репозиторий» в карточке или подключение роли (D-086)";
+  }
+
   /** Целевой repo карточки; старые карточки наследуют repo активной роли. */
   function taskTargetRepository(card, fallback = C.repo) {
     const props = card && card.properties || {};
@@ -13469,15 +13501,37 @@
    * Notion и в git, а сверять их было некому. Здесь читается шапка очереди —
    * `Передача от Warden, 2026-11-08 (**редакция 1.7**, **ТЗ 1.5**)` — прямо из
    * репозитория. Это факт, а не догадка.
+   *
+   * 09.11 (2-я редакция): ролей два репозитория, и документы лежат не там, где
+   * работает роль. `synapse` — публичный репозиторий кода, `synapse-cortex` —
+   * приватный, и в Notion «Репозиторий» роли-приёмки (`Warden`) назван cortex.
+   * Поэтому читаем не `C.repo` (это репозиторий сессии роли), а
+   * `C.docsRepo` → репозиторий роли-приёмки → `C.repo`. Иначе сверка ищет
+   * документ не в том репозитории и всегда возвращает «не прочитано».
    */
+  function docsRepository() {
+    if (String(C.docsRepo || "").trim()) return String(C.docsRepo).trim();
+    try {
+      if (typeof roleRows === "function") {
+        // Синхронного доступа к строкам «Ролей» нет; кеш пишется при чтении базы.
+        const cache = GM_getValue(K.rolesCache, null);
+        const rows = cache && Array.isArray(cache.rows) ? cache.rows : [];
+        const owner = rows.find((r) => r && (r.fn === "Reviewer" || norm(r.name) === norm("Warden")) && String(r.repo || "").trim());
+        if (owner) return String(canonicalTargetRepository(owner.repo, C.repo));
+      }
+    } catch { /* репозиторий роли не прочитан — ниже фолбэк */ }
+    return String(C.repo || "");
+  }
+
   async function publishedTzVersion(file = C.queueDoc || "docs/handoff/syn-3-card-queue.md") {
     const cache = GM_getValue("cfn-tz-published", null);
     const now = Date.now();
-    if (cache && cache.file === file && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+    const repo = canonicalTargetRepository(docsRepository());
+    if (cache && cache.file === file && cache.repo === repo &&
+        now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
       return cache;
     }
     const token = GM_getValue(K.ghToken, "");
-    const repo = String(C.repo || "");
     if (!token || !repo) return cache && cache.file === file ? cache : null;
     try {
       const url = `https://api.github.com/repos/${repo}/contents/${file}?ref=${encodeURIComponent(C.branch || "main")}`;
@@ -13486,7 +13540,7 @@
       const tz = String(text || "").match(/ТЗ\s*\**\s*(\d+\.\d+)/i);
       const queue = String(text || "").match(/редакция\s*\**\s*(\d+\.\d+)/i);
       if (!tz && !queue) return null;
-      const out = { at: now, file, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
+      const out = { at: now, file, repo, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
       GM_setValue("cfn-tz-published", out);
       return out;
     } catch (e) {
@@ -15897,6 +15951,10 @@
     } else if (String(C.repo || "").toLowerCase() !== targetRepo.toLowerCase()) {
       return `репозиторий карточки ${targetRepo} не совпадает с legacy-профилем ${C.repo}; выдачу не начинаю`;
     }
+    // D-086: и последнее — репозиторий цели против подключения самой роли.
+    // «Кто к какому репозиторию подключён, тот тот и правит» (Мастер, 09.11).
+    const repoIssue = typeof roleRepoVerdict === "function" ? roleRepoVerdict(targetRepo, role) : "";
+    if (repoIssue) return repoIssue;
     const targetBranch = profileRepoBranch(targetRepo);
     if (fresh.properties?.Check?.select?.name === "fail" && !reworkSeen(fresh.id)) {
       // Не ставим общую паузу на первой попытке: coordinatorStep вернёт
@@ -18105,6 +18163,30 @@
   }
 
   /**
+   * Приватность получателя телеметрии: кеш на сессию, ошибка чтения — «не знаю».
+   *
+   * `false` здесь означает «нельзя писать»: при сомнении телеметрия остаётся на
+   * Drive, а не уезжает в публичный репозиторий кода.
+   */
+  const telemetryPrivacy = new Map();
+  function telemetryRepoPrivate(repo) {
+    const key = String(repo || "").toLowerCase();
+    if (!key) return false;
+    if (telemetryPrivacy.has(key)) return telemetryPrivacy.get(key);
+    telemetryPrivacy.set(key, false); // по умолчанию — не пишем
+    const token = GM_getValue(K.ghToken, "");
+    if (!token) return false;
+    request("GET", `https://api.github.com/repos/${repo}`, githubHeaders(token))
+      .then((meta) => {
+        if (meta && meta.private === true) telemetryPrivacy.set(key, true);
+        else dbg("телеметрия: репозиторий не приватный", repo);
+        return null;
+      })
+      .catch((e) => dbg("телеметрия: видимость репозитория не прочитана", e && e.message));
+    return false;
+  }
+
+  /**
    * Выгрузка наружу: Drive (шлюз проекта) и GitHub (если есть токен).
    *
    * Идемпотентно: повтор с тем же содержимым — `duplicate`, а не второй файл.
@@ -18137,7 +18219,15 @@
     // проекта, уже выше) и отдельный приватный репозиторий, если Мастер его
     // завёл (`C.telemetryRepo`). Нет репозитория — телеметрия остаётся на Drive,
     // и это не ошибка, а норма.
+    // 09.11 (2-я редакция): репозитории разной видимости — `synapse` публичный,
+    // `synapse-cortex` приватный. Телеметрия содержит тексты карточек, зоны
+    // ролей и куски переписки, поэтому разрешён только приватный получатель.
+    // Проверяем один раз на сессию: лишний GET на каждую паузу не нужен.
     const tRepo = String(C.telemetryRepo || "");
+    if (tRepo && !telemetryRepoPrivate(tRepo)) {
+      out.github = { ok: false, skipped: `телеметрия не пишется в публичный репозиторий ${tRepo} (D-086); выгружена на Drive` };
+      return out;
+    }
     if (!tRepo) {
       out.github = { ok: false, skipped: "телеметрия в репозиторий проекта не пишется (D-086); выгружена на Drive" };
     } else if (!token) {
@@ -18157,7 +18247,7 @@
               return btoa(bin);
             })(),
           });
-        out.github = { ok: true, path, sha: String(res?.content?.sha || "") };
+        out.github = { ok: true, path, sha: String(res?.content?.sha || ""), repo: tRepo };
       } catch (e) {
         out.github = { ok: false, path: "", error: String((e && e.message) || e).slice(0, 200) };
       }
