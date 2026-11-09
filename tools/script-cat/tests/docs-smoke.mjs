@@ -254,6 +254,12 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(decisions, /Наша, транспорта/, 'чья сторона названа');
   // Кириллица и \b: шаблон, который не мог совпасть.
   assert.match(decisions, /ASCII/, 'причина с границей слова записана');
+  // Живая схема: формула снята переименованием, select создан заново. Проверка
+  // нужна, чтобы документ не вернулся к «правку делает Мастер» после того, как
+  // правка сделана, — и чтобы причина («API не удаляет свойства») была записана.
+  assert.match(d081.evidence?.notion?.formula_field_left || '', /Тип \(формула\)/, 'судьба старой формулы названа');
+  assert.match(decisions, /Тип \(формула\)/, 'в журнале решений записано переименование формулы');
+  assert.match(readFileSync(join(root, 'docs/setup/notion-ids.md'), 'utf8'), /Заменено 09\.11/, 'notion-ids фиксирует замену');
   const feedback = readFileSync(join(root, 'tools/script-cat/src/24-feedback.js'), 'utf8');
   assert.match(feedback, /ждёт ответа\/i\.test\(blocks\)/, 'отметка читается без \\b');
   assert.doesNotMatch(feedback, /\\bждёт ответа/, 'шаблона с \\b больше нет');
