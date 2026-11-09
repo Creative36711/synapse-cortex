@@ -1349,5 +1349,29 @@
       "build": "1 243 004 Б, отпечаток 42a396207183872f"
     },
     "revision": "Если «нет маркера» снова зовёт Мастера — смотреть на маршрут в журнале разбора: cls transport / route maintainer и строку «Маркер «…» от «…» в брифе. heal-no-maintainer означает, что сломан сам адресат (нет активной строки Maintainer в «Ролях»), и кодом это не правится."
+  },
+  "d085": {
+    "decision": "D-085",
+    "version": "1.14.13",
+    "summary": "переполнение бюджета сжимает данные вместо остановки хода; Rework не вешает миссию; обновление без неоднозначности не поднимает паузу",
+    "fix": [
+      "20-technical-context.compileOrPause: budget_exceeded → fitRequestToBudget сжимает queue.answersLine/openLine/answerLine/ready до читаемого начала и помечает сжатие в тексте; пауза — только если сжимать нечего",
+      "25-legacy-adr: next:\"done\" блокируют Submitted/Running/Ready/Blocked; Rework и Draft — очередь приёмки, ход не останавливают",
+      "18-state-recovery.migrateState: пауза update-recovery ставится только при неоднозначности доставки (нет verified) и только если есть ожидание или очередь"
+    ],
+    "safety": [
+      "инструкции профиля, оракул, Scope, инварианты и Acceptance не режутся — сжимаются только данные переписки (D-034, D-038)",
+      "сжатие всегда сказано в тексте промпта и в журнале, адрес полного текста — Notion",
+      "если сжимать нечего — прежняя пауза prompt-compile с раскладкой блоков",
+      "Rework по-прежнему закрывает миссию в приёмке (26-review.js): там карточка действительно ещё в работе",
+      "подтверждённая доставка (verified) сохраняет ожидание как есть; неподтверждённая по-прежнему даёт паузу"
+    ],
+    "evidence": {
+      "probe": "tools/script-cat/tests/relay-budget-fit-smoke.mjs",
+      "red_on": "1.14.12",
+      "green_on": "1.14.13",
+      "incident": "telemetry 09.11: prompt-compile budget_exceeded total 8178 > 7500 (answers.delta 3346, queue.snapshot 1191); done-with-open при 1 Rework, 6 Draft; 6*update-recovery"
+    },
+    "revision": "2026-11-09"
   }
 }

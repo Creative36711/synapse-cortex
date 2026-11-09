@@ -156,6 +156,14 @@ assert.deepEqual((await api.missionBindingBlockers(missions[0])).map((r) => r.id
 
 // 2.7 В решении «done» непривязанная своя карточка тоже видна: миссия с живой
 // карточкой без UUID не закрывается молча.
-assert.match(src, /const fresh = await queueOf\(mission\);\n\s+const open = fresh\.submitted/, 'решение done считает ту же очередь');
+assert.match(src, /const fresh = await queueOf\(mission\);[\s\S]{0,2500}?const open = fresh\.submitted/, 'решение done считает ту же очередь');
+// D-085: незакрытый Rework не считается работой в полёте — иначе любой отказ
+// исполнителя (он сам переводит карточку в Rework) вешает миссию навсегда.
+assert.match(src, /const waiting = fresh\.rework\.length \+ fresh\.draft\.length/, 'Rework и Draft считаются отдельно');
+// Проверяем именно ветку «done», а не приёмку: в приёмке (`26-review.js`)
+// Rework по-прежнему закрывает миссию — там это по делу, карточка ещё в работе.
+const doneBranch = src.slice(src.indexOf('if (decision.next === "done")'), src.indexOf('if (decision.next === "done")') + 3000);
+assert.doesNotMatch(doneBranch, /fresh\.rework\.length \+ \(fresh\.blocked/,
+  'Rework больше не входит в блокирующие «в работе» внутри решения done');
 
 console.log('OK: D-056 — непривязанная карточка останавливает приёмку только по своей миссии');

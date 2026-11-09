@@ -1034,7 +1034,27 @@
         // на слово в автоцикле опасно: закрытая миссия с живыми карточками
         // останавливает весь процесс, и заметит это только человек.
         const fresh = await queueOf(mission);
-        const open = fresh.submitted.length + fresh.running.length + fresh.ready.length + fresh.rework.length + (fresh.blocked || []).length;
+        // D-085: `Rework` — это не работа в полёте, а решение по уже сданной
+        // работе, и принимает его приёмка, а не текущий ход. 09.11 в 18:51
+        // Координатор честно закончил ход с next:"done" при «0 Submitted,
+        // 0 Running, 0 Ready, 1 Rework, 6 Draft» — и цикл встал на ровном
+        // месте: Rework никто не обязан закрыть до конца этого хода.
+        //
+        // Поэтому `done` блокируют только карточки, которые реально в работе
+        // или ждут выдачи (Submitted/Running/Ready/Blocked). Rework и Draft
+        // перечисляются в журнале, но ход не останавливают: иначе любой отказ
+        // исполнителя, который сам же и перевёл карточку в Rework, вешает
+        // миссию по определению.
+        const open = fresh.submitted.length + fresh.running.length + fresh.ready.length + (fresh.blocked || []).length;
+        const waiting = fresh.rework.length + fresh.draft.length;
+        if (open === 0 && waiting > 0) {
+          log(
+            `Миссия: ход закончен, в работе 0, но ждут решения ${fresh.rework.length} Rework ` +
+              `и ${fresh.draft.length} Draft. Это очередь приёмки, а не работа в полёте — ход не останавливаю.`,
+            false,
+            { ntfy: "quiet" },
+          );
+        }
         if (open > 0) {
           pause(
             `Координатор объявил миссию завершённой, но в очереди ${fresh.summary}. ` +
