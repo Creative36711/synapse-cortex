@@ -174,4 +174,22 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(heal, /"busy-stuck": "master"/, 'busy-stuck классифицирован как решение Мастера');
 }
 
+// 10. D-078: данные сжимаются, инструкции — нет.
+{
+  const d078 = contract.d078;
+  assert.ok(d078, 'D-078 записан в контракт');
+  assert.match(d078.version || '', /^1\.14\.6$/, 'D-078 относится к сборке 1.14.6');
+  assert.match(d078.evidence?.probe || '', /relay-answers-delta-smoke/, 'проба названа');
+  assert.match(d078.fix || '', /fitBrief/, 'правило сжатия названо');
+  assert.equal(d078.evidence?.measurements?.battle_case?.before, 8178, 'боевое число сохранено как есть');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-078 \(1\.14\.6\)/, 'D-078 есть в журнале решений');
+  assert.match(decisions, /данные сжимаются, инструкции — никогда/i, 'правило названо словами');
+  const config = readFileSync(join(root, 'tools/script-cat/src/01-config.js'), 'utf8');
+  assert.match(config, /answerBriefMax:\s*1800/, 'порог брифинга в конфиге');
+  // Инструкции не имеют права знать о сжатии данных.
+  const blocks = readFileSync(join(root, 'tools/script-cat/src/prompt-blocks.js'), 'utf8');
+  assert.doesNotMatch(blocks, /answerBriefMax|fitBrief/, 'блоки промпта не сжимают инструкций');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');
