@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.14
+// @version      1.14.15
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "b818c681e57fc964",
+    buildFingerprint: "c799cbc95ca0a65e",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -138,6 +138,13 @@
     healMaintainerMax: 2, // столько раз один инцидент уходит Maintainer'у, дальше Мастер
     healVersionTimeoutMs: 900000, // 15 минут ждём подтверждения новой сборки, дальше стоп
     healTelemetryMaxBytes: 200000, // предел выгрузки (артефакт шлюза — 262144)
+    // D-086: куда уходит телеметрия в git. Пусто = только Drive, и это норма:
+    // репозиторий проекта не должен получать служебные коммиты мимо приёмки.
+    // Если нужен git-канал — отдельный приватный репозиторий, а не проект.
+    telemetryRepo: "",
+    // D-086: файл, в шапке которого лежит опубликованная редакция ТЗ и очереди.
+    // Читается из репозитория перед приёмкой ответа: «объявлено» ≠ «лежит в main».
+    queueDoc: "docs/handoff/syn-3-card-queue.md",
     heartbeatMs: 600000, // сердцебиение для сторожа: 10 минут — свежесть без траты квоты
     retryWaits: [800, 2500, 6000], // выдержки перед повторами: 4 попытки, ~9 с
     linkProbeWaits: [5000, 15000], // зонды связи после обрыва: 5 и 15 с
@@ -712,7 +719,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.14";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.15";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -13265,6 +13272,46 @@
   }
 
   /**
+   * D-086: редакция, объявленная в ответе приёмки, против того, что в `main`.
+   *
+   * 09.11 Warden распорядился делать «ТЗ 1.6 + очередь 1.8» и «ТЗ 1.7 + очередь
+   * 1.9». В `main` оставались ТЗ 1.5 и редакция 1.7, и ни одной ветки, кроме
+   * `main`, в репозитории не было. Правка родилась в переписке и не доехала до
+   * репозитория ни одним каналом.
+   *
+   * Причина не в забывчивости: у транспорта нет ни одного места, где редакция
+   * считается ОПУБЛИКОВАННОЙ. Документ живёт в двух пространствах (Notion и
+   * git), признак «опубликовано» не зафиксирован нигде, а у правки документа нет
+   * версии-ключа, которую можно сверить. Мастер видит работу, приёмка — ответ,
+   * исполнителю нечего брать.
+   *
+   * Теперь сверка идёт фактом: номер из ответа сравнивается с заголовком файла
+   * на `main`. Возвращает строку-причину или "".
+   */
+  function publicationGaps(answer, published) {
+    const text = String(answer || "");
+    if (!text || !published) return "";
+    const newer = (hits, cur) => {
+      if (!cur || !hits.length) return "";
+      const toPair = (v) => v.split(".").map(Number);
+      const max = hits.map(toPair).reduce((a, b) => (b[0] > a[0] || (b[0] === a[0] && b[1] > a[1]) ? b : a));
+      const now = toPair(cur);
+      return max[0] > now[0] || (max[0] === now[0] && max[1] > now[1]) ? max.join(".") : "";
+    };
+    const tzNew = newer([...text.matchAll(/ТЗ\s*\**\s*(\d+\.\d+)/gi)].map((m) => m[1]), published.version);
+    const qNew = newer(
+      [...text.matchAll(/(?:очеред[а-яё]*|редакци[а-яё]*)\s*\**\s*(?:от\s*[^0-9]{0,12})?(\d+\.\d+)/gi)].map((m) => m[1]),
+      published.queue,
+    );
+    if (!tzNew && !qNew) return "";
+    const what = [tzNew ? `ТЗ ${tzNew}` : "", qNew ? `редакция очереди ${qNew}` : ""].filter(Boolean).join(" и ");
+    const has = [published.version ? `ТЗ ${published.version}` : "", published.queue ? `редакция ${published.queue}` : ""].filter(Boolean).join(", ");
+    return `Ответ ссылается на ${what}, а в ${published.file || "docs/"} на main лежит ${has}: правка объявлена, ` +
+      "но не опубликована. Сначала PR с новой редакцией ТЗ и очереди, мерж, и только потом карточки по ней — " +
+      "иначе исполнителю нечего взять (D-086).";
+  }
+
+  /**
    * Что показать агенту про вопросы и что Мастер уже ответил.
    *
    * Ошибка чтения не должна ломать ход: без этой строки цикл работает, просто
@@ -13412,6 +13459,39 @@
     } catch (e) {
       dbg("номера решений не прочитаны", e && e.message);
       return cache?.numbers || [];
+    }
+  }
+
+  /**
+   * D-086: какая редакция ТЗ и очереди реально лежит в `main`.
+   *
+   * Признак «опубликовано» до 1.14.15 не существовал нигде: документ живёт в
+   * Notion и в git, а сверять их было некому. Здесь читается шапка очереди —
+   * `Передача от Warden, 2026-11-08 (**редакция 1.7**, **ТЗ 1.5**)` — прямо из
+   * репозитория. Это факт, а не догадка.
+   */
+  async function publishedTzVersion(file = C.queueDoc || "docs/handoff/syn-3-card-queue.md") {
+    const cache = GM_getValue("cfn-tz-published", null);
+    const now = Date.now();
+    if (cache && cache.file === file && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+      return cache;
+    }
+    const token = GM_getValue(K.ghToken, "");
+    const repo = String(C.repo || "");
+    if (!token || !repo) return cache && cache.file === file ? cache : null;
+    try {
+      const url = `https://api.github.com/repos/${repo}/contents/${file}?ref=${encodeURIComponent(C.branch || "main")}`;
+      const got = await request("GET", url, githubHeaders(token));
+      const text = b64Text(got && got.content);
+      const tz = String(text || "").match(/ТЗ\s*\**\s*(\d+\.\d+)/i);
+      const queue = String(text || "").match(/редакция\s*\**\s*(\d+\.\d+)/i);
+      if (!tz && !queue) return null;
+      const out = { at: now, file, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
+      GM_setValue("cfn-tz-published", out);
+      return out;
+    } catch (e) {
+      dbg("редакция ТЗ не прочитана", e && e.message);
+      return cache && cache.file === file ? cache : null;
     }
   }
 
@@ -15596,6 +15676,21 @@
         logThrottled(`decisions-${expect.ref}`, `Номера решений не сверены: ${e.message}. Ответ не блокирую.`, true);
       }
     }
+    // D-086: редакция ТЗ из ответа сверяется с тем, что лежит в main. 09.11
+    // «ТЗ 1.6 + очередь 1.8» существовали только в переписке; карточку по ним
+    // выдать было не из чего, а признака «опубликовано» не было нигде.
+    if (typeof publicationGaps === "function" && typeof publishedTzVersion === "function") {
+      try {
+        const pub = await publishedTzVersion();
+        const gap = publicationGaps(answer, pub);
+        if (gap) {
+          pause(gap, { kind: "answer-unpublished", ref: expect.ref, notifyTitle: "Relay: ТЗ не опубликовано" });
+          return true;
+        }
+      } catch (e) {
+        logThrottled(`tz-published-${expect.ref}`, `Редакция ТЗ не сверена: ${e.message}. Ответ не блокирую.`, true);
+      }
+    }
     // Вопрос могли закрыть руками, пока приёмка думала: тогда её ответ уже
     // никому не нужен, и перезаписывать чужое решение нельзя.
     let stage = "read";
@@ -17561,6 +17656,9 @@
     // D-085: ответ приёмки заявляет занятый номер решения. Правит приёмка, не
     // человек: список номеров лежит в docs/DECISIONS.md и читается транспортом.
     "answer-decisions": "transport",
+    // D-086: редакция ТЗ объявлена, но не опубликована. Правит приёмка вместе с
+    // Координатором (PR), человек тут не нужен и не поможет.
+    "answer-unpublished": "transport",
     "answer-nocoord": "master",
     "tool-limit": "master",
     "pilot-tool-limit": "master",
@@ -18026,12 +18124,28 @@
     }
     const token = GM_getValue(K.ghToken, "");
     const repo = String(C.repo || "");
-    if (!token || !repo) {
-      out.github = { ok: false, skipped: !token ? "нет GitHub-токена" : "нет репозитория проекта" };
+    // D-086: телеметрия НЕ пишется в репозиторий проекта.
+    //
+    // 09.11 в `main` лежало 17 коммитов `telemetry:` — все прямые пуши, ни один
+    // не связан с PR. Правила процесса (ветка, приёмка, ревью) действуют для
+    // агентов и не действовали для самого транспорта: он же и обходил
+    // ветвление, о котором пишет агентам. Хуже того, каждый такой коммит — это
+    // изменение `main` без проверки, то есть шум в истории рядом с настоящими
+    // решениями.
+    //
+    // Поэтому наружу телеметрия уходит только по двум каналам: Drive (шлюз
+    // проекта, уже выше) и отдельный приватный репозиторий, если Мастер его
+    // завёл (`C.telemetryRepo`). Нет репозитория — телеметрия остаётся на Drive,
+    // и это не ошибка, а норма.
+    const tRepo = String(C.telemetryRepo || "");
+    if (!tRepo) {
+      out.github = { ok: false, skipped: "телеметрия в репозиторий проекта не пишется (D-086); выгружена на Drive" };
+    } else if (!token) {
+      out.github = { ok: false, skipped: "нет GitHub-токена" };
     } else {
       try {
         const path = `telemetry/${name.name.replace(/\.json$/, "")}__${String(payload.script?.fingerprint || "") || "nofp"}.json`;
-        const res = await request("PUT", `https://api.github.com/repos/${repo}/contents/${encodeURI(path)}`,
+        const res = await request("PUT", `https://api.github.com/repos/${tRepo}/contents/${encodeURI(path)}`,
           githubHeaders(token),
           {
             message: `telemetry: ${info.kind || "pause"} ${info.ref || ""}`.slice(0, 120),

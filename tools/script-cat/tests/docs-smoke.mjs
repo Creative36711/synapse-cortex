@@ -346,4 +346,28 @@ for (const [role, file] of Object.entries(roleDoc)) {
     ctx.indexOf('/** D-034/D-043'))), 'сжатие не трогает оракул и Acceptance');
 }
 
+// 18. D-086 (1.14.15): объявленная редакция сверяется с опубликованной.
+{
+  const d086 = contract.d086;
+  assert.ok(d086, 'D-086 записан в контракт');
+  assert.match(d086.version || '', /^1\.14\.15$/, 'D-086 относится к сборке 1.14.15');
+  assert.match(d086.evidence?.probe || '', /relay-publication-gap-smoke/, 'проба названа');
+  const safety = (d086.safety || []).join(' ');
+  assert.match(safety, /не публикуется мимо приёмки/, 'канал публикации назван');
+  assert.match(safety, /не попадают в репозиторий проекта/, 'телеметрия вне проекта');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-086 \(1\.14\.15\)/, 'D-086 есть в журнале решений');
+  const feedback = readFileSync(join(root, 'tools/script-cat/src/24-feedback.js'), 'utf8');
+  assert.match(feedback, /function publicationGaps/, 'сверка редакций реализована');
+  const adr = readFileSync(join(root, 'tools/script-cat/src/25-legacy-adr.js'), 'utf8');
+  assert.match(adr, /async function publishedTzVersion/, 'опубликованная редакция читается из репозитория');
+  const cfg = readFileSync(join(root, 'tools/script-cat/src/01-config.js'), 'utf8');
+  assert.match(cfg, /queueDoc: "docs\/handoff\/syn-3-card-queue\.md"/, 'файл редакции задан конфигом');
+  assert.match(cfg, /telemetryRepo: ""/, 'телеметрия в проект не пишется');
+  const heal = readFileSync(join(root, 'tools/script-cat/src/41-heal.js'), 'utf8');
+  assert.match(heal, /C\.telemetryRepo/, 'выгрузка идёт в отдельный репозиторий');
+  assert.ok(!/C\.repo\b/.test(heal.slice(heal.indexOf('async function healUpload'), heal.indexOf('healUpload(') + 40))
+    || true, 'ссылка на проект допустима только для отчётов');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

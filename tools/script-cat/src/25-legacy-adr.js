@@ -124,6 +124,39 @@
   }
 
   /**
+   * D-086: какая редакция ТЗ и очереди реально лежит в `main`.
+   *
+   * Признак «опубликовано» до 1.14.15 не существовал нигде: документ живёт в
+   * Notion и в git, а сверять их было некому. Здесь читается шапка очереди —
+   * `Передача от Warden, 2026-11-08 (**редакция 1.7**, **ТЗ 1.5**)` — прямо из
+   * репозитория. Это факт, а не догадка.
+   */
+  async function publishedTzVersion(file = C.queueDoc || "docs/handoff/syn-3-card-queue.md") {
+    const cache = GM_getValue("cfn-tz-published", null);
+    const now = Date.now();
+    if (cache && cache.file === file && now - Number(cache.at || 0) < (Number(C.adrCheckMs) || 600000)) {
+      return cache;
+    }
+    const token = GM_getValue(K.ghToken, "");
+    const repo = String(C.repo || "");
+    if (!token || !repo) return cache && cache.file === file ? cache : null;
+    try {
+      const url = `https://api.github.com/repos/${repo}/contents/${file}?ref=${encodeURIComponent(C.branch || "main")}`;
+      const got = await request("GET", url, githubHeaders(token));
+      const text = b64Text(got && got.content);
+      const tz = String(text || "").match(/ТЗ\s*\**\s*(\d+\.\d+)/i);
+      const queue = String(text || "").match(/редакция\s*\**\s*(\d+\.\d+)/i);
+      if (!tz && !queue) return null;
+      const out = { at: now, file, version: tz ? tz[1] : "", queue: queue ? queue[1] : "" };
+      GM_setValue("cfn-tz-published", out);
+      return out;
+    } catch (e) {
+      dbg("редакция ТЗ не прочитана", e && e.message);
+      return cache && cache.file === file ? cache : null;
+    }
+  }
+
+  /**
    * Где ответ приёмки берёт номер, который уже занят.
    *
    * Смотрим только форму «D-084» рядом со словом «свободен/номер/решение» или

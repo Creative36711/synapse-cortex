@@ -290,6 +290,21 @@
         logThrottled(`decisions-${expect.ref}`, `Номера решений не сверены: ${e.message}. Ответ не блокирую.`, true);
       }
     }
+    // D-086: редакция ТЗ из ответа сверяется с тем, что лежит в main. 09.11
+    // «ТЗ 1.6 + очередь 1.8» существовали только в переписке; карточку по ним
+    // выдать было не из чего, а признака «опубликовано» не было нигде.
+    if (typeof publicationGaps === "function" && typeof publishedTzVersion === "function") {
+      try {
+        const pub = await publishedTzVersion();
+        const gap = publicationGaps(answer, pub);
+        if (gap) {
+          pause(gap, { kind: "answer-unpublished", ref: expect.ref, notifyTitle: "Relay: ТЗ не опубликовано" });
+          return true;
+        }
+      } catch (e) {
+        logThrottled(`tz-published-${expect.ref}`, `Редакция ТЗ не сверена: ${e.message}. Ответ не блокирую.`, true);
+      }
+    }
     // Вопрос могли закрыть руками, пока приёмка думала: тогда её ответ уже
     // никому не нужен, и перезаписывать чужое решение нельзя.
     let stage = "read";
