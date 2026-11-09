@@ -1105,6 +1105,26 @@
     // снимать ли очередь (её не снимаем — ждём человека).
     if (captchaDialog()) return blocked();
 
+    // D-094: последняя сверка по самому тексту. Ключ, снимок и `deadSend` —
+    // всё это фильтры над транскриптом, и каждый может отбросить настоящую
+    // реплику: ключ у передач был общим, снимок снимается до клика, а `deadSend`
+    // переживает прошлую ошибку Arena. Если в чате стоит наша реплика с этим же
+    // текстом, а в поле — он же, отправка состоялась. Сказать «не появилось» в
+    // этом случае значит оставить текст черновиком и встать на паузу на ровном
+    // месте (09.11, 23:29).
+    const byText = sameTextSubmission(text);
+    if (byText) {
+      dbg("Send: своё сообщение нашлось по тексту, а не по ключу", { id: byText.id });
+      log(
+        `Своё сообщение нашёл по тексту, а не по ключу доставки (${byText.id || "id не прочитан"}): ` +
+          `ключ «${String(key).slice(0, 40)}» его не подтвердил (${whyNotProof(key, known, since)}). ` +
+          "Считаю отправку состоявшейся и убираю черновик.",
+        false,
+        { tone: "warn" },
+      );
+      return accepted({ ...byText, draftLeft: true });
+    }
+
     const now = composer();
     const button = now ? sendButton(now) : null;
     const dialog = openDialog();
@@ -1140,6 +1160,68 @@
         : "Кнопка Send неактивна или не найдена — редактор не принял текст",
       detail,
     };
+  }
+
+  /**
+   * D-094: своя реплика нашлась не по ключу, а по самому тексту задания.
+   *
+   * 09.11 в 23:29 передача Maintainer'у стояла в чате, а `deliver` объявил
+   * «Send нажат, но своё сообщение не появилось»: ключ доставки у передач был
+   * общим (первые 60 знаков), и подтверждение зависело от того, какую реплику
+   * фильтр посчитает новой. Сообщение при этом ушло, поле сохранило текст как
+   * черновик, а пауза выглядела как «Arena вернула текст обратно».
+   *
+   * Здесь последняя сверка, которая не зависит ни от ключа, ни от `deadSend`, ни
+   * от времени id: в чате есть наша реплика, которая ДОСЛОВНО содержит текст из
+   * поля ввода, а поле не длиннее этой реплики. Это может быть только наше же
+   * задание — значит доставка состоялась, а поле надо чистить.
+   */
+  function sameTextSubmission(text) {
+    const live = composer();
+    if (!live) return null;
+    const field = flat(composerText(live));
+    const mine = flat(text || "");
+    // Короткий текст совпадает у половины сообщений: сверять нечего.
+    if (field.length < 40 || !mine) return null;
+    const head = mine.slice(0, 80);
+    const nodes = userMessages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const bubble = flat(nodes[i].textContent || "");
+      if (!bubble.includes(head)) continue;
+      // Поле длиннее реплики — значит в нём другой, ещё не отправленный текст.
+      if (field.length > bubble.length) continue;
+      if (!bubble.includes(field)) continue;
+      return { id: nodeId(nodes[i]) || "", at: idTime(nodeId(nodes[i]) || "") };
+    }
+    return null;
+  }
+
+  /**
+   * Почему ключ не подтвердил доставку, хотя реплика могла быть в чате.
+   *
+   * Нужен только для журнала: без него разбор следующего случая начинается с
+   * нуля — как 09.11, когда «своё сообщение не появилось» сказали, а сказать,
+   * какой именно фильтр его отбросил, было нечем.
+   */
+  function whyNotProof(key, known, since) {
+    const seen = known instanceof Set ? known : new Set(known || []);
+    const dead = GM_getValue(K.deadSend, "");
+    const nodes = userMessages();
+    let byText = 0;
+    let bySnapshot = 0;
+    let byDead = 0;
+    let byTime = 0;
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      const id = String(node.id || "").replace("chat-message-", "");
+      if (!flat(node.textContent || "").includes(key)) continue;
+      byText += 1;
+      if (!id || seen.has(id)) { bySnapshot += 1; continue; }
+      if (dead && id === dead) { byDead += 1; continue; }
+      const at = idTime(id);
+      if (since && at && at < since - 120000) { byTime += 1; continue; }
+    }
+    return `реплик с ключом ${byText}, из них в снимке ${bySnapshot}, помечено ошибкой ${byDead}, старое id ${byTime}`;
   }
 
   /** Короткий хеш текста: нужен, чтобы не отправить одно и то же дважды. */

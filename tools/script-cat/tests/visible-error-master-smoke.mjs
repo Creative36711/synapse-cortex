@@ -143,8 +143,11 @@ const pauseEnd = source.indexOf('\n\n  /**', pauseStart);
 assert.ok(pauseStart > 0 && pauseEnd > pauseStart, 'pause function is present');
 // D-073: пауза помнит сборку (version/fingerprint) и запускает разбор причины.
 const pauseFn = new Function(
-  'K', 'GM_setValue', 'autoOn', 'log', 'notifyNtfy', 'playAlert', 'setStatus',
-  'SCRIPT_VERSION', 'C', 'healAfterPause',
+  // D-094: `pause` читает живую паузу перед записью, поэтому ему нужны
+  // GM_getValue, norm и healIncidentKey, а через них — хранилище очереди и
+  // ожидания (по ним опознаётся каскад пауз одного хода).
+  'K', 'GM_getValue', 'GM_setValue', 'autoOn', 'log', 'notifyNtfy', 'playAlert', 'setStatus',
+  'SCRIPT_VERSION', 'C', 'healAfterPause', 'norm', 'healIncidentKey',
   `${source.slice(pauseStart, pauseEnd)}\nreturn pause;`,
 );
 {
@@ -156,6 +159,7 @@ const pauseFn = new Function(
   const calls = { log: [], notify: [], alert: 0, status: 0 };
   const pause = pauseFn(
     keys,
+    (key, def) => (store.has(key) ? store.get(key) : def),
     (key, value) => store.set(key, value),
     () => true,
     (...args) => calls.log.push(args),
@@ -163,8 +167,10 @@ const pauseFn = new Function(
     () => { calls.alert += 1; },
     () => { calls.status += 1; },
     '1.13.0',
-    { buildFingerprint: 'abc123' },
+    { buildFingerprint: 'abc123', pauseCascadeMs: 15000 },
     () => {},
+    (x) => String(x || '').replace(/-/g, '').toLowerCase(),
+    (info) => [String(info.kind || ''), String(info.ref || ''), String(info.reason || '')].join('|'),
   );
   pause('Arena rejected the live run', { kind: 'arena-error', ref: 'message-5', runId: 'run-5' });
   assert.equal(store.get(keys.paused), 'Arena rejected the live run');
@@ -192,7 +198,15 @@ const pauseFn = new Function(
   const store = new Map();
   const notifications = [];
   let alerts = 0;
-  const pause = pauseFn(keys, (key, value) => store.set(key, value), () => false, () => {}, (...args) => notifications.push(args), () => { alerts += 1; }, () => {}, '1.13.0', { buildFingerprint: 'abc123' }, () => {});
+  const pause = pauseFn(
+    keys,
+    (key, def) => (store.has(key) ? store.get(key) : def),
+    (key, value) => store.set(key, value),
+    () => false, () => {}, (...args) => notifications.push(args), () => { alerts += 1; }, () => {},
+    '1.13.0', { buildFingerprint: 'abc123', pauseCascadeMs: 15000 }, () => {},
+    (x) => String(x || '').replace(/-/g, '').toLowerCase(),
+    (info) => [String(info.kind || ''), String(info.ref || ''), String(info.reason || '')].join('|'),
+  );
   pause('Reviewer will decide this', { quiet: true, kind: 'reviewer', notifyTitle: 'Relay: review' });
   assert.equal(notifications[0][1].priority, '2', 'quiet pause does not become a loud Master alert');
   assert.equal(notifications[0][1].cycleStopped, true, 'quiet pause is still an essential stop');

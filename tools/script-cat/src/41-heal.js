@@ -355,7 +355,7 @@
    * В промпт идут: класс и маршрут, причина паузы, структурный снимок, хвост
    * журнала попыток, версия и отпечаток сборки. Переписки здесь нет.
    */
-  function healDiagnosis(info, verdict, decision, upload) {
+  function healDiagnosis(info, verdict, decision, upload, handoffTurnId = "") {
     const built = buildHealTelemetry({
       phase: "maintainer",
       at: nowIso(),
@@ -387,6 +387,16 @@
       `ИНЦИДЕНТ ТРАНСПОРТА · класс ${verdict.cls} · ${verdict.why}.`,
       `Остановка: «${String(info.reason || "").slice(0, 300)}»`,
       `Вид паузы: ${info.kind || "пусто"}; карточка ${info.ref || "—"}; run ${info.runId || "—"}; ход ${info.turnId || "—"}.`,
+      // D-094: у передачи свой номер хода, и он обязан быть в тексте.
+      //
+      // Без него ключ доставки собирался из первых 60 знаков, а они у всех
+      // передач одинаковы («ИНЦИДЕНТ ТРАНСПОРТА · класс transport · …»).
+      // Подтверждением годилась любая прошлая реплика — и 09.11 в 23:29 две
+      // передачи подряд «не подтвердились», хотя стояли в чате: сообщение ушло,
+      // а скрипт счёл его старым, оставил текст в поле ввода и встал на паузу
+      // «Send нажат, но своё сообщение не появилось». Ход печатается отдельной
+      // строкой — по нему `sendKey` узнаёт именно эту передачу.
+      ...(handoffTurnId ? [`Передача: ход ${handoffTurnId}.`] : []),
       info.defect
         ? `Маркер «${info.defect.marker || "?"}» от «${info.defect.role || "?"}»: ${info.defect.hint || "чего не хватило — не названо"}. ` +
             "Хвост ответа — в телеметрии ниже; копия всего ответа сохранена локально."
@@ -471,7 +481,7 @@
     const role = found.role;
     const upload = GM_getValue("cfn-heal-last-upload", null) || {};
     const turnId = uid();
-    const text = healDiagnosis(info, verdict, decision, upload);
+    const text = healDiagnosis(info, verdict, decision, upload, turnId);
     const sent = await sendMaintainerTurn(role, text, turnId, info);
     if (!sent.ok) return sent;
     log(
@@ -597,6 +607,19 @@
   async function healAfterPause(info) {
     const verdict = classifyPause(info.kind, info.reason);
     const key = healIncidentKey(info);
+    // D-094: второй разбор на тот же инцидент сюда не доходит.
+    //
+    // 09.11 в 23:27:22 пауза `prompt-compile` и пауза `arena-error` пришли в одну
+    // секунду, и этот шаг запустился дважды: два разбора, две передачи
+    // Maintainer'у, две наши реплики в одном чате. Вторая передача «не нашлась»
+    // (ключ у передач был общим) и превратилась в «поломку самой доставки».
+    //
+    // Отсекает это `pause()`: вторую паузу того же инцидента он записывает в
+    // контекст первой и разбор не запускает. Здесь сторожа нет намеренно:
+    // предохранитель `healMaintainerMax` разрешает ВТОРОЙ разбор по тому же
+    // инциденту, когда первый закончился ничем, и запрет «пока висит передача»
+    // сломал бы именно этот честный повтор.
+
     const counters = healCounters(key);
     const decision = decideHeal(verdict, counters, C);
     // D-092: каждая остановка попадает в метрику с адресатом решения. Считается
