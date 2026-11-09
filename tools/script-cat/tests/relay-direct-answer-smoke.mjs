@@ -78,6 +78,35 @@ const cut = (start, end) => {
   assert.equal(plain['Что блокирует'], undefined, 'у обычного вопроса пометки о адресате нет');
 }
 
+// ── 1c. Строка из базы возвращает и gate, и адресата ──────────────────────
+{
+  const from = src.indexOf('  function questionFromRow(row) {');
+  const to = src.indexOf('  /** Отметка «эту строку приёмке уже передавали»', from);
+  assert.ok(from > 0 && to > from, 'questionFromRow собрана целиком');
+  const body = src.slice(from, to);
+  const make = new Function('rt', 'qOptions', 'questionMaterial',
+    `${body}\nreturn questionFromRow;`);
+  const rt = (p) => (Array.isArray(p?.rich_text) ? p.rich_text.map((i) => i.plain_text || '').join('') : '') ||
+    (Array.isArray(p?.title) ? p.title.map((i) => i.plain_text || '').join('') : '');
+  const row = {
+    properties: {
+      'Вопрос': { title: [{ plain_text: 'Нужно решение по ТЗ 1.7' }] },
+      'По умолчанию': { rich_text: [{ plain_text: 'ждать' }] },
+      'Варианты': { rich_text: [] },
+      'Материал': { url: null },
+      'Что блокирует': { rich_text: [{ plain_text: 'ждёт ответа · нужен ответ «Warden»' }] },
+    },
+  };
+  const q = make(rt, () => [], (u) => u || '')(row);
+  assert.equal(q.gate, true, 'строка без «ждёт ответа» ход не держит — это правило D-081 живо');
+  assert.equal(q.need, 'Warden', 'адресат восстанавливается из строки, иначе он живёт только один ход');
+
+  // Метки нет — адресата нет: ручная строка не назначает роль на глазок.
+  const noMark = make(rt, () => [], (u) => u || '')({ properties: { ...row.properties, 'Что блокирует': { rich_text: [] } } });
+  assert.equal(noMark.need, '', 'без метки адресат пуст');
+  assert.equal(noMark.gate, false, 'без метки ход не держится');
+}
+
 // ── 2. Адресованная обратная связь уходит названной роли ───────────────────
 {
   const body = cut('    const asked = String(item.need || "").trim();', '  async function dispatchTask(');
