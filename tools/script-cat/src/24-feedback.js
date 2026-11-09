@@ -211,6 +211,19 @@
         let handed = 0;
         for (const row of adopted) {
           try {
+            // D-082: строка без статуса — это строка из рук агента. Её надо не
+            // только передать приёмке, но и подписать: без «Ждёт» её не видит
+            // ни одна проверка, включая чтение на других вкладках, и Мастер
+            // видит в базе «пустой» вопрос. Подпись ставит транспорт, а не агент.
+            if (!sel(row.properties?.["Статус"])) {
+              try {
+                await patch(row.id, { "Статус": { select: { name: Q.wait } } });
+                row.properties["Статус"] = { select: { name: Q.wait } };
+                log(`Строка обратной связи «${oneLine(rt(row.properties["Вопрос"]), 70)}» пришла без статуса — поставил «${Q.wait}».`, false, { ntfy: false });
+              } catch (e) {
+                dbg("вопросы: статус строки не поставлен", e.message);
+              }
+            }
             const q = typeof questionFromRowComplete === "function" ? await questionFromRowComplete(row) : questionFromRow(row);
             if (/github\.com\/[^\s]+\/docs\/decisions\//i.test(String(q.url || "")) &&
                 !/\bCF_ADR_CONTENT\s+[0-9a-f]{40}\b/i.test(String(q.fullText || ""))) {
@@ -614,7 +627,12 @@
       // у expiredQuestions). Поле остаётся в базе как история старых строк.
       "Роль": text(ctx.roleName || ""),
       "Карточка": text(ctx.card || "—"),
-      "Миссия": text(ctx.mission || ""),
+      // D-082: в «Миссию» идёт имя миссии, а не что попало. Раньше значение
+      // брали из того, что пришло в ctx, и туда мог попасть голый UUID —
+      // сравнение `missionSame` работает по словам названия, UUID им не был, и
+      // строка переставала быть «своей» для той же миссии (09.11: два
+      // предложения Координатора так и не дошли до Warden).
+      "Миссия": text(missionLabel(ctx.mission)),
       // D-080: `Тип` — select, значение ставит транспорт. В живой базе поле было
       // формулой с ровно этим правилом; select делает то же самое, но его видно
       // в схеме и он не спорит с проверкой подключения.
@@ -1041,7 +1059,10 @@
   function handWaitingRow(row, q = null, ctx = {}) {
     if (!row || !row.id) return false;
     if (typeof questionBodyPending === "function" && questionBodyPending(row.id)) return false;
-    if (sel(row.properties?.["Статус"]) !== Q.wait) return false;
+    // Пустой статус — это «Ждёт» из рук агента, а не ответ: строка, которую
+    // создали прямо в Notion, статуса не имеет, и раньше она молча выпадала.
+    const status = sel(row.properties?.["Статус"]);
+    if (status && status !== Q.wait) return false;
     if (rt(row.properties?.["Ответ"]).trim()) return false;
     GM_setValue(answerHandoffKey(row.id), Date.now());
     queueAnswer(row, q || questionFromRow(row), ctx);
@@ -1273,16 +1294,68 @@
   }
 
   /** Строки базы «Вопросы» с нужным статусом, в пределах миссии. */
+  /**
+   * Привязка строки обратной связи к миссии.
+   *
+   * 09.11 Координатор создал два предложения для Warden прямо в базе, и ни одно
+   * из них не дошло. Причин было две, и обе — в этом сравнении:
+   *
+   *   1. `Статус` был пуст (агент — не транспорт, схему он не соблюдает), а
+   *      запрос шёл строго `Статус = Ждёт`. Транспорт видел только то, что сам
+   *      же и подписал, а руками созданная строка не видна никому: «Ждёт» без
+   *      статуса — это долг транспорта, а не ответ Мастера.
+   *   2. В «Миссии» стоял голый UUID миссии. `missionSame` сравнивает слова
+   *      названия, UUID названием не является — строка выпадала даже со
+   *      статусом. Причём транспорт пишет в это поле имя миссии, так что оба
+   *      предложения пришли из разных источников.
+   *
+   * Поэтому привязка читается мягко: пустая «Миссия» — общая строка (как было),
+   * UUID нашей миссии — тоже наша строка, а имя сравнивается по словам.
+   */
+  const missionKeyOf = (text) => String(text || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] || "";
+
+  /**
+   * Что писать в поле «Миссия» строки обратной связи: только имя миссии.
+   *
+   * Поле — rich_text и в базе живёт как справка для Мастера, но от него зависит
+   * привязка строки к миссии. Поэтому UUID сюда не идёт: голый UUID уже один раз
+   * сделал строку «чужой» (09.11, D-082). Если пришёл UUID вместо имени (так
+   * бывает, когда контекст собран из одной карточки), значение не пишется вовсе:
+   * пустая «Миссия» означает «общая строка» и читается наравне со своей.
+   */
+  function missionLabel(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return missionKeyOf(text) && text.length <= 40 ? "" : text;
+  }
+
+  function rowInMission(row, mission) {
+    const value = rt(row?.properties?.["Миссия"]).trim();
+    if (!value) return true;
+    if (!mission || !mission.id) return true;
+    const key = missionKeyOf(value);
+    if (key) return norm(key) === norm(mission.id);
+    const wanted = rt(mission.properties?.["Миссия"]).trim();
+    return missionSame(value, wanted);
+  }
+
+  /**
+   * Строки обратной связи по статусам.
+   *
+   * Пустой `Статус` читается вместе с «Ждёт»: строка, созданная руками, — это
+   * вопрос, который приёмка ещё не видела, а не решённый. Если бы она падала в
+   * `handWaitingRow`, статус пришлось бы ставить транспорту — он и ставит, но
+   * уже после того, как увидит строку.
+   */
   async function questionRows(statuses, mission) {
-    const rows = await query(C.questions, {
-      or: statuses.map((name) => ({ property: "Статус", select: { equals: name } })),
-    });
-    const wanted = mission ? rt(mission.properties["Миссия"]).trim() : "";
-    if (!wanted) return rows;
-    return rows.filter((row) => {
-      const value = rt(row.properties["Миссия"]).trim();
-      return !value || missionSame(value, wanted);
-    });
+    const wanted = [...new Set(statuses || [])];
+    const or = wanted.map((name) => ({ property: "Статус", select: { equals: name } }));
+    // Пустой статус — только для открытых запросов: «Решено» без статуса не
+    // бывает, а вот «Ждёт» без статуса — обычное дело для строки из рук агента.
+    if (wanted.includes(Q.wait)) or.push({ property: "Статус", select: { is_empty: true } });
+    const rows = await query(C.questions, { or });
+    if (!mission) return rows;
+    return rows.filter((row) => rowInMission(row, mission));
   }
 
   /**

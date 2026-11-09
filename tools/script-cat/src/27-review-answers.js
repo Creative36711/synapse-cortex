@@ -63,6 +63,12 @@
         fallback: item.fallback, sourceUrl: item.pageUrl || item.url || "",
         role: item.role || "", card: item.card || "",
         masterEscalated: Boolean(item.masterEscalated),
+        // D-082: приёмка отвечает на одну запись за ход — так устроен ход, и это
+        // не изменится. Но «сколько ещё ждёт» она знать должна: 09.11 Warden
+        // отвечал на предложение и не видел второго, хотя оба лежали в базе.
+        // Факт ниже считает очередь приёмки, а не открытые строки базы: именно
+        // эта очередь и будет отдана ей следующими ходами, по одной.
+        pending: answerQueue().length,
       },
       delivery: { tier: "full", attempt: 1 },
     }, `answer ${item.id}`);

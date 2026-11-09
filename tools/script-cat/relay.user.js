@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.9
+// @version      1.14.10
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "809b15e989eb9551",
+    buildFingerprint: "5a1074366c64dc95",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -712,7 +712,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.9";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.10";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9798,7 +9798,7 @@
     def("role.zone", { verbatim: true, render: (c) => line("Зона роли", c.role?.zone) });
 
     def("authority.core", { version: 2, ruleIds: ["R-ZONES", "R-SECRETS"], render: () =>
-      "Зона роли — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Файлы для показа не открывай." });
+      "Зона роли — рамка, Scope расширяет на ход; чужие зоны читай. Оракул не ослаблять. Неоднозначность — сам, обратимо, «Допущение:» в отчёт. Секреты не в чат/логи/Git. Показ файлов не открывай." });
 
     def("authority.executor", { version: 2, ruleIds: ["R-ROLES"], audience: ["Executor"], render: () =>
       "Исполнитель: правишь зону+Scope, PR мержишь сам. Чужая правка — карточкой владельцу." });
@@ -9806,8 +9806,14 @@
     def("authority.auditor", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB"], audience: ["Auditor"], render: () =>
       "Аудитор: только чтение и проверка; ни ветки/коммита/пуша/PR. Находки — в отчёт, чинит исполнитель. Новые проверки можно, ослаблять нельзя." });
 
-    def("authority.coordinator", { ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
-      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
+    // D-082: «Обратную связь» заполняет транспорт, а не Координатор.
+    //
+    // 09.11 он дважды создал предложение прямо в базе и считал, что спросил
+    // Warden. Строка лежала без «Статуса» и с UUID в «Миссии» — транспорт её не
+    // узнавал, приёмка не получала ничего. Дело было не в формате маркера, а в
+    // том, что зона Координатора описана как «решения в Notion» без границы.
+    def("authority.coordinator", { version: 2, ruleIds: ["R-ROLES", "R-QUEUE", "R-NO-REVIEWER-DISPATCH", "R-MASTER-ONLY", "R-D028"], audience: ["Coordinator"], render: () =>
+      "Координатор: решения в Notion; код/ветки/PR не твоя зона, git не нужен. Очередь твоя: нарезка, Кому, Sequence, Ready, Draft→Ready, Submitted, Accepted/Rework. «Обратную связь» руками не пиши — только вопрос полем маркера, запись делает транспорт. Оракул миссии не менять — нужен ADR и решение приёмки/Мастера. «Роли» читаешь; Статус/Agent URL ставит Мастер." });
 
     def("authority.reviewer", { ruleIds: ["R-ROLES", "R-VERIFY-GITHUB", "R-MASTER-ONLY", "R-D028"], audience: ["Reviewer"], render: (c) =>
       c.kind === "arbiter"
@@ -9856,8 +9862,25 @@
     //   • `gate: true` — ход стоит, пока не ответят; для случая «без этого
     //     мнения следующий шаг невозможен». Ставить только тогда: это остановка.
     // Сроков нет: открытый вопрос остаётся открытым, пока на него не ответят.
-    def("questions.protocol", { version: 2, ruleIds: ["R-QUESTIONS"], render: () =>
-      'Вопрос — question в маркере {"text","options","default","gate","need"}; default обязателен, пиши его целиком (длина не ограничена); ≤1/ход; ответ строкой. Просто вопрос ход НЕ держит; "gate":true ("need") — без ответа нельзя. Опрос в чате — остановка, не делай.' });
+    // D-082: «вопрос» здесь — это поле маркера, а не строка в базе.
+    //
+    // 09.11 Координатор дважды понял иначе: создал предложения прямо в
+    // «Обратной связи» руками и решил, что спросил Warden. Не дошло ни одно —
+    // и не могло: транспорт видит только маркер хода, а строку, написанную
+    // руками, он находит лишь затем, чтобы подписать и передать приёмке.
+    // Поэтому первая фраза теперь называет канал явно, а «не пиши руками» —
+    // отдельным запретом, а не следствием из формата.
+    def("questions.protocol", { version: 3, ruleIds: ["R-QUESTIONS"], render: (c) => [
+      'Вопрос — question в маркере {"text","options","default","gate","need"}; default обязателен, пиши его целиком (длина не ограничена); ≤1/ход; ответ строкой. Просто вопрос ход НЕ держит; "gate":true ("need") — без ответа нельзя. Опрос в чате — остановка, не делай.',
+      // D-082: клауза только Координатору.
+      //
+      // Правило общее, но нарушил его он один: 09.11 создал два предложения
+      // прямо в «Обратной связи» и считал, что спросил Warden. Держать запрет в
+      // общем блоке не вышло — карточка исполнителя упирается в свой бюджет
+      // (2800) на каждом знаке, а платили бы все роли за промах одной. У
+      // Координатора запас есть, и запрет стоит там, где его и нарушают.
+      c.role?.fn === "Coordinator" ? " Обратную связь в Notion руками не пиши — только этим полем, запись делает транспорт." : "",
+    ].filter(Boolean).join("") });
 
     def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
       "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
@@ -9912,6 +9935,12 @@
       c.question?.options?.length ? `Варианты: ${c.question.options.join(" · ")}` : "",
       c.question?.fallback ? `Вариант по умолчанию (работа идёт по нему сейчас): ${c.question.fallback}` : "",
       c.question?.sourceUrl && !String(c.question?.fullText || "").includes(c.question.sourceUrl) ? `Материал: ${c.question.sourceUrl}` : "",
+      // D-082: одна запись за ход — это предел хода, а не незнание. Строка ниже
+      // говорит приёмке, что за этой записью стоят ещё, и называет, где список:
+      // иначе «пришло одно» читается как «больше ничего не было».
+      Number(c.question?.pending) > 1
+        ? `В очереди приёмки ещё ${c.question.pending - 1} — придут следующими ходами, по одной. Полный список — база «Обратная связь», Статус «Ждёт».`
+        : "",
     ].filter(Boolean).join("\n") });
     def("answer.protocol", { ruleIds: ["R-QUESTIONS"], audience: ["Reviewer"], render: () =>
       "Отвечай по существу: что делать, где граница, по какому признаку считать сделанным. Ответ самодостаточен — агент увидит его без твоего чата. По ADR решай в пределах делегированных полномочий, сам оракул/файлы не меняй. Мастера зови только когда без него физически нельзя (новый агент, доступ, решение по ТЗ)." });
@@ -11925,6 +11954,19 @@
         let handed = 0;
         for (const row of adopted) {
           try {
+            // D-082: строка без статуса — это строка из рук агента. Её надо не
+            // только передать приёмке, но и подписать: без «Ждёт» её не видит
+            // ни одна проверка, включая чтение на других вкладках, и Мастер
+            // видит в базе «пустой» вопрос. Подпись ставит транспорт, а не агент.
+            if (!sel(row.properties?.["Статус"])) {
+              try {
+                await patch(row.id, { "Статус": { select: { name: Q.wait } } });
+                row.properties["Статус"] = { select: { name: Q.wait } };
+                log(`Строка обратной связи «${oneLine(rt(row.properties["Вопрос"]), 70)}» пришла без статуса — поставил «${Q.wait}».`, false, { ntfy: false });
+              } catch (e) {
+                dbg("вопросы: статус строки не поставлен", e.message);
+              }
+            }
             const q = typeof questionFromRowComplete === "function" ? await questionFromRowComplete(row) : questionFromRow(row);
             if (/github\.com\/[^\s]+\/docs\/decisions\//i.test(String(q.url || "")) &&
                 !/\bCF_ADR_CONTENT\s+[0-9a-f]{40}\b/i.test(String(q.fullText || ""))) {
@@ -12328,7 +12370,12 @@
       // у expiredQuestions). Поле остаётся в базе как история старых строк.
       "Роль": text(ctx.roleName || ""),
       "Карточка": text(ctx.card || "—"),
-      "Миссия": text(ctx.mission || ""),
+      // D-082: в «Миссию» идёт имя миссии, а не что попало. Раньше значение
+      // брали из того, что пришло в ctx, и туда мог попасть голый UUID —
+      // сравнение `missionSame` работает по словам названия, UUID им не был, и
+      // строка переставала быть «своей» для той же миссии (09.11: два
+      // предложения Координатора так и не дошли до Warden).
+      "Миссия": text(missionLabel(ctx.mission)),
       // D-080: `Тип` — select, значение ставит транспорт. В живой базе поле было
       // формулой с ровно этим правилом; select делает то же самое, но его видно
       // в схеме и он не спорит с проверкой подключения.
@@ -12755,7 +12802,10 @@
   function handWaitingRow(row, q = null, ctx = {}) {
     if (!row || !row.id) return false;
     if (typeof questionBodyPending === "function" && questionBodyPending(row.id)) return false;
-    if (sel(row.properties?.["Статус"]) !== Q.wait) return false;
+    // Пустой статус — это «Ждёт» из рук агента, а не ответ: строка, которую
+    // создали прямо в Notion, статуса не имеет, и раньше она молча выпадала.
+    const status = sel(row.properties?.["Статус"]);
+    if (status && status !== Q.wait) return false;
     if (rt(row.properties?.["Ответ"]).trim()) return false;
     GM_setValue(answerHandoffKey(row.id), Date.now());
     queueAnswer(row, q || questionFromRow(row), ctx);
@@ -12987,16 +13037,68 @@
   }
 
   /** Строки базы «Вопросы» с нужным статусом, в пределах миссии. */
+  /**
+   * Привязка строки обратной связи к миссии.
+   *
+   * 09.11 Координатор создал два предложения для Warden прямо в базе, и ни одно
+   * из них не дошло. Причин было две, и обе — в этом сравнении:
+   *
+   *   1. `Статус` был пуст (агент — не транспорт, схему он не соблюдает), а
+   *      запрос шёл строго `Статус = Ждёт`. Транспорт видел только то, что сам
+   *      же и подписал, а руками созданная строка не видна никому: «Ждёт» без
+   *      статуса — это долг транспорта, а не ответ Мастера.
+   *   2. В «Миссии» стоял голый UUID миссии. `missionSame` сравнивает слова
+   *      названия, UUID названием не является — строка выпадала даже со
+   *      статусом. Причём транспорт пишет в это поле имя миссии, так что оба
+   *      предложения пришли из разных источников.
+   *
+   * Поэтому привязка читается мягко: пустая «Миссия» — общая строка (как было),
+   * UUID нашей миссии — тоже наша строка, а имя сравнивается по словам.
+   */
+  const missionKeyOf = (text) => String(text || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] || "";
+
+  /**
+   * Что писать в поле «Миссия» строки обратной связи: только имя миссии.
+   *
+   * Поле — rich_text и в базе живёт как справка для Мастера, но от него зависит
+   * привязка строки к миссии. Поэтому UUID сюда не идёт: голый UUID уже один раз
+   * сделал строку «чужой» (09.11, D-082). Если пришёл UUID вместо имени (так
+   * бывает, когда контекст собран из одной карточки), значение не пишется вовсе:
+   * пустая «Миссия» означает «общая строка» и читается наравне со своей.
+   */
+  function missionLabel(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return missionKeyOf(text) && text.length <= 40 ? "" : text;
+  }
+
+  function rowInMission(row, mission) {
+    const value = rt(row?.properties?.["Миссия"]).trim();
+    if (!value) return true;
+    if (!mission || !mission.id) return true;
+    const key = missionKeyOf(value);
+    if (key) return norm(key) === norm(mission.id);
+    const wanted = rt(mission.properties?.["Миссия"]).trim();
+    return missionSame(value, wanted);
+  }
+
+  /**
+   * Строки обратной связи по статусам.
+   *
+   * Пустой `Статус` читается вместе с «Ждёт»: строка, созданная руками, — это
+   * вопрос, который приёмка ещё не видела, а не решённый. Если бы она падала в
+   * `handWaitingRow`, статус пришлось бы ставить транспорту — он и ставит, но
+   * уже после того, как увидит строку.
+   */
   async function questionRows(statuses, mission) {
-    const rows = await query(C.questions, {
-      or: statuses.map((name) => ({ property: "Статус", select: { equals: name } })),
-    });
-    const wanted = mission ? rt(mission.properties["Миссия"]).trim() : "";
-    if (!wanted) return rows;
-    return rows.filter((row) => {
-      const value = rt(row.properties["Миссия"]).trim();
-      return !value || missionSame(value, wanted);
-    });
+    const wanted = [...new Set(statuses || [])];
+    const or = wanted.map((name) => ({ property: "Статус", select: { equals: name } }));
+    // Пустой статус — только для открытых запросов: «Решено» без статуса не
+    // бывает, а вот «Ждёт» без статуса — обычное дело для строки из рук агента.
+    if (wanted.includes(Q.wait)) or.push({ property: "Статус", select: { is_empty: true } });
+    const rows = await query(C.questions, { or });
+    if (!mission) return rows;
+    return rows.filter((row) => rowInMission(row, mission));
   }
 
   /**
@@ -14990,6 +15092,12 @@
         fallback: item.fallback, sourceUrl: item.pageUrl || item.url || "",
         role: item.role || "", card: item.card || "",
         masterEscalated: Boolean(item.masterEscalated),
+        // D-082: приёмка отвечает на одну запись за ход — так устроен ход, и это
+        // не изменится. Но «сколько ещё ждёт» она знать должна: 09.11 Warden
+        // отвечал на предложение и не видел второго, хотя оба лежали в базе.
+        // Факт ниже считает очередь приёмки, а не открытые строки базы: именно
+        // эта очередь и будет отдана ей следующими ходами, по одной.
+        pending: answerQueue().length,
       },
       delivery: { tier: "full", attempt: 1 },
     }, `answer ${item.id}`);
