@@ -82,6 +82,36 @@ test("preflight: shallow-клон распознаётся и называетс
   }
 });
 
+test("preflight: зона из нескольких путей не склеивается в один шаблон", () => {
+  const dir = makeRepo();
+  try {
+    gitIn(dir, ["checkout", "-q", "-b", "feat"]);
+    writeFileSync(join(dir, "docs", "note.txt"), "y");
+    gitIn(dir, ["add", "-A"]);
+    gitIn(dir, ["commit", "-q", "-m", "docs"]);
+    // «tools/script-cat/**, docs/**» — список, а не строка: пока шаблон был один,
+    // вне зоны оказывалось вообще всё (включая сам docs/note.txt).
+    const res = run(dir, ["--zone", "tools/script-cat/**, docs/**"]);
+    assert.match(`${res.stdout}${res.stderr}`, /ok\s+только своя зона/, `список шаблонов работает:\n${res.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("preflight: имя файла из git status не теряет первую букву", () => {
+  const dir = makeRepo();
+  try {
+    // Файл не закоммичен: путь берётся из `status --porcelain`, а не из diff.
+    writeFileSync(join(dir, "docs", "note.txt"), "y");
+    const res = run(dir, ["--zone", "docs/**"]);
+    const out = `${res.stdout}${res.stderr}`;
+    assert.match(out, /ok\s+только своя зона/, `незакоммиченный docs/ в зоне:\n${out}`);
+    assert.doesNotMatch(out, /ocs\/note\.txt/, 'первая буква пути на месте');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("preflight: файл вне зоны роли блокирует push", () => {
   const dir = makeRepo();
   try {

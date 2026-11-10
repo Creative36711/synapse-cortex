@@ -17,7 +17,9 @@ const root = resolve(here, "..", "..");
 const argv = process.argv.slice(2);
 const asJson = argv.includes("--json");
 const zoneIndex = argv.indexOf("--zone");
-const zone = zoneIndex >= 0 ? argv[zoneIndex + 1] : null;
+// Кавычки в `--zone "a/**, b/**"` снимает сам шелл, но при вызове из npm-скрипта
+// они иногда доезжают — тогда первый символ зоны не совпадает с путём.
+const zone = zoneIndex >= 0 && argv[zoneIndex + 1] ? argv[zoneIndex + 1].replace(/^["']|["']$/g, "").trim() : null;
 
 const checks = [];
 const add = (id, title, ok, detail) => checks.push({ id, title, ok, detail });
@@ -41,10 +43,41 @@ const changedFiles = () => {
     for (const f of git(["diff", "--name-only", "origin/main"]).split("\n")) if (f) set.add(f);
   }
   for (const line of git(["status", "--porcelain"]).split("\n")) {
-    const f = line.slice(3).trim();
-    if (f) set.add(f.includes(" -> ") ? f.split(" -> ")[1] : f);
+    // `status --porcelain` печатает XY, один пробел и путь. Срезать «три знака»
+    // нельзя: при коде из одного знака (` M`) пробела меньше, и первая буква
+    // пути терялась — проверка зоны показывала «ocs/DECISIONS.md».
+    const rest = line.replace(/^[ MADRCU?!]{1,2}\s/, "").trim();
+    const f = rest.includes(" -> ") ? rest.split(" -> ")[1] : rest;
+    if (f) set.add(f.trim());
   }
   return [...set];
+};
+
+/**
+ * Файлы вне зоны роли. Зона — список шаблонов, а не один шаблон: пока шаблон был
+ * один, «tools/script-cat/**, docs/**» склеивался в регулярку со строкой ", docs/"
+ * внутри и объявлял вне зоны вообще всё. Та же ошибка была в правилах PR (D-097):
+ * «своя зона» на практике всегда состоит из нескольких путей.
+ */
+const zoneOutside = (zone) => {
+  const patterns = String(zone || "")
+    .split(/[,;\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!patterns.length) return [];
+  const toRegExp = (glob) =>
+    new RegExp(
+      "^" +
+        glob
+          .replace(/^\.\//, "")
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*\*/g, "\u0000")
+          .replace(/\*/g, "[^/]*")
+          .replace(/\u0000/g, ".*") +
+        "$",
+    );
+  const regexps = patterns.map(toRegExp);
+  return changedFiles().filter((f) => !regexps.some((re) => re.test(f)));
 };
 
 // 1. Клон не усечён. В усечённом клоне `rev-list HEAD..origin/main` показывает 0
@@ -157,24 +190,24 @@ try {
 add("version", "версия поднята только с правкой src/**", versionOk, versionDetail);
 
 // 6. Файлы вне зоны роли.
-if (zone) {
-  const globToRegExp = (glob) =>
-    new RegExp(
-      "^" +
-        glob
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*\*/g, "\u0000")
-          .replace(/\*/g, "[^/]*")
-          .replace(/\u0000/g, ".*") +
-        "$",
-    );
-  const re = globToRegExp(zone);
-  const changed = changedFiles();
-  const outside = changed.filter((f) => !re.test(f));
-  add("zone", `только своя зона (${zone})`, outside.length === 0, outside.length ? `вне зоны: ${outside.join(", ")}` : `${changed.length} файлов, все в зоне`);
+// 7. Собранный бандл — валидный JS.
+//
+// 10.11 файл правил (src/43-pr-zone.js) попал в бандл с `export function`:
+// `build --check` отвечал «соответствует исходникам», все пробы были зелёными,
+// а userscript в браузере был бы невалидным. Ошибку поймала проба, грузящая
+// бандл целиком; ворота должны ловить её сами.
+let syntaxOk = true;
+let syntaxDetail = "бандл разбирается как JS";
+try {
+  execFileSync(process.execPath, ["--check", join(here, "relay.user.js")], { cwd: root, encoding: "utf8" });
+} catch (error) {
+  syntaxOk = false;
+  const text = `${(error.stdout || "") + (error.stderr || "")}`.trim().split("\n");
+  syntaxDetail = `бандл невалиден: ${text.find((line) => /Error/.test(line)) || text[0] || "см. node --check"}`;
 }
+add("bundle-syntax", "relay.user.js разбирается как JS", syntaxOk, syntaxDetail);
 
-// 7. Маркеров конфликта нет ни в одном отслеживаемом файле.
+// 8. Маркеров конфликта нет ни в одном отслеживаемом файле.
 let conflictOk = true;
 let conflictDetail = "маркеров нет";
 try {
@@ -197,6 +230,16 @@ try {
   conflictDetail = `не удалось проверить маркеры: ${error.message}`;
 }
 add("conflicts", "нет маркеров конфликта", conflictOk, conflictDetail);
+
+if (zone) {
+  const outside = zoneOutside(zone);
+  add(
+    "zone",
+    `только своя зона (${zone})`,
+    outside.length === 0,
+    outside.length ? `вне зоны: ${outside.join(", ")}` : `${changedFiles().length} файлов, все в зоне`,
+  );
+}
 
 const failed = checks.filter((c) => !c.ok);
 if (asJson) {
