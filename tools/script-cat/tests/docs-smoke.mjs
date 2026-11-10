@@ -351,7 +351,8 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(core, /function healResolveWith/, 'адресат решения решается в ядре');
   // Громкий сигнал — только человеку.
   const panel = readFileSync(join(root, 'tools/script-cat/src/06-pause-panel.js'), 'utf8');
-  assert.match(panel, /const forHuman = !info\.with \|\| info\.with === "master";/, 'пауза знает адресата');
+  assert.match(panel, /const forHuman = holds && \(!info\.with \|\| info\.with === "master"\);/,
+    'пауза знает адресата — и знает, стоит ли цикл');
   // Метрика — не обещание, а число.
   const heal = readFileSync(join(root, 'tools/script-cat/src/41-heal.js'), 'utf8');
   assert.match(heal, /function healAutonomyMetric/, 'метрика автономности реализована');

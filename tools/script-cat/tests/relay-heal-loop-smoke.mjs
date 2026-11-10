@@ -36,7 +36,7 @@ const flat = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 const UUID_TURN = '01a1c1ff-9c2e-7b11-8f3a-2d4c5e6f7a8b';
 
 // ── 0. Ключ инцидента: причина — часть ключа, ход — тоже ────────────────────
-const healCore = new Function('C', `${core}\nreturn { healIncidentKey, classifyPause, decideHeal, healVerdict };`)({
+const healCore = new Function('C', `${core}\nreturn { healIncidentKey, classifyPause, decideHeal, healVerdict, healHoldsCycle, HEAL_HOLDING };`)({
   healRetryMax: 2, healMaintainerMax: 2, healBackoffMs: [30000, 120000], masterTicketMax: 1,
 });
 const inc = (over = {}) => ({ kind: 'prompt-compile', ref: '4136f0cf-5705-8111-84eb-d250e801c3be', reason: 'Промпт не собран (retry X): missing_fact', ...over });
@@ -63,13 +63,13 @@ function pauseHarness(start = {}) {
   const logs = [];
   const api = new Function(
     'GM_getValue', 'GM_setValue', 'K', 'C', 'SCRIPT_VERSION', 'autoOn', 'log', 'notifyNtfy', 'norm',
-    'playAlert', 'setStatus', 'healIncidentKey', 'healAfterPause',
+    'playAlert', 'setStatus', 'healIncidentKey', 'healAfterPause', 'healHoldsCycle',
     `${core}\n${panel.slice(panel.indexOf('  /**\n   * Единственная точка остановки'), panel.indexOf('  /**\n   * Передача потерялась'))
       .replace(/function pause\(/, 'function pause(')}\nreturn { pause };`,
   )(
     (k, d) => (store.has(k) ? structuredClone(store.get(k)) : d),
     (k, v) => store.set(k, structuredClone(v)),
-    { paused: 'cfn-paused', pause: 'cfn-pause-context', expect: 'cfn-expect', pending: 'cfn-pending' },
+    { paused: 'cfn-paused', pause: 'cfn-pause-context', expect: 'cfn-expect', pending: 'cfn-pending', notice: 'cfn-notice-log' },
     { buildFingerprint: 'fp', pauseCascadeMs: 15000 },
     '1.14.23',
     () => true,
@@ -79,6 +79,8 @@ function pauseHarness(start = {}) {
     () => {},
     (x) => String(x || '').replace(/-/g, '').toLowerCase(),
     healCore.healIncidentKey,
+    // D-104: «стоим или это разбор» решает таблица видов.
+    healCore.healHoldsCycle,
     // Разбор не должен запуститься второй раз — считаем вызовы.
     (...args) => { api.heals = (api.heals || 0) + 1; return Promise.resolve(); },
   );
@@ -87,10 +89,19 @@ function pauseHarness(start = {}) {
 
 {
   // Передача в очереди и не доставлена — ровно как в 23:27:22.
+  // Ожидание не доставлено — условие каскада для ошибки Arena через секунду.
   const h = pauseHarness({ 'cfn-expect': { kind: 'answer', ref: 'card-1', turnId: 'turn-1', sentAt: null, verified: false } });
+  // D-104: сборка промпта — работа транспорта, цикл на ней не стоит. Журнал
+  // говорит «разбор», а паузы в состоянии нет.
   h.pause('Промпт не собран (retry A): missing_fact — нет task.runId.', { kind: 'prompt-compile', ref: 'card-1' });
+  assert.equal(h.store.get('cfn-paused'), undefined, 'разбор транспорта паузу не ставит');
+  assert.ok(h.logs.some((line) => /Разбор без остановки/.test(line)), 'журнал называет это разбором');
+  assert.ok(Array.isArray(h.store.get('cfn-notice-log')), 'разбор без остановки виден отдельным журналом');
+
+  // Стоящая остановка: предел доработок — тут причина обязана записаться.
+  h.pause('Предел доработок исчерпан: карточка вернулась в Rework 3 раза.', { kind: 'rework-limit', ref: 'card-1' });
   const first = h.store.get('cfn-paused');
-  assert.match(first, /missing_fact/, 'первая причина записана');
+  assert.match(first, /Предел доработок/, 'первая пауза записана');
 
   h.pause('Видимая ошибка Arena в последнем сообщении: Something went wrong.', { kind: 'arena-error', ref: '' });
   assert.equal(h.store.get('cfn-paused'), first,
@@ -98,7 +109,7 @@ function pauseHarness(start = {}) {
   const ctx = h.store.get('cfn-pause-context');
   assert.ok(Array.isArray(ctx.also) && ctx.also.some((x) => /Something went wrong/.test(x.reason)),
     'уточнение сохранено рядом, а не потеряно');
-  assert.equal(ctx.kind, 'prompt-compile', 'адресат остановки остаётся прежним');
+  assert.equal(ctx.kind, 'rework-limit', 'адресат остановки остаётся прежним');
 
   // Другой инцидент — по-прежнему новая пауза.
   h.pause('Другая остановка: нет активной роли Maintainer.', { kind: 'heal-no-maintainer', ref: 'x' });
