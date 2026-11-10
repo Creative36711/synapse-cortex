@@ -1,0 +1,72 @@
+SYN-1 · K-15 · Evidence supplement
+Dispatch: 40d6f0cf-5705-81bd-b781-f96c1079658c
+Run: 45fafbfe-8e45-4208-bff8-0df1cb85fae3
+Date: 2026-11-03 UTC
+
+PURPOSE / SCOPE
+Evidence-only follow-up to the original K-15 acceptance report. No source, test, documentation, package, or Git changes were made in this run. No PR was created. The original acceptance and scope remain unchanged. K-15 passing does not itself claim K-12 acceptance; K-12 must repeat its own final-SHA gate.
+
+CHECK FIELD CLARIFICATION
+The prior response marker contained `check:1`. That value was not a test count, exit code, or derived validation result; it was supplied in that marker without supporting schema evidence. Do not interpret it as the oracle result. The factual results are the command outputs in the original acceptance report (all three required clean-clone gates rc 0) and this supplement (Godot rc 0, merge/tree confirmation). This run follows the card's requested final marker `check:0`.
+
+GODOT CHECK ON THE MERGE SHA
+At run start, current branch `arena/7be5815a-synapse` had HEAD e19a8d3f8b51c536155bcc80f911e962b4360ea5, exactly the K-15 merge SHA and fetched origin/main. The working tree was clean. `tools/godot/install.sh --check` was run and returned rc 0 on that SHA. Godot version: 4.7.2.stable.custom_build.ed1daf0bf. I opened both produced screenshots: shot_1 shows the checker-textured blue/yellow cube, ground plane, sky, shadow, and title text; shot_2 shows the cube rotated relative to shot_1, with the same scene elements. The engine used SwiftShader offscreen rendering at 640x360.
+
+PR / MERGE / TREE CONFIRMATION
+PR #5: https://github.com/Creative36711/synapse/pull/5
+`gh pr view 5 --json number,url,state,mergedAt,mergeCommit,headRefOid,baseRefName` reports state MERGED, merge time 2026-11-03T11:40:26Z, PR head 4014e4663af9b694ae307530cbd4d8e269e45f1c, merge commit e19a8d3f8b51c536155bcc80f911e962b4360ea5.
+The original final acceptance report records the checked SHA's tree as 918d3f0fbf1ed1c9095123dbc222f7d755d31b54. Current merge SHA and fetched origin/main each have that same tree. Therefore checked and merge trees are identical; there is no need to rerun npm gates on an equivalent tree. PR #5 had no configured GitHub status checks; the card's acceptance gates were run locally on a clean clone and are in the original report.
+
+K-4 HISTORY
+`gh pr view 4 --json number,url,state,mergedAt,mergeCommit,headRefOid,baseRefName` confirms PR #4 merged to main at d30951607c83cfa30e6d3f76eef13e48b48b0abf. As stated in the original K-15 acceptance record, test:validation was red at that K-4 boundary; no green test:validation result is claimed for commits before d309516.
+
+ORIGINAL ACCEPTANCE REPORT (unchanged)
+https://drive.google.com/file/d/1F-KLmQXtLHvw7ppbLxuyvEmlbG9mB_mU/view?usp=drivesdk
+It retains the same-HEAD pre/post evidence, checked SHA, clean clone and fresh empty cache state, offline install/validation/contracts full logs, six SHA-256 + lockfile SRI verification, corrupt/missing snapshot failure tests, snapshot regeneration recipe/results/licenses, and original scope. This supplement does not replace or rewrite that report.
+
+FULL OUTPUT LOG FOR THIS SUPPLEMENT
+COMMAND: tools/godot/install.sh --check
+Godot already installed in /tmp/synapse-godot
+4.7.2.stable.custom_build.ed1daf0bf
+
+OK. Use:  export PATH="/tmp/synapse-godot/bin:$PATH"   then   godot ...
+== import
+== run (log: /tmp/synapse-smoke/run.log)
+ack: done 1
+Godot Engine v4.7.2.stable.custom_build.ed1daf0bf (2026-08-17 01:18:38 UTC) - https://godotengine.org
+Vulkan 1.3.0 - Forward+ - Using Device #0: Unknown - SwiftShader Device (Subzero)
+Offscreen display server: 640x360, rendering with vulkan.
+SMOKE TEST OK -> /tmp/synapse-smoke/shot_1.png, /tmp/synapse-smoke/shot_2.png (check visually: textured cube, sky, text; cube rotated in shot_2)
+GODOT_CHECK_RC=0
+
+=== SOURCE AND HISTORY ===
+COMMAND: git branch --show-current
+arena/7be5815a-synapse
+COMMAND: git status --short
+COMMAND: git rev-parse HEAD
+e19a8d3f8b51c536155bcc80f911e962b4360ea5
+COMMAND: git rev-parse HEAD^{tree}
+918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+COMMAND: git rev-parse --is-shallow-repository
+true
+COMMAND: git merge-base HEAD origin/main
+e19a8d3f8b51c536155bcc80f911e962b4360ea5
+COMMAND: git rev-parse origin/main
+e19a8d3f8b51c536155bcc80f911e962b4360ea5
+COMMAND: git rev-parse origin/main^{tree}
+918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+COMMAND: git diff --stat origin/main
+=== GITHUB PR / MERGE CONFIRMATION ===
+COMMAND: gh pr view 5 --json number,url,state,mergedAt,mergeCommit,headRefOid,baseRefName
+{"baseRefName":"main","headRefOid":"4014e4663af9b694ae307530cbd4d8e269e45f1c","mergeCommit":{"oid":"e19a8d3f8b51c536155bcc80f911e962b4360ea5"},"mergedAt":"2026-11-03T11:40:26Z","number":5,"state":"MERGED","url":"https://github.com/Creative36711/synapse/pull/5"}
+CHECKED_SHA_FROM_PRIOR_ACCEPTANCE=4014e4663af9b694ae307530cbd4d8e269e45f1c
+CHECKED_TREE_FROM_PRIOR_ACCEPTANCE=918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+MERGE_SHA=e19a8d3f8b51c536155bcc80f911e962b4360ea5
+MERGE_TREE=918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+TESTED_TREE_EQUALS_MERGED_TREE=YES
+WORKTREE_CLEAN=YES
+
+=== K-4 HISTORY CONFIRMATION ===
+COMMAND: gh pr view 4 --json number,url,state,mergedAt,mergeCommit,headRefOid,baseRefName
+{"baseRefName":"main","headRefOid":"f257750730b9e5bee2efc3fb44bf9b3b7f363b77","mergeCommit":{"oid":"d30951607c83cfa30e6d3f76eef13e48b48b0abf"},"mergedAt":"2026-11-03T11:02:46Z","number":4,"state":"MERGED","url":"https://github.com/Creative36711/synapse/pull/4"}
+Prior K-15 report records test:validation red at the K-4 merge boundary; no green validation result is claimed for commits before d309516.

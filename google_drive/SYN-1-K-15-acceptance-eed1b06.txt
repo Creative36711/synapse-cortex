@@ -1,0 +1,231 @@
+SYN-1 K-15 acceptance log
+Date: 2026-11-03
+Repository: Creative36711/synapse
+Branch: arena/85f5c19a-synapse
+BASE/origin-main: d30951607c83cfa30e6d3f76eef13e48b48b0abf
+Checked HEAD: eed1b06cf135cbacf7189e2d0b005716875cd9a2
+Checked tree: 6dba31984a86ca68ce83adc83ae1662e59ebe193
+Environment: Node v22.22.3; npm 10.9.8; Python 3.11.2; Godot 4.7.2.stable.custom_build.ed1daf0bf.
+Clean clone HEAD equaled checked SHA. Acceptance cache started empty and was shared by commands 1-3.
+
+RESULTS:
+1. offline-install: rc=0. Verifier confirmed 6 package tarballs, 391357 bytes, SHA-256 and lockfile SRI. Fresh npm cache had zero dependency/index entries after install.
+2. npm run test:validation: rc=1, 16 tests total, 15 pass, 1 fail. The sole failure is tests/validation/validator.test.mjs:114, the old K-3 assertion that the cycle example is not resolved and validate must return 0. The K-4 validate behavior now correctly rejects it with module.dependency.cycle and the closed alpha -> beta -> alpha path. This file is read-only in K-15 Scope and was not changed.
+3. npm run check:contracts: rc=0; 82 checks pass, 0 fail; contract-check: ok.
+Additional: vendor verifier rc=0; tampered tarball installer rc=1; missing tarball installer rc=1. Both failure tests ran with registry/proxy pointed to 127.0.0.1:1 and npm_config_offline=true; no fallback occurred.
+
+REPRODUCTION CHECK:
+In another clean clone with a separate empty cache, `npm ci --ignore-scripts --no-audit --fund=false` completed (6 packages); `python3 tools/deps/vendor.py snapshot` fetched the lockfile-resolved registry tarballs and verified their SRI; `python3 tools/deps/vendor.py verify` passed. `diff -qr vendor <checked clone>/vendor` and `cmp NOTICE <checked clone>/NOTICE` passed; package-lock.json remained unchanged. Reproduction requires the npm registry; acceptance install/checks do not.
+
+Godot `tools/godot/install.sh --check`: rc=0, smoke test passed. Current worktree node_modules removed after acceptance; no package-lock.json or package.json changes. `git diff --check HEAD^ HEAD`: rc=0.
+
+The overall card oracle is NOT GREEN because acceptance command 2 returns rc=1. No PR was created and no merge attempted. K-15 changes are committed locally; scope/test conflict must be resolved before a PR can pass the gate. No network isolation claim: installation code uses local files only, and acceptance set the stated offline/proxy variables, but no OS-level network sandbox was installed.
+
+FULL COMMAND OUTPUT:
+CHECKED_SHA=eed1b06cf135cbacf7189e2d0b005716875cd9a2
+NODE=v22.22.3
+NPM=10.9.8
+PYTHON=Python 3.11.2
+GODOT=4.7.2.stable.custom_build.ed1daf0bf
+CLEAN_CLONE=/tmp/k15-clean-clone.qF5rAB
+CACHE=/tmp/k15-empty-cache.Adrctt
+CLONE_HEAD=eed1b06cf135cbacf7189e2d0b005716875cd9a2
+INITIAL_CACHE_ENTRIES=0
+
+=== ACCEPTANCE 1: offline-install ===
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+offline-vendor: installed 6 lockfile packages (391357 tarball bytes)
+offline-install: installed package-lock.json tree without network access
+ACCEPTANCE_1_RC=0
+CACHE_ENTRIES_AFTER_1=0
+
+=== ACCEPTANCE 2: test:validation ===
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# Subtest: GameSpec local validator public CLI
+    # Subtest: minimal valid GameSpec returns machine-readable ok and documented defaults
+    ok 1 - minimal valid GameSpec returns machine-readable ok and documented defaults
+      ---
+      duration_ms: 449.924738
+      type: 'test'
+      ...
+    # Subtest: the standalone broken example reports a useful structural diagnostic
+    ok 2 - the standalone broken example reports a useful structural diagnostic
+      ---
+      duration_ms: 355.532567
+      type: 'test'
+      ...
+    # Subtest: wrong-type.game.yaml is rejected through validate with field.type at /game/version
+    ok 3 - wrong-type.game.yaml is rejected through validate with field.type at /game/version
+      ---
+      duration_ms: 355.67711
+      type: 'test'
+      ...
+    # Subtest: missing-field.game.yaml is rejected through validate with field.required at /specVersion
+    ok 4 - missing-field.game.yaml is rejected through validate with field.required at /specVersion
+      ---
+      duration_ms: 354.659577
+      type: 'test'
+      ...
+    # Subtest: unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+    ok 5 - unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+      ---
+      duration_ms: 353.707114
+      type: 'test'
+      ...
+    # Subtest: mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+    ok 6 - mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+      ---
+      duration_ms: 355.422198
+      type: 'test'
+      ...
+    # Subtest: bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+    ok 7 - bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+      ---
+      duration_ms: 358.025933
+      type: 'test'
+      ...
+    # Subtest: bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+    ok 8 - bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+      ---
+      duration_ms: 365.971004
+      type: 'test'
+      ...
+    # Subtest: bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+    ok 9 - bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+      ---
+      duration_ms: 359.207361
+      type: 'test'
+      ...
+    # Subtest: duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+    ok 10 - duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+      ---
+      duration_ms: 360.63574
+      type: 'test'
+      ...
+    # Subtest: default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+    ok 11 - default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+      ---
+      duration_ms: 358.957514
+      type: 'test'
+      ...
+    # Subtest: missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+    ok 12 - missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+      ---
+      duration_ms: 358.32144
+      type: 'test'
+      ...
+    # Subtest: duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+    ok 13 - duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+      ---
+      duration_ms: 363.250577
+      type: 'test'
+      ...
+    # Subtest: duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+    ok 14 - duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+      ---
+      duration_ms: 363.8179
+      type: 'test'
+      ...
+    # Subtest: yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+    ok 15 - yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+      ---
+      duration_ms: 262.600225
+      type: 'test'
+      ...
+    # Subtest: cycle example records a -> b -> a statically and is not resolved by K-3
+    not ok 16 - cycle example records a -> b -> a statically and is not resolved by K-3
+      ---
+      duration_ms: 557.318794
+      type: 'test'
+      location: '/tmp/k15-clean-clone.qF5rAB/repo/tests/validation/validator.test.mjs:114:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Godot Engine v4.7.2.stable.custom_build.ed1daf0bf (2026-08-17 01:18:38 UTC) - https://godotengine.org
+        
+        {"ok":false,"errors":[{"code":"module.dependency.cycle","params":{"path":"/dependencies","expected":"acyclic module dependency graph","actual":"synapse.demo.alpha -> synapse.demo.beta -> synapse.demo.alpha","cycle":["synapse.demo.alpha","synapse.demo.beta","synapse.demo.alpha"]},"catalogKey":"errors.module.dependency.cycle","message":"Module dependency cycle: synapse.demo.alpha -> synapse.demo.beta -> synapse.demo.alpha."}]}
+        
+        
+        
+        
+        1 !== 0
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 0
+      actual: 1
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (file:///tmp/k15-clean-clone.qF5rAB/repo/tests/validation/validator.test.mjs:129:12)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    1..16
+not ok 1 - GameSpec local validator public CLI
+  ---
+  duration_ms: 5935.189239
+  type: 'suite'
+  location: '/tmp/k15-clean-clone.qF5rAB/repo/tests/validation/validator.test.mjs:53:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 16
+# suites 1
+# pass 15
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6040.86003
+ACCEPTANCE_2_RC=1
+
+=== ACCEPTANCE 3: check:contracts ===
+
+> synapse-contracts@0.1.0 check:contracts
+> node tests/contracts/check-contracts.mjs
+
+contract-check: files=6 tests=82 pass=82 fail=0
+contract-check: ok
+ACCEPTANCE_3_RC=0
+
+=== VENDOR VERIFICATION ===
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+VENDOR_VERIFY_RC=0
+
+=== DAMAGE TEST ===
+offline-vendor: ERROR: SHA-256 mismatch for npm/ajv-8.20.0.tgz
+CORRUPT_SNAPSHOT_RC=1
+
+=== MISSING SNAPSHOT TEST ===
+offline-vendor: ERROR: vendor tarball set does not match package-lock; missing=['npm/yaml-2.9.1.tgz'], extra=[]
+MISSING_SNAPSHOT_RC=1
+FINAL_CACHE_ENTRIES=4
+VALIDATION_SUMMARY
+ACCEPTANCE_1_RC=0
+# tests 16
+# pass 15
+# fail 1
+ACCEPTANCE_2_RC=1
+ACCEPTANCE_3_RC=0
+CORRUPT_SNAPSHOT_RC=1
+MISSING_SNAPSHOT_RC=1
+
+OVERALL_ACCEPTANCE_GREEN=false
+LOG=/tmp/k15-acceptance.log
+
+EXACT SNAPSHOT REGENERATION OUTPUT SUMMARY:
+REGEN_HEAD=eed1b06cf135cbacf7189e2d0b005716875cd9a2
+CACHE_INITIAL=0
+npm ci --ignore-scripts --no-audit --fund=false: rc=0, added 6 packages.
+python3 tools/deps/vendor.py snapshot: rc=0, wrote 6 packages, 391357 bytes; post-write SHA-256 and package-lock SRI verification passed.
+python3 tools/deps/vendor.py verify: rc=0, verified 6 packages, 391357 bytes; SHA-256 and lockfile SRI match.
+Snapshot and NOTICE byte-for-byte matched the checked tree; package-lock unchanged.

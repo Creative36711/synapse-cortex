@@ -1,0 +1,1766 @@
+SYN-1 · K-15 · Offline dependency installation — final acceptance report
+Dispatch: 40d6f0cf-5705-81bd-b781-f96c1079658c
+Run: c2d5f370-506b-48ef-9060-1928fc27fb85
+Date: 2026-11-03 (UTC)
+
+RESULT
+- Accepted on checked commit 4014e4663af9b694ae307530cbd4d8e269e45f1c, tree 918d3f0fbf1ed1c9095123dbc222f7d755d31b54.
+- The pre-change run on the exact same HEAD/tree had 15 pass / 1 fail, specifically the stale cycle expectation. After the authorized test-only change, validation had 16 pass / 0 fail.
+- On a fresh clean clone and initially empty npm cache, offline installation, validation, and contract checks all passed in the required order. Registry and HTTP(S) proxy were pointed to 127.0.0.1:1 and npm offline mode was enabled. This demonstrates the tested installer/checks worked under those settings; it is not a claim that the OS enforced network isolation.
+- Snapshot verifier checked all six lockfile registry packages, every SHA-256 and lockfile SHA-512 SRI, package names/versions, and total 391,357 tarball bytes. SHA256SUMS check passed for all six files. Corrupt and missing snapshot tests each exited 1.
+- Snapshot regeneration was independently rerun on a fresh clone using `npm ci --ignore-scripts --no-audit --fund=false`, then `vendor.py snapshot` and `vendor.py verify`; regenerated vendor files, NOTICE, and package-lock were identical to the committed snapshot. The regeneration step uses the network as documented.
+- Package licenses recorded in the inventory/NOTICE: ajv (MIT), fast-deep-equal (MIT), fast-uri (BSD-3-Clause), json-schema-traverse (MIT), require-from-string (MIT), yaml (ISC).
+- Pull request #5: https://github.com/Creative36711/synapse/pull/5. GitHub reported no configured status checks on the branch; the full card acceptance gates below were green before merge. PR was squash-merged at 2026-11-03T11:40:26Z.
+- Actual merge SHA: e19a8d3f8b51c536155bcc80f911e962b4360ea5. Checked tree and fetched origin/main tree both equal 918d3f0fbf1ed1c9095123dbc222f7d755d31b54, so the merged tree is exactly the tested tree; no post-merge rerun was needed under the tree-equality criterion.
+- Source worktree is clean. package-lock.json is unchanged; resolver/product code is unchanged. The only K-15 follow-up commit is the authorized cycle-test update.
+
+AUTHORIZED TEST CHANGE
+In tests/validation/validator.test.mjs only: renamed the cycle case to “validate rejects the real cycle and reports the closed path per O-5”; kept the public CLI invocation and all three static assertions unchanged; replaced only result expectations to require nonzero status, report.ok false, exactly one error with code module.dependency.cycle, and params.actual containing `synapse.demo.alpha -> synapse.demo.beta -> synapse.demo.alpha`.
+
+REPRODUCIBLE SNAPSHOT REGENERATION
+The documented command sequence in tools/deps/README.md is:
+  CACHE=$(mktemp -d)
+  test -z "$(find "$CACHE" -mindepth 1 -print -quit)"
+  npm_config_cache="$CACHE" npm_config_registry=https://registry.npmjs.org npm ci --ignore-scripts --no-audit --fund=false
+  python3 tools/deps/vendor.py snapshot
+  python3 tools/deps/vendor.py verify
+  rm -rf node_modules
+The independent regeneration was run with the same commands and new empty cache. npm ci added 6 packages; snapshot regenerated 6 tarballs / 391357 bytes; verification and SHA256SUMS passed; diff against package-lock.json, vendor/, and NOTICE was empty.
+
+PACKAGE INVENTORY (package-lock SRI is SHA-512; SHA-256 is independently checked)
+Package@version | License | Bytes | SHA-256 | package-lock SRI
+ajv@8.20.0 | MIT | 217611 | b2f0b3a893bbb8cc5efb6814f08b1499e19e31d5dd73683f5893382f48f6e7b3 | sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==
+fast-deep-equal@3.1.3 | MIT | 3656 | b019a0980f27638dc3f85836b0e478f188e00d7a6e5852c0819fa86f56e47b8f | sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==
+fast-uri@3.1.9 | BSD-3-Clause | 50086 | 4f5a67f7b61110aae7b3ad38e806627f5712f4c150bd38eb804a562e69a9ee5e | sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==
+json-schema-traverse@1.0.0 | MIT | 6074 | 023222622df29fc274bde5d3590e47aa1d4a8e3c1d6e2aba029948ed79799b21 | sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==
+require-from-string@2.0.2 | MIT | 1816 | cb694a4965908f7775a0c757f00cf4e624d193cd71d77988fbcca0f597b88d82 | sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==
+yaml@2.9.1 | ISC | 112114 | 4ef6c54cf559b8a207b7b518378230805a1c84af239b14960e8c67c7d59de5d3 | sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==
+
+DETAILED LOGS FOLLOW. The pre/post log includes the original environment bootstrap misses (missing node_modules/Godot PATH), followed by the definitive same-HEAD pre-change red cycle test and post-change green validation. The final acceptance log contains all commands and outputs including fresh clone/cache, gates, checksums, corruption/missing failures, regeneration, PR/merge SHAs, and tree comparison.
+
+================ FULL PRE/POST VALIDATION LOG ================
+=== PRE-CHANGE BASE VALIDATION ===
+2026-11-03T11:37:05Z
+HEAD:
+eed1b06cf135cbacf7189e2d0b005716875cd9a2
+BRANCH:
+arena/85f5c19a-synapse
+STATUS:
+TREE:
+6dba31984a86ca68ce83adc83ae1662e59ebe193
+DIFF:
+COMMAND: npm run test:validation
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# node:internal/modules/package_json_reader:314
+#   throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);
+#         ^
+# Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'yaml' imported from /home/user/synapse/tests/validation/validator.test.mjs
+#     at Object.getPackageJSONURL (node:internal/modules/package_json_reader:314:9)
+#     at packageResolve (node:internal/modules/esm/resolve:768:81)
+#     at moduleResolve (node:internal/modules/esm/resolve:855:18)
+#     at defaultResolve (node:internal/modules/esm/resolve:985:11)
+#     at \#cachedDefaultResolve (node:internal/modules/esm/loader:747:20)
+#     at ModuleLoader.resolve (node:internal/modules/esm/loader:724:38)
+#     at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:320:38)
+#     at ModuleJob._link (node:internal/modules/esm/module_job:182:49) {
+#   code: 'ERR_MODULE_NOT_FOUND'
+# }
+# Node.js v22.22.3
+# Subtest: tests/validation/validator.test.mjs
+not ok 1 - tests/validation/validator.test.mjs
+  ---
+  duration_ms: 59.746721
+  type: 'test'
+  location: '/home/user/synapse/tests/validation/validator.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 68.660896
+PRE_VALIDATION_RC=1
+=== PRE-CHANGE BASE: INSTALL VENDORED DEPS AND RE-RUN ===
+PRE_CACHE=/tmp/k15-pre-cache.cTqA4E
+COMMAND: npm_config_cache="$CACHE" npm_config_registry=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 npm_config_offline=true ./tools/deps/offline-install.sh
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+offline-vendor: installed 6 lockfile packages (391357 tarball bytes)
+offline-install: installed package-lock.json tree without network access
+PRE_INSTALL_RC=0
+COMMAND: npm run test:validation
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# Subtest: GameSpec local validator public CLI
+    # Subtest: minimal valid GameSpec returns machine-readable ok and documented defaults
+    not ok 1 - minimal valid GameSpec returns machine-readable ok and documented defaults
+      ---
+      duration_ms: 5.818897
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:54:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:55:20)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Test.start (node:internal/test_runner/test:944:17)
+        +     at node:internal/test_runner/test:1440:71
+        +     at node:internal/per_context/primordials:466:82
+        +     at new Promise (<anonymous>) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'examples/minimal.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:55:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        node:internal/test_runner/test:1440:71
+        node:internal/per_context/primordials:466:82
+        new Promise (<anonymous>)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:55:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Test.start (node:internal/test_runner/test:944:17)
+        node:internal/test_runner/test:1440:71
+        node:internal/per_context/primordials:466:82
+        new Promise (<anonymous>)
+        new SafePromise (node:internal/per_context/primordials:435:3)
+        node:internal/per_context/primordials:466:9
+      ...
+    # Subtest: the standalone broken example reports a useful structural diagnostic
+    not ok 2 - the standalone broken example reports a useful structural diagnostic
+      ---
+      duration_ms: 3.561268
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:64:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:65:20)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Promise.all (index 0) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'examples/broken.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:65:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Promise.all (index 0)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:65:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Promise.all (index 0)
+        async Suite.run (node:internal/test_runner/test:1442:7)
+        async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+      ...
+    # Subtest: wrong-type.game.yaml is rejected through validate with field.type at /game/version
+    not ok 3 - wrong-type.game.yaml is rejected through validate with field.type at /game/version
+      ---
+      duration_ms: 3.646482
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/wrong-type.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: missing-field.game.yaml is rejected through validate with field.required at /specVersion
+    not ok 4 - missing-field.game.yaml is rejected through validate with field.required at /specVersion
+      ---
+      duration_ms: 2.765594
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/missing-field.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+    not ok 5 - unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+      ---
+      duration_ms: 2.372332
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/unknown-field.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+    not ok 6 - mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+      ---
+      duration_ms: 2.498106
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/mutable-state.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+    not ok 7 - bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+      ---
+      duration_ms: 2.320482
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/bad-game-id.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+    not ok 8 - bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+      ---
+      duration_ms: 2.563362
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/bad-scene-id.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+    not ok 9 - bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+      ---
+      duration_ms: 3.422739
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/bad-locale.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+    not ok 10 - duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+      ---
+      duration_ms: 2.346914
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/duplicate-locale.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+    not ok 11 - default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+      ---
+      duration_ms: 1.618089
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/default-not-supported.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+    not ok 12 - missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+      ---
+      duration_ms: 1.762967
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/missing-locale-key.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+    not ok 13 - duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+      ---
+      duration_ms: 2.07509
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/duplicate-module.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+    not ok 14 - duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+      ---
+      duration_ms: 2.078418
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/duplicate-key.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+    not ok 15 - yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+      ---
+      duration_ms: 2.265745
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:78:5'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'tests/validation/fixtures/invalid/yaml-syntax.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:79:22)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    # Subtest: cycle example records a -> b -> a statically and is not resolved by K-3
+    not ok 16 - cycle example records a -> b -> a statically and is not resolved by K-3
+      ---
+      duration_ms: 17.501852
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:114:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        could not start Godot: spawnSync godot ENOENT
+        + actual - expected
+        
+        + Error: spawnSync godot ENOENT
+        +     at Object.spawnSync (node:internal/child_process:1120:20)
+        +     at spawnSync (node:child_process:902:24)
+        +     at invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        +     at TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:128:20)
+        +     at Test.runInAsyncScope (node:async_hooks:214:14)
+        +     at Test.run (node:internal/test_runner/test:1047:25)
+        +     at Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        +     at Test.postRun (node:internal/test_runner/test:1173:19)
+        +     at Test.run (node:internal/test_runner/test:1101:12)
+        +     at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7) {
+        +   code: 'ENOENT',
+        +   errno: -2,
+        +   path: 'godot',
+        +   spawnargs: [
+        +     '--headless',
+        +     '--path',
+        +     '/home/user/synapse/game',
+        +     '--script',
+        +     'res://cli/main.gd',
+        +     '--',
+        +     'validate',
+        +     'examples/cycle.game.yaml'
+        +   ],
+        +   syscall: 'spawnSync godot'
+        + }
+        - undefined
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      actual:
+      error: 'spawnSync godot ENOENT'
+      stack: |-
+        Object.spawnSync (node:internal/child_process:1120:20)
+        spawnSync (node:child_process:902:24)
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:17:18)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:128:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      operator: 'strictEqual'
+      stack: |-
+        invoke (file:///home/user/synapse/tests/validation/validator.test.mjs:28:10)
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:128:20)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    1..16
+not ok 1 - GameSpec local validator public CLI
+  ---
+  duration_ms: 62.201707
+  type: 'suite'
+  location: '/home/user/synapse/tests/validation/validator.test.mjs:53:1'
+  failureType: 'subtestsFailed'
+  error: '16 subtests failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 16
+# suites 1
+# pass 0
+# fail 16
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 201.12009
+PRE_VALIDATION_WITH_DEPS_RC=1
+POST-PRE STATUS:
+POST-PRE TREE:
+6dba31984a86ca68ce83adc83ae1662e59ebe193
+POST-PRE DIFF:
+=== PRE-CHANGE BASE: VALIDATION WITH GODOT ON PATH ===
+PATH=/tmp/synapse-godot/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+HEAD:
+eed1b06cf135cbacf7189e2d0b005716875cd9a2
+TREE:
+6dba31984a86ca68ce83adc83ae1662e59ebe193
+STATUS:
+DIFF:
+COMMAND: PATH="/tmp/synapse-godot/bin:$PATH" npm run test:validation
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# Subtest: GameSpec local validator public CLI
+    # Subtest: minimal valid GameSpec returns machine-readable ok and documented defaults
+    ok 1 - minimal valid GameSpec returns machine-readable ok and documented defaults
+      ---
+      duration_ms: 453.919502
+      type: 'test'
+      ...
+    # Subtest: the standalone broken example reports a useful structural diagnostic
+    ok 2 - the standalone broken example reports a useful structural diagnostic
+      ---
+      duration_ms: 368.067695
+      type: 'test'
+      ...
+    # Subtest: wrong-type.game.yaml is rejected through validate with field.type at /game/version
+    ok 3 - wrong-type.game.yaml is rejected through validate with field.type at /game/version
+      ---
+      duration_ms: 365.358502
+      type: 'test'
+      ...
+    # Subtest: missing-field.game.yaml is rejected through validate with field.required at /specVersion
+    ok 4 - missing-field.game.yaml is rejected through validate with field.required at /specVersion
+      ---
+      duration_ms: 369.869525
+      type: 'test'
+      ...
+    # Subtest: unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+    ok 5 - unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+      ---
+      duration_ms: 459.086969
+      type: 'test'
+      ...
+    # Subtest: mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+    ok 6 - mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+      ---
+      duration_ms: 365.145975
+      type: 'test'
+      ...
+    # Subtest: bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+    ok 7 - bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+      ---
+      duration_ms: 357.266799
+      type: 'test'
+      ...
+    # Subtest: bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+    ok 8 - bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+      ---
+      duration_ms: 361.859488
+      type: 'test'
+      ...
+    # Subtest: bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+    ok 9 - bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+      ---
+      duration_ms: 457.252998
+      type: 'test'
+      ...
+    # Subtest: duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+    ok 10 - duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+      ---
+      duration_ms: 369.877813
+      type: 'test'
+      ...
+    # Subtest: default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+    ok 11 - default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+      ---
+      duration_ms: 352.362657
+      type: 'test'
+      ...
+    # Subtest: missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+    ok 12 - missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+      ---
+      duration_ms: 352.456826
+      type: 'test'
+      ...
+    # Subtest: duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+    ok 13 - duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+      ---
+      duration_ms: 352.808258
+      type: 'test'
+      ...
+    # Subtest: duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+    ok 14 - duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+      ---
+      duration_ms: 258.502
+      type: 'test'
+      ...
+    # Subtest: yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+    ok 15 - yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+      ---
+      duration_ms: 260.234401
+      type: 'test'
+      ...
+    # Subtest: cycle example records a -> b -> a statically and is not resolved by K-3
+    not ok 16 - cycle example records a -> b -> a statically and is not resolved by K-3
+      ---
+      duration_ms: 460.894028
+      type: 'test'
+      location: '/home/user/synapse/tests/validation/validator.test.mjs:114:3'
+      failureType: 'testCodeFailure'
+      error: |-
+        Godot Engine v4.7.2.stable.custom_build.ed1daf0bf (2026-08-17 01:18:38 UTC) - https://godotengine.org
+        
+        {"ok":false,"errors":[{"code":"module.dependency.cycle","params":{"path":"/dependencies","expected":"acyclic module dependency graph","actual":"synapse.demo.alpha -> synapse.demo.beta -> synapse.demo.alpha","cycle":["synapse.demo.alpha","synapse.demo.beta","synapse.demo.alpha"]},"catalogKey":"errors.module.dependency.cycle","message":"Module dependency cycle: synapse.demo.alpha -> synapse.demo.beta -> synapse.demo.alpha."}]}
+        
+        
+        
+        
+        1 !== 0
+        
+      code: 'ERR_ASSERTION'
+      name: 'AssertionError'
+      expected: 0
+      actual: 1
+      operator: 'strictEqual'
+      stack: |-
+        TestContext.<anonymous> (file:///home/user/synapse/tests/validation/validator.test.mjs:129:12)
+        Test.runInAsyncScope (node:async_hooks:214:14)
+        Test.run (node:internal/test_runner/test:1047:25)
+        Suite.processPendingSubtests (node:internal/test_runner/test:744:18)
+        Test.postRun (node:internal/test_runner/test:1173:19)
+        Test.run (node:internal/test_runner/test:1101:12)
+        async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+      ...
+    1..16
+not ok 1 - GameSpec local validator public CLI
+  ---
+  duration_ms: 5967.256071
+  type: 'suite'
+  location: '/home/user/synapse/tests/validation/validator.test.mjs:53:1'
+  failureType: 'subtestsFailed'
+  error: '1 subtest failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 16
+# suites 1
+# pass 15
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6080.816481
+PRE_VALIDATION_WITH_GODOT_RC=1
+=== POST-CHANGE VALIDATION ON SAME BASE HEAD ===
+HEAD:
+eed1b06cf135cbacf7189e2d0b005716875cd9a2
+BASE_TREE:
+6dba31984a86ca68ce83adc83ae1662e59ebe193
+STATUS:
+ M tests/validation/validator.test.mjs
+DIFF:
+diff --git a/tests/validation/validator.test.mjs b/tests/validation/validator.test.mjs
+index 77a2719..8812e36 100644
+--- a/tests/validation/validator.test.mjs
++++ b/tests/validation/validator.test.mjs
+@@ -111,7 +111,7 @@ describe('GameSpec local validator public CLI', () => {
+     });
+   }
+ 
+-  test('cycle example records a -> b -> a statically and is not resolved by K-3', () => {
++  test('validate rejects the real cycle and reports the closed path per O-5', () => {
+     const readYaml = (path) => parseDocument(readFileSync(path, 'utf8'), {
+       version: '1.2', schema: 'core', uniqueKeys: true, merge: false, customTags: [],
+     }).toJS();
+@@ -126,7 +126,11 @@ describe('GameSpec local validator public CLI', () => {
+     assert.equal(beta.dependencies[0].id, alphaId);
+ 
+     const result = invoke(join(ROOT, 'examples/cycle.game.yaml'));
+-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+-    assert.equal(result.report.ok, true);
++    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
++    assert.equal(result.report.ok, false);
++    assert.equal(result.report.errors.length, 1);
++    const [error] = result.report.errors;
++    assert.equal(error.code, 'module.dependency.cycle');
++    assert.match(error.params.actual, /synapse\.demo\.alpha -> synapse\.demo\.beta -> synapse\.demo\.alpha/);
+   });
+ });
+COMMAND: PATH="/tmp/synapse-godot/bin:$PATH" npm run test:validation
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# Subtest: GameSpec local validator public CLI
+    # Subtest: minimal valid GameSpec returns machine-readable ok and documented defaults
+    ok 1 - minimal valid GameSpec returns machine-readable ok and documented defaults
+      ---
+      duration_ms: 458.875053
+      type: 'test'
+      ...
+    # Subtest: the standalone broken example reports a useful structural diagnostic
+    ok 2 - the standalone broken example reports a useful structural diagnostic
+      ---
+      duration_ms: 358.162341
+      type: 'test'
+      ...
+    # Subtest: wrong-type.game.yaml is rejected through validate with field.type at /game/version
+    ok 3 - wrong-type.game.yaml is rejected through validate with field.type at /game/version
+      ---
+      duration_ms: 361.8445
+      type: 'test'
+      ...
+    # Subtest: missing-field.game.yaml is rejected through validate with field.required at /specVersion
+    ok 4 - missing-field.game.yaml is rejected through validate with field.required at /specVersion
+      ---
+      duration_ms: 459.355748
+      type: 'test'
+      ...
+    # Subtest: unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+    ok 5 - unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+      ---
+      duration_ms: 357.887554
+      type: 'test'
+      ...
+    # Subtest: mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+    ok 6 - mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+      ---
+      duration_ms: 360.239394
+      type: 'test'
+      ...
+    # Subtest: bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+    ok 7 - bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+      ---
+      duration_ms: 358.51902
+      type: 'test'
+      ...
+    # Subtest: bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+    ok 8 - bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+      ---
+      duration_ms: 354.402338
+      type: 'test'
+      ...
+    # Subtest: bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+    ok 9 - bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+      ---
+      duration_ms: 356.722142
+      type: 'test'
+      ...
+    # Subtest: duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+    ok 10 - duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+      ---
+      duration_ms: 455.641107
+      type: 'test'
+      ...
+    # Subtest: default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+    ok 11 - default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+      ---
+      duration_ms: 355.175158
+      type: 'test'
+      ...
+    # Subtest: missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+    ok 12 - missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+      ---
+      duration_ms: 354.509305
+      type: 'test'
+      ...
+    # Subtest: duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+    ok 13 - duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+      ---
+      duration_ms: 362.459737
+      type: 'test'
+      ...
+    # Subtest: duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+    ok 14 - duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+      ---
+      duration_ms: 260.230321
+      type: 'test'
+      ...
+    # Subtest: yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+    ok 15 - yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+      ---
+      duration_ms: 263.462034
+      type: 'test'
+      ...
+    # Subtest: validate rejects the real cycle and reports the closed path per O-5
+    ok 16 - validate rejects the real cycle and reports the closed path per O-5
+      ---
+      duration_ms: 464.932325
+      type: 'test'
+      ...
+    1..16
+ok 1 - GameSpec local validator public CLI
+  ---
+  duration_ms: 5944.823331
+  type: 'suite'
+  ...
+1..1
+# tests 16
+# suites 1
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6058.99519
+POST_VALIDATION_RC=0
+FINAL STATUS:
+ M tests/validation/validator.test.mjs
+FINAL DIFF:
+diff --git a/tests/validation/validator.test.mjs b/tests/validation/validator.test.mjs
+index 77a2719..8812e36 100644
+--- a/tests/validation/validator.test.mjs
++++ b/tests/validation/validator.test.mjs
+@@ -111,7 +111,7 @@ describe('GameSpec local validator public CLI', () => {
+     });
+   }
+ 
+-  test('cycle example records a -> b -> a statically and is not resolved by K-3', () => {
++  test('validate rejects the real cycle and reports the closed path per O-5', () => {
+     const readYaml = (path) => parseDocument(readFileSync(path, 'utf8'), {
+       version: '1.2', schema: 'core', uniqueKeys: true, merge: false, customTags: [],
+     }).toJS();
+@@ -126,7 +126,11 @@ describe('GameSpec local validator public CLI', () => {
+     assert.equal(beta.dependencies[0].id, alphaId);
+ 
+     const result = invoke(join(ROOT, 'examples/cycle.game.yaml'));
+-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+-    assert.equal(result.report.ok, true);
++    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
++    assert.equal(result.report.ok, false);
++    assert.equal(result.report.errors.length, 1);
++    const [error] = result.report.errors;
++    assert.equal(error.code, 'module.dependency.cycle');
++    assert.match(error.params.actual, /synapse\.demo\.alpha -> synapse\.demo\.beta -> synapse\.demo\.alpha/);
+   });
+ });
+
+================ FULL FINAL ACCEPTANCE / REGENERATION LOG ================
+=== K-15 FINAL CLEAN-CLONE ACCEPTANCE ===
+2026-11-03T11:38:41Z
+CLONE=/tmp/k15-final-clean.9DuVNM/repo
+CACHE=/tmp/k15-final-cache.0SEChi
+COMMAND: git clone --no-hardlinks --branch arena/85f5c19a-synapse /home/user/synapse "$R"
+Cloning into '/tmp/k15-final-clean.9DuVNM/repo'...
+CHECKED_SHA:
+4014e4663af9b694ae307530cbd4d8e269e45f1c
+CHECKED_TREE:
+918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+BRANCH:
+arena/85f5c19a-synapse
+INITIAL_STATUS:
+NODE:
+v22.22.3
+NPM:
+10.9.8
+GODOT:
+4.7.2.stable.custom_build.ed1daf0bf
+CACHE_CONTENTS_BEFORE:
+CACHE_EMPTY=YES
+=== GATE 1: OFFLINE INSTALL ===
+COMMAND: rm -rf node_modules
+COMMAND: npm_config_cache="$CACHE" npm_config_registry=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 npm_config_offline=true ./tools/deps/offline-install.sh
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+offline-vendor: installed 6 lockfile packages (391357 tarball bytes)
+offline-install: installed package-lock.json tree without network access
+GATE1_RC=0
+=== GATE 2: VALIDATION TESTS ===
+COMMAND: npm_config_cache="$CACHE" npm_config_registry=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 npm_config_offline=true npm run test:validation
+
+> synapse-contracts@0.1.0 test:validation
+> node --test tests/validation/*.test.mjs
+
+TAP version 13
+# Subtest: GameSpec local validator public CLI
+    # Subtest: minimal valid GameSpec returns machine-readable ok and documented defaults
+    ok 1 - minimal valid GameSpec returns machine-readable ok and documented defaults
+      ---
+      duration_ms: 451.324065
+      type: 'test'
+      ...
+    # Subtest: the standalone broken example reports a useful structural diagnostic
+    ok 2 - the standalone broken example reports a useful structural diagnostic
+      ---
+      duration_ms: 356.205537
+      type: 'test'
+      ...
+    # Subtest: wrong-type.game.yaml is rejected through validate with field.type at /game/version
+    ok 3 - wrong-type.game.yaml is rejected through validate with field.type at /game/version
+      ---
+      duration_ms: 351.009034
+      type: 'test'
+      ...
+    # Subtest: missing-field.game.yaml is rejected through validate with field.required at /specVersion
+    ok 4 - missing-field.game.yaml is rejected through validate with field.required at /specVersion
+      ---
+      duration_ms: 365.414984
+      type: 'test'
+      ...
+    # Subtest: unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+    ok 5 - unknown-field.game.yaml is rejected through validate with field.unknown at /game/genre
+      ---
+      duration_ms: 362.600887
+      type: 'test'
+      ...
+    # Subtest: mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+    ok 6 - mutable-state.game.yaml is rejected through validate with definition.state.forbidden at /game/state
+      ---
+      duration_ms: 352.932762
+      type: 'test'
+      ...
+    # Subtest: bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+    ok 7 - bad-game-id.game.yaml is rejected through validate with field.pattern at /game/id
+      ---
+      duration_ms: 351.521557
+      type: 'test'
+      ...
+    # Subtest: bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+    ok 8 - bad-scene-id.game.yaml is rejected through validate with field.pattern at /entry/scene
+      ---
+      duration_ms: 349.220305
+      type: 'test'
+      ...
+    # Subtest: bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+    ok 9 - bad-locale.game.yaml is rejected through validate with field.enum at /locales/supported/1
+      ---
+      duration_ms: 350.084563
+      type: 'test'
+      ...
+    # Subtest: duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+    ok 10 - duplicate-locale.game.yaml is rejected through validate with field.unique at /locales/supported
+      ---
+      duration_ms: 350.553982
+      type: 'test'
+      ...
+    # Subtest: default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+    ok 11 - default-not-supported.game.yaml is rejected through validate with field.enum at /locales/default
+      ---
+      duration_ms: 367.646985
+      type: 'test'
+      ...
+    # Subtest: missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+    ok 12 - missing-locale-key.game.yaml is rejected through validate with locale.key.missing at /game/titleKey
+      ---
+      duration_ms: 355.127862
+      type: 'test'
+      ...
+    # Subtest: duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+    ok 13 - duplicate-module.game.yaml is rejected through validate with module.duplicate at /modules/1/id
+      ---
+      duration_ms: 350.825272
+      type: 'test'
+      ...
+    # Subtest: duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+    ok 14 - duplicate-key.game.yaml is rejected through validate with yaml.duplicate-key at /
+      ---
+      duration_ms: 358.005663
+      type: 'test'
+      ...
+    # Subtest: yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+    ok 15 - yaml-syntax.game.yaml is rejected through validate with yaml.syntax at /
+      ---
+      duration_ms: 260.871806
+      type: 'test'
+      ...
+    # Subtest: validate rejects the real cycle and reports the closed path per O-5
+    ok 16 - validate rejects the real cycle and reports the closed path per O-5
+      ---
+      duration_ms: 455.517938
+      type: 'test'
+      ...
+    1..16
+ok 1 - GameSpec local validator public CLI
+  ---
+  duration_ms: 5791.487312
+  type: 'suite'
+  ...
+1..1
+# tests 16
+# suites 1
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5918.569614
+GATE2_RC=0
+=== GATE 3: CONTRACT CHECKS ===
+COMMAND: npm_config_cache="$CACHE" npm_config_registry=http://127.0.0.1:1 HTTP_PROXY=http://127.0.0.1:1 HTTPS_PROXY=http://127.0.0.1:1 npm_config_offline=true npm run check:contracts
+
+> synapse-contracts@0.1.0 check:contracts
+> node tests/contracts/check-contracts.mjs
+
+contract-check: files=6 tests=82 pass=82 fail=0
+contract-check: ok
+GATE3_RC=0
+=== CACHE / WORKTREE AFTER GATES ===
+npm cache ls:
+git status:
+checked SHA:
+4014e4663af9b694ae307530cbd4d8e269e45f1c
+=== SNAPSHOT VERIFICATION ===
+COMMAND: python3 tools/deps/vendor.py verify
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+COMMAND: sha256sum -c vendor/SHA256SUMS
+sha256sum: npm/json-schema-traverse-1.0.0.tgz: No such file or directory
+npm/json-schema-traverse-1.0.0.tgz: FAILED open or read
+sha256sum: npm/yaml-2.9.1.tgz: No such file or directory
+npm/yaml-2.9.1.tgz: FAILED open or read
+sha256sum: npm/fast-uri-3.1.9.tgz: No such file or directory
+npm/fast-uri-3.1.9.tgz: FAILED open or read
+sha256sum: npm/fast-deep-equal-3.1.3.tgz: No such file or directory
+npm/fast-deep-equal-3.1.3.tgz: FAILED open or read
+sha256sum: npm/ajv-8.20.0.tgz: No such file or directory
+npm/ajv-8.20.0.tgz: FAILED open or read
+sha256sum: npm/require-from-string-2.0.2.tgz: No such file or directory
+npm/require-from-string-2.0.2.tgz: FAILED open or read
+sha256sum: WARNING: 6 listed files could not be read
+NOTE: previous sha256sum check used repository-root working directory although manifest paths are vendor-relative; rerunning from vendor/ as required.
+COMMAND: (cd vendor && sha256sum -c SHA256SUMS)
+npm/json-schema-traverse-1.0.0.tgz: OK
+npm/yaml-2.9.1.tgz: OK
+npm/fast-uri-3.1.9.tgz: OK
+npm/fast-deep-equal-3.1.3.tgz: OK
+npm/ajv-8.20.0.tgz: OK
+npm/require-from-string-2.0.2.tgz: OK
+=== CORRUPT SNAPSHOT REJECTION ===
+offline-vendor: ERROR: SHA-256 mismatch for npm/yaml-2.9.1.tgz
+CORRUPTED_SNAPSHOT_RC=1
+=== MISSING SNAPSHOT REJECTION ===
+offline-vendor: ERROR: vendor tarball set does not match package-lock; missing=['npm/yaml-2.9.1.tgz'], extra=[]
+MISSING_SNAPSHOT_RC=1
+=== RESTORED SNAPSHOT / FINAL CLONE STATUS ===
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+4014e4663af9b694ae307530cbd4d8e269e45f1c
+=== COMMITTED CHECKED REVISION / SOURCE WORKTREE ===
+4014e4663af9b694ae307530cbd4d8e269e45f1c
+918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+4014e46 (HEAD -> arena/85f5c19a-synapse) SYN-1 K-15: align cycle test with O-5 rejection
+ tests/validation/validator.test.mjs | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+PACKAGE-LOCK CHANGE FROM K-15 SNAPSHOT COMMIT:
+=== COMMITTED CHECKED REVISION / SOURCE WORKTREE ===
+4014e4663af9b694ae307530cbd4d8e269e45f1c
+918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+STATUS:
+4014e46 (HEAD -> arena/85f5c19a-synapse) SYN-1 K-15: align cycle test with O-5 rejection
+ tests/validation/validator.test.mjs | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+PACKAGE-LOCK CHANGE FROM K-15 SNAPSHOT COMMIT:
+=== REGENERATE SNAPSHOT FROM LOCKFILE (NETWORK-USING MAINTAINER PROCEDURE) ===
+2026-11-03T11:40:48Z
+REGEN_CLONE=/tmp/k15-regeneration.95F7Hg/repo
+REGEN_CACHE=/tmp/k15-regeneration-cache.kEYScp
+Cloning into '/tmp/k15-regeneration.95F7Hg/repo'...
+REGEN_SOURCE_SHA=4014e4663af9b694ae307530cbd4d8e269e45f1c
+REGEN_SOURCE_TREE=918d3f0fbf1ed1c9095123dbc222f7d755d31b54
+REGEN_CACHE_EMPTY=YES
+COMMAND: npm_config_cache="$CACHE" npm_config_registry=https://registry.npmjs.org npm ci --ignore-scripts --no-audit --fund=false
+
+added 6 packages in 842ms
+npm notice
+npm notice New major version of npm available! 10.9.8 -> 12.2.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+npm notice To update run: npm install -g npm@12.2.1
+npm notice
+COMMAND: python3 tools/deps/vendor.py snapshot
+snapshot: ajv@8.20.0 bytes=217611 lock-integrity=sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==
+snapshot: fast-deep-equal@3.1.3 bytes=3656 lock-integrity=sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==
+snapshot: fast-uri@3.1.9 bytes=50086 lock-integrity=sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==
+snapshot: json-schema-traverse@1.0.0 bytes=6074 lock-integrity=sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==
+snapshot: require-from-string@2.0.2 bytes=1816 lock-integrity=sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==
+snapshot: yaml@2.9.1 bytes=112114 lock-integrity=sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==
+snapshot: wrote 6 packages, 391357 tarball bytes; SHA256SUMS regenerated
+snapshot: post-write SHA-256 and package-lock SRI verification passed
+COMMAND: python3 tools/deps/vendor.py verify
+offline-vendor: verified 6 packages, 391357 tarball bytes; SHA-256 and lockfile SRI match
+COMMAND: (cd vendor && sha256sum -c SHA256SUMS)
+npm/json-schema-traverse-1.0.0.tgz: OK
+npm/yaml-2.9.1.tgz: OK
+npm/fast-uri-3.1.9.tgz: OK
+npm/fast-deep-equal-3.1.3.tgz: OK
+npm/ajv-8.20.0.tgz: OK
+npm/require-from-string-2.0.2.tgz: OK
+COMMAND: git diff --exit-code -- package-lock.json vendor/ NOTICE
+REGEN_SNAPSHOT_MATCHES_COMMITTED=YES
+REGEN_CLONE_FINAL_STATUS:
