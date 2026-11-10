@@ -396,6 +396,22 @@ for (const [role, file] of Object.entries(roleDoc)) {
     /Передача: ход/, 'код печатает номер передачи');
 }
 
+// 17-шест. D-096 (1.14.24): ход приёмки закрывается нажатой Continue.
+{
+  const d096 = contract.d096;
+  assert.ok(d096, 'D-096 записан в контракт');
+  assert.match(d096.version || '', /^1\.14\.24$/, 'D-096 относится к сборке 1.14.24');
+  assert.equal(d096.budgetsRaised, false, 'D-096 не поднимал бюджеты');
+  const fix = (d096.fix || []).join(' ');
+  assert.match(fix, /finishReviewerTurn/, 'общий конец хода приёмки назван');
+  assert.match(fix, /разбор петли/, 'все пути приёмки перечислены');
+  assert.match((d096.safety || []).join(' '), /ход исполнителя не переделан/, 'граница правки названа');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-096 \(1\.14\.24\)/, 'D-096 есть в журнале решений');
+  assert.match(readFileSync(join(root, 'tools/script-cat/src/19-pull-requests.js'), 'utf8'),
+    /async function finishReviewerTurn/, 'код содержит конец хода приёмки');
+}
+
 // 17. D-085 (1.14.14): бюджет сжимает данные, а не останавливает ход.
 {
   const d085 = contract.d085;
