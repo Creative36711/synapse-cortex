@@ -396,19 +396,19 @@ for (const [role, file] of Object.entries(roleDoc)) {
     /Передача: ход/, 'код печатает номер передачи');
 }
 
-// 17-пят. D-095 (1.14.24): ход приёмки закрывается нажатой Continue.
+// 17-пят. D-096 (1.14.24): ход приёмки закрывается нажатой Continue.
 {
-  const d095 = contract.d095;
-  assert.ok(d095, 'D-095 записан в контракт');
-  assert.match(d095.version || '', /^1\.14\.24$/, 'D-095 относится к сборке 1.14.24');
-  assert.equal(d095.budgetsRaised, false, 'D-095 не поднимал бюджеты');
-  const fix = (d095.fix || []).join(' ');
+  const d096 = contract.d096;
+  assert.ok(d096, 'D-096 записан в контракт');
+  assert.match(d096.version || '', /^1\.14\.25$/, 'D-096 относится к сборке 1.14.25');
+  assert.equal(d096.budgetsRaised, false, 'D-096 не поднимал бюджеты');
+  const fix = (d096.fix || []).join(' ');
   assert.match(fix, /finishReviewerTurn/, 'общий конец хода приёмки назван');
   assert.match(fix, /разбор петли/, 'все пути приёмки перечислены');
-  const safety = (d095.safety || []).join(' ');
+  const safety = (d096.safety || []).join(' ');
   assert.match(safety, /ход исполнителя не переделан/, 'граница правки названа');
   const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
-  assert.match(decisions, /## D-095 \(1\.14\.24\)/, 'D-095 есть в журнале решений');
+  assert.match(decisions, /## D-096 \(1\.14\.25\)/, 'D-096 есть в журнале решений');
   assert.match(readFileSync(join(root, 'tools/script-cat/src/19-pull-requests.js'), 'utf8'),
     /async function finishReviewerTurn/, 'код содержит конец хода приёмки');
 }
