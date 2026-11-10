@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.29
+// @version      1.14.30
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "88ff897991bb5d85",
+    buildFingerprint: "7461937c25e0644e",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.29";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.30";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -5445,20 +5445,21 @@
           kind: "answer", role, turnId: expect.turnId || "",
           mission: { id: expect.missionId || "" },
           question: { id: expect.ref, turnId: expect.turnId || "" },
-          delivery: { tier: "compact", attempt },
+          // D-103: причина повтора — «Arena не приняла», а не лимит инструментов.
+          delivery: { tier: "compact", attempt, reason: "retry" },
         }, `retry ${expect.ref}`);
       }
       if (expect.kind === "review") {
         return compileOrPause({
           kind: "review", role, mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
-          delivery: { tier: "compact", attempt },
+          delivery: { tier: "compact", attempt, reason: "retry" },
         }, `retry ${expect.ref}`);
       }
       return compileOrPause({
         kind: "arbiter", role, turnId: expect.turnId || "",
         mission: { id: expect.missionId || "" },
         arbiter: { cardId: expect.ref, cardTitle: expect.title || "", ...(expect.arbiter || {}) },
-        delivery: { tier: "compact", attempt },
+        delivery: { tier: "compact", attempt, reason: "retry" },
       }, `retry ${expect.ref}`);
     }
     // Обычная выдача: здесь runId есть, и профиль карточки — правильный.
@@ -5477,7 +5478,7 @@
       kind: "retry", profileId: "delivery.compact",
       role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
       task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
-      delivery: { tier: "compact", attempt },
+      delivery: { tier: "compact", attempt, reason: "retry" },
     }, `retry ${expect.ref}`);
   }
 
@@ -10711,11 +10712,33 @@
         : fn === "Reviewer"
           ? "Ничего не правь: только проверка и вердикт по правилам приёмки."
           : "Работай в своей зоне, PR мержи сам (gh pr merge --squash), оракул не ослабляй.";
-      return `Arena не приняла полный текст ошибкой. Прочитай задание сам в карточке ${url || `(Notion ${id})`}: поля Намерение/Инварианты/Оракул/Scope и есть задание. Не жди повтора полного текста. ${boundary}`;
+      // D-103: причина повтора называется прямо и коротко. Раньше сообщение
+      // говорило только «прочитай карточку сам», и агент не понимал, что это
+      // тот же ход, а не новая выдача с теми же ID.
+      return `Это повтор той же выдачи, а не новый ход: Arena отклонила прошлое сообщение. ` +
+        `Прочитай задание сам в карточке ${url || `(Notion ${id})`}: Намерение/Инварианты/Оракул/Scope. ` +
+        `ID прежние. ${boundary}`;
     } });
 
     // ── continuation после tool-call limit: тот же ход, новые IDs не создаём ──
-    def("delivery.tool_limit", { render: (c) => {
+    def("delivery.tool_limit", { version: 2, render: (c) => {
+      // D-103: причина повтора — отдельный факт.
+      //
+      // 10.11 Arena дважды отклонила сообщение Warden'у («Something went
+      // wrong»), и транспорт повторил его этим же текстом: «Продолжи ответ на
+      // вопрос после лимита инструментов». Лимита инструментов не было —
+      // сообщение просто не приняли. Warden получил неверную причину, а Мастер
+      // справедливо усомнился, что это вообще про лимит.
+      //
+      // Текст выбирает `c.delivery.reason`: `retry` — повтор после Arena,
+      // `tool_limit` — прежнее поведение. Вид хода по-прежнему решает, что
+      // именно продолжать.
+      if (String(c.delivery?.reason || "") === "retry") {
+        if (c.kind === "answer") return "Это повтор того же вопроса: прошлое сообщение Arena не приняла («Something went wrong»). Это не новый вопрос и не новый ход.\nIDs прежние, ответь по существу. Повторять чтение Notion и GitHub по кругу не нужно.";
+        if (c.kind === "review") return "Это повтор той же приёмки: прошлое сообщение Arena не приняла. Это не новая приёмка и не новый ход.\nIDs прежние, дочитай доказательства и вынеси вердикт.";
+        if (c.kind === "arbiter") return "Это повтор того же разбора петли: прошлое сообщение Arena не приняла. Это не новая карточка и не новая выдача.\nIDs прежние, вынеси решение по этой же карточке.";
+        return "Это повтор той же выдачи: прошлое сообщение Arena не приняла. Это не новая карточка и не новый ход.\nrun_id прежний. Работай по карточке и сдай маркер с прежними ID.";
+      }
       if (c.kind === "plan") return "Продолжи текущий ход Координатора после лимита инструментов. Это не новый ход и не новая миссия.\nНе трогай git. Разбери очередь с текущего места и продолжи план.";
       if (c.kind === "review") return "Продолжи приёмку миссии после лимита инструментов. Это не новая приёмка и не новый ход.\nНе правь код и карточки. Дочитай доказательства и вынеси вердикт.";
       if (c.kind === "answer") return "Продолжи ответ на вопрос после лимита инструментов. Это не новый вопрос и не новый ход.";
@@ -14126,6 +14149,43 @@
     return [...new Set(out)];
   }
 
+  /**
+   * D-103: занятый номер — не повод останавливать ход.
+   *
+   * 10.11, 13:23: приёмка ответила «ответ заявляет номером D-099, но он уже
+   * занят (последний занятый — D-102)» — и транспорт поставил паузу, хотя
+   * приёмка была права по сути и ей нужен был только свободный номер. Ответ
+   * верный, номер — нет; чинится это подстановкой, а не остановкой.
+   *
+   * `renumberDecisionAnswer` заменяет заявленные занятые номера на свободные по
+   * порядку и возвращает новый текст вместе со списком замен. Замена видна в
+   * журнале: транспорт меняет ответ агента и обязан сказать, что именно.
+   * Номера внутри пересказа («последний занятый — D-102») не трогаются: их
+   * `decisionClaim` заявкой не считает.
+   */
+  function renumberDecisionAnswer(answer, taken) {
+    const text = String(answer || "");
+    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
+    if (!text || !free.size) return { text, replaced: [] };
+    const claimed = decisionClaim(text).filter((id) => free.has(id.toUpperCase()));
+    if (!claimed.length) return { text, replaced: [] };
+    let last = [...free].map((x) => Number(String(x).replace(/\D/g, "")) || 0).sort((a, b) => b - a)[0] || 0;
+    const replaced = [];
+    let out = text;
+    for (const id of claimed) {
+      const next = `D-${String(last + 1).padStart(3, "0")}`;
+      last += 1;
+      // Меняем только заявку: первое вхождение не в пересказе. Пересказ уже
+      // отфильтрован `decisionClaim`, поэтому границы те же.
+      out = out.replace(new RegExp(`${id}(?![\\d])`), next);
+      replaced.push({ from: id, to: next });
+    }
+    if (!replaced.length) return { text, replaced: [] };
+    out += `\n\nНомер решения: транспорт поставил ${replaced.map((r) => `${r.to} вместо ${r.from} (${r.from} уже занят)`).join("; ")}. ` +
+      "Суть решения от этого не меняется.";
+    return { text: out, replaced };
+  }
+
   function decisionNumberConflict(answer, taken) {
     const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
     if (!free.size) return "";
@@ -16417,7 +16477,7 @@
       return true;
     }
     const verdict = String(decision.verdict || "").trim().toLowerCase();
-    const answer = String(decision.answer || "").trim();
+    let answer = String(decision.answer || "").trim();
     if (verdict === "master") {
       const reason = firstLine(String(decision.reason || answer || "").trim()) || "приёмка не назвала причину";
       // Keep the exact answer expectation alive across the Master pause. A later
@@ -16461,8 +16521,27 @@
     // пока номер не сверен с docs/DECISIONS.md в main.
     if (typeof decisionNumberConflict === "function" && typeof decisionNumbersTaken === "function") {
       try {
-        const conflict = decisionNumberConflict(answer, await decisionNumbersTaken());
-        if (conflict) {
+        const taken = await decisionNumbersTaken();
+        const conflict = decisionNumberConflict(answer, taken);
+        if (conflict && typeof renumberDecisionAnswer === "function") {
+          // D-103: занятый номер чинится подстановкой, а не остановкой.
+          // 10.11 приёмка назвала D-099, который уже занят: ответ был верный,
+          // номер — нет. Пауза требовала от Мастера того, что транспорт делает
+          // сам, и стоила хода.
+          const fixed = renumberDecisionAnswer(answer, taken);
+          if (fixed.replaced.length) {
+            log(
+              `Номер решения был занят: ${fixed.replaced.map((r) => `${r.from} → ${r.to}`).join(", ")}. ` +
+                "Ответ приёмки не отброшен, номер поставлен свободный — это видно и в записи решения.",
+              false,
+              { ntfy: "quiet", title: "Relay: номер решения исправлен" },
+            );
+            answer = fixed.text;
+          } else if (conflict) {
+            pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
+            return true;
+          }
+        } else if (conflict) {
           pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
           return true;
         }

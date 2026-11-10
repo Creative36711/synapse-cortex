@@ -81,7 +81,7 @@ const answer = profiles.slice(profiles.indexOf('def("reviewer.answer"'), profile
 assert.match(answer, /"git\.docs"/, 'ответ на вопрос — тоже (именно там рождаются объявления редакций)');
 
 // ── 5. Версия и решение ─────────────────────────────────────────────────────
-assert.match(src, /@version\s+1\.14\.(?:1[7-9]|2[0-9])/, 'сборка не старее 1.14.17');
+assert.match(src, /@version\s+1\.(?:14\.(?:1[7-9]|2[0-9]|3[0-9])|1[5-9]\.\d+)/, 'сборка не старее 1.14.17');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-087/, 'решение D-087 записано');
 

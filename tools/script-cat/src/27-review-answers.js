@@ -355,7 +355,7 @@
       return true;
     }
     const verdict = String(decision.verdict || "").trim().toLowerCase();
-    const answer = String(decision.answer || "").trim();
+    let answer = String(decision.answer || "").trim();
     if (verdict === "master") {
       const reason = firstLine(String(decision.reason || answer || "").trim()) || "приёмка не назвала причину";
       // Keep the exact answer expectation alive across the Master pause. A later
@@ -399,8 +399,27 @@
     // пока номер не сверен с docs/DECISIONS.md в main.
     if (typeof decisionNumberConflict === "function" && typeof decisionNumbersTaken === "function") {
       try {
-        const conflict = decisionNumberConflict(answer, await decisionNumbersTaken());
-        if (conflict) {
+        const taken = await decisionNumbersTaken();
+        const conflict = decisionNumberConflict(answer, taken);
+        if (conflict && typeof renumberDecisionAnswer === "function") {
+          // D-103: занятый номер чинится подстановкой, а не остановкой.
+          // 10.11 приёмка назвала D-099, который уже занят: ответ был верный,
+          // номер — нет. Пауза требовала от Мастера того, что транспорт делает
+          // сам, и стоила хода.
+          const fixed = renumberDecisionAnswer(answer, taken);
+          if (fixed.replaced.length) {
+            log(
+              `Номер решения был занят: ${fixed.replaced.map((r) => `${r.from} → ${r.to}`).join(", ")}. ` +
+                "Ответ приёмки не отброшен, номер поставлен свободный — это видно и в записи решения.",
+              false,
+              { ntfy: "quiet", title: "Relay: номер решения исправлен" },
+            );
+            answer = fixed.text;
+          } else if (conflict) {
+            pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
+            return true;
+          }
+        } else if (conflict) {
           pause(conflict, { kind: "answer-decisions", ref: expect.ref, notifyTitle: "Relay: номер решения занят" });
           return true;
         }
