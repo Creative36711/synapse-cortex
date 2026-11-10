@@ -29,10 +29,10 @@
       Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
     ].filter(Boolean).join("\n") });
 
-    def("repo.target", { version: 2, render: (c) => {
+    def("repo.target", { version: 3, ruleIds: ["R-PR"], render: (c) => {
       const base = c.target?.baseBranch || "main";
       return [
-        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок бывает shallow: пустой merge-base не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + ". Клон бывает shallow: пустой merge-base не доказательство; проверь --is-shallow-repository; PR без общей истории удалит чужие файлы.",
       ].join("\n");
     } });
 

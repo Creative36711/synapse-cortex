@@ -79,7 +79,7 @@ assert.deepEqual(contract.markers?.CF_ARBITER_RESULT?.required, ['dispatch_id', 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',
   'roles/coordinator.md', 'roles/warden.md', 'roles/executor.md', 'roles/auditor.md',
-  'troubleshooting.md', 'onboarding.md', 'acceptance-report.md'];
+  'troubleshooting.md', 'onboarding.md', 'acceptance-report.md', 'pr-rules.md'];
 for (const d of docs) assert.ok(existsSync(join(root, 'docs/agents', d)), `docs/agents/${d}`);
 
 // 3. Примеры маркеров прогоняются боевым разбором.
@@ -454,6 +454,36 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(heal, /C\.telemetryRepo/, 'выгрузка идёт в отдельный репозиторий');
   assert.ok(!/C\.repo\b/.test(heal.slice(heal.indexOf('async function healUpload'), heal.indexOf('healUpload(') + 40))
     || true, 'ссылка на проект допустима только для отчётов');
+}
+
+// 19. D-097 (1.14.25): правила PR и preflight — процесс, не транспорт.
+{
+  const d097 = contract.d097;
+  assert.ok(d097, 'D-097 записан в контракт');
+  assert.match(d097.version || '', /^1\.14\.25$/, 'D-097 относится к сборке 1.14.25');
+  const rules = (d097.rules || []).join(' ');
+  assert.match(rules, /один PR — одна карточка/, 'Р1 на месте');
+  assert.match(rules, /transport-lock/, 'замок транспорта назван');
+  assert.match(rules, /не мержится руками/, 'бандл только пересборкой');
+  assert.match(d097.problem?.wrongDiagnosis || '', /усечённый клон/, 'ложный диагноз зафиксирован');
+  const checks = (d097.preflight?.checks || []).join(' ');
+  assert.match(checks, /клон не усечён/, 'preflight ловит усечённый клон');
+  assert.match(checks, /ровно одно новое решение/, 'preflight сверяет номера решений');
+  assert.match(checks, /вне зоны/, 'preflight проверяет зону роли');
+  assert.match(d097.evidence?.probe || '', /pr-preflight-smoke/, 'проба названа');
+  assert.equal(d097.prompt?.ruleId, 'R-PR', 'правило R-PR заведено в контракт');
+  assert.match(d097.prompt?.carrier || '', /repo\.target/, 'правило доходит промптом, а не только документом');
+  assert.match(contract.rules?.['R-PR']?.title || '', /Правила PR/, 'R-PR описан');
+  const executorDoc = readFileSync(join(root, 'docs/agents/roles/executor.md'), 'utf8');
+  assert.match(executorDoc, /preflight\.mjs/, 'исполнитель знает про preflight');
+  assert.match(executorDoc, /--unshallow/, 'исполнитель знает лечение shallow');
+  assert.ok(existsSync(join(root, 'tools/script-cat/preflight.mjs')), 'preflight существует');
+  assert.ok(existsSync(join(root, 'docs/agents/pr-rules.md')), 'правила PR описаны для ролей');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-097 \(1\.14\.25\)/, 'D-097 есть в журнале решений');
+  const rulesDoc = readFileSync(join(root, 'docs/agents/pr-rules.md'), 'utf8');
+  assert.match(rulesDoc, /Р10/, 'правила пронумерованы');
+  assert.match(rulesDoc, /--unshallow/, 'лечение усечённого клона описано');
 }
 
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

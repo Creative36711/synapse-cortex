@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.24
+// @version      1.14.25
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "415c7356a8dda91e",
+    buildFingerprint: "d116f74f7bb301f9",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.24";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.25";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -10223,10 +10223,10 @@
       Number.isFinite(c.mission?.round) ? `Круг: ${c.mission.round} (предел доработок ${c.mission.reworkLimit ?? 3}).` : "",
     ].filter(Boolean).join("\n") });
 
-    def("repo.target", { version: 2, render: (c) => {
+    def("repo.target", { version: 3, ruleIds: ["R-PR"], render: (c) => {
       const base = c.target?.baseBranch || "main";
       return [
-        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + `. Снимок бывает shallow: пустой merge-base не доказательство (проверь --is-shallow-repository); PR без общей истории удалит чужие файлы.`,
+        `Цель ${c.target?.repo}@${base}` + (c.target?.startSha ? `, SHA ${c.target.startSha}` : "") + ". Клон бывает shallow: пустой merge-base не доказательство; проверь --is-shallow-repository; PR без общей истории удалит чужие файлы.",
       ].join("\n");
     } });
 

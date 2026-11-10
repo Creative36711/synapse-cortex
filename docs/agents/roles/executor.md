@@ -6,12 +6,21 @@
 
 ## Обязательные правила (ruleId)
 R-ROLES, R-REPO-BOUNDARY, R-ZONES, R-GIT, R-EVIDENCE, R-QUESTIONS, R-PHASES,
-R-I18N, R-MARKER, R-CARD-FIELDS, R-SECRETS.
+R-I18N, R-MARKER, R-CARD-FIELDS, R-SECRETS, R-PR.
 
 ## Git-ритуал
 fetch origin <base>; merge-base HEAD origin/<base>; status --short (чужое не
 трогай). Коммит своих путей; пуш в разрешённую ветку; PR в base; direct push в
 base запрещён. Нет изменений — `"pr":null`.
+
+## PR перед пушем (R-PR, D-097)
+Один PR — одно решение; номер `D-NNN` сверь с `origin/main`. Усечённый клон
+(`git rev-parse --is-shallow-repository` → `true`) чинится `git fetch --unshallow`,
+а не `--allow-unrelated-histories`. Перед пушем — `merge origin/main` и
+`node tools/script-cat/preflight.mjs --zone "<своя зона>"`. `relay.user.js` руками
+не мержить (только пересборка), `docs/DECISIONS.md` при конфликте — union,
+версию поднимает только выпуск `src/**`, правки транспорта идут по одной
+(метка `transport-lock`). Подробно — [pr-rules.md](../pr-rules.md).
 
 ## Доказательство и поля
 not run/тайм-аут/зелёный CI/мок ≠ pass: нужны команда, код возврата, артефакт,
