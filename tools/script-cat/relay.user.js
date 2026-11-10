@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.28
+// @version      1.14.29
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "17ee479a0127a947",
+    buildFingerprint: "88ff897991bb5d85",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.28";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.29";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1229,10 +1229,24 @@
     const undelivered = Boolean(handoff && handoff.verified !== true);
     const cascade = info.kind === "arena-error" && undelivered && Number(live?.at) > 0 &&
       info.at - Number(live.at) <= (Number(C.pauseCascadeMs) || 15000);
+    // D-102: «ждём установку» — это продолжение той же остановки, а не новая.
+    //
+    // 10.11, 12:59 и 13:11: две паузы подряд из одной поломки. Первая называла
+    // дефект, вторая — что сборка не установлена. Мастер видит два события там,
+    // где событие одно, и не понимает, какое из них смотреть.
+    //
+    // Ключ инцидента совпасть не мог: у пауз разные `kind` и разный текст
+    // причины, а сопоставлять их по id бессмысленно. Зато `heal-await-update`
+    // приходит только после `pause()` внутри разбора — значит прошлая остановка
+    // и есть этот же инцидент. Когда разбор придёт к выводу, который требует
+    // действия человека (предел, нет роли, деньги), пауза будет отдельной: это
+    // другой `kind`, и правило его не трогает.
+    const awaitedUpdate = info.kind === "heal-await-update";
     const sameIncident = Boolean(
       before && live && (
         (typeof healIncidentKey === "function" && healIncidentKey(info) === healIncidentKey(live)) ||
-        cascade
+        cascade ||
+        awaitedUpdate
       ),
     );
     if (sameIncident) {
@@ -18491,7 +18505,11 @@
     // (D-085): это отметка, а не остановка. Пункт нужен, чтобы `update-recovery`
     // не ушёл агенту как «поломка транспорта».
     "update-recovery": "install",
-    "heal-await-update": "install",
+    // D-102: `heal-await-update` здесь НЕ значится намеренно. Это не «решает
+    // человек», а «ждём установку»: пауза уже стоит и уже говорит, что делать.
+    // Пока вид был привязан к пункту `install`, вторая пауза шла как
+    // человеческая, звонила в телефон и выглядела новым инцидентом — 10.11
+    // Мастер получил две паузы подряд из одной поломки.
     // Доступы и состав: строку «Роли», Agent URL и флаг правит Мастер.
     "mission-roster": "agent",
     provision: "agent",
@@ -19545,6 +19563,17 @@
         timeoutMs: Number(C.healVersionTimeoutMs) || 900000,
       });
       if (!gate.ok) {
+        // D-102: ожидание установки живёт в состоянии разбора, а не только в
+        // тексте паузы. После установки сборки оно и есть ответ на вопрос
+        // «что мы ждали» — иначе следующая сборка видит пустое состояние.
+        saveHealState({
+          ...healState(),
+          awaitingUpdate: {
+            at: Date.now(), pausedVersion: String(state.pausedVersion || ""),
+            nowVersion: SCRIPT_VERSION, why: gate.why,
+            ref: info.ref, runId: info.runId, turnId: info.turnId,
+          },
+        });
         pause(
           `Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
             "Продолжение закрыто до установки новой сборки: установите её и нажмите «Продолжить».",
@@ -19605,6 +19634,21 @@
    * уведомлён: даже полный отказ этого шага не должен оставлять цикл без причины.
    */
   async function healAfterPause(info) {
+    // D-102: «ждём установку» — не новый инцидент, а продолжение разобранного.
+    //
+    // Эта пауза ставится изнутри самого разбора, уже после вердикта Maintainer'а.
+    // Если пустить её через разбор заново, получается третья пауза подряд и
+    // вторая передача по одной поломке. 10.11 Мастер получил ровно такой
+    // каскад: 12:59 «ответ не подтверждён» → 13:11 «работает прежняя сборка».
+    // Ожидание установки — прямой адрес человеку, разбирать в нём нечего.
+    if (String(info.kind || "") === "heal-await-update") {
+      log(
+        "Разбор не запускаю: пауза ждёт установки сборки, это продолжение уже разобранной остановки.",
+        false,
+        { ntfy: false },
+      );
+      return;
+    }
     const verdict = classifyPause(info.kind, info.reason);
     const key = healIncidentKey(info);
     // D-094: второй разбор на тот же инцидент сюда не доходит.

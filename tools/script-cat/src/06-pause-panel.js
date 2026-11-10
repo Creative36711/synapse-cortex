@@ -119,10 +119,24 @@
     const undelivered = Boolean(handoff && handoff.verified !== true);
     const cascade = info.kind === "arena-error" && undelivered && Number(live?.at) > 0 &&
       info.at - Number(live.at) <= (Number(C.pauseCascadeMs) || 15000);
+    // D-102: «ждём установку» — это продолжение той же остановки, а не новая.
+    //
+    // 10.11, 12:59 и 13:11: две паузы подряд из одной поломки. Первая называла
+    // дефект, вторая — что сборка не установлена. Мастер видит два события там,
+    // где событие одно, и не понимает, какое из них смотреть.
+    //
+    // Ключ инцидента совпасть не мог: у пауз разные `kind` и разный текст
+    // причины, а сопоставлять их по id бессмысленно. Зато `heal-await-update`
+    // приходит только после `pause()` внутри разбора — значит прошлая остановка
+    // и есть этот же инцидент. Когда разбор придёт к выводу, который требует
+    // действия человека (предел, нет роли, деньги), пауза будет отдельной: это
+    // другой `kind`, и правило его не трогает.
+    const awaitedUpdate = info.kind === "heal-await-update";
     const sameIncident = Boolean(
       before && live && (
         (typeof healIncidentKey === "function" && healIncidentKey(info) === healIncidentKey(live)) ||
-        cascade
+        cascade ||
+        awaitedUpdate
       ),
     );
     if (sameIncident) {

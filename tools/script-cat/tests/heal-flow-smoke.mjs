@@ -186,6 +186,30 @@ const info = (over = {}) => ({
   assert.equal(env.store.get('cfn-expect'), null, 'передача закрыта до применения решения');
 }
 
+// ── 4б. D-102: «ждём установку» — не новый инцидент и не повод для разбора ──
+// 10.11, 12:59 и 13:11: две паузы подряд из одной поломки. Вторая ставилась
+// внутри разбора, но шла как человеческая (`install`) и запускала разбор заново.
+{
+  const env = harness({ version: '1.13.0', fingerprint: 'fp-old' });
+  env.store.set('cfn-heal-state', {
+    pending: { kind: 'marker-mismatch', ref: info().ref, runId: info().runId, reason: 'Ответ не подтверждён' },
+    pausedVersion: '1.13.0', pausedFingerprint: 'fp-old', pausedAt: Date.now(),
+  });
+  env.store.set('cfn-expect', { kind: 'heal', ref: info().ref, turnId: 'turn-9', watermark: 'w', verified: true });
+  env.replies = [{ id: 'm9', ended: true, text: 'FIXED поправил разбор в 1.14.28\n\n…' }];
+  await env.api.healStep(MAINTAINER, env.store.get('cfn-expect'));
+  assert.equal(env.pauses.at(-1).kind, 'heal-await-update', 'пауза установки по-прежнему ставится');
+
+  // А вот разбор по ней запускать нельзя: это продолжение той же остановки.
+  const sendsBefore = env.sends.length;
+  await env.api.healAfterPause(info({
+    kind: 'heal-await-update',
+    reason: 'Maintainer назвал поломку исправленной, но работает прежняя сборка 1.13.0',
+  }));
+  assert.equal(env.sends.length, sendsBefore, 'второй передачи Maintainer\'у по той же поломке нет');
+  assert.equal(env.pauses.filter((p) => p.kind === 'heal-await-update').length, 1, 'вторая пауза установки не ставится');
+}
+
 // ── 5. Ответ Maintainer'а: FIXED с новой сборкой — продолжаем ──────────────
 {
   const env = harness({ version: '1.13.1', fingerprint: 'fp-new' });
