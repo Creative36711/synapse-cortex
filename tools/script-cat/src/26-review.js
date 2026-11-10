@@ -95,6 +95,12 @@
 
   /** Закрыть миссию. Право на это есть только у приёмки и у Мастера. */
   async function closeMission(mission, reviewer) {
+    // D-095: миссия закрыта, автоцикл выключен — но сессия приёмки должна
+    // остаться рабочей. Continue нажимается до объявления результата: если
+    // Мастер увидит «миссия принята» и уйдёт, ветка останется слитой.
+    if (typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("миссия принята").catch(() => {});
+    }
     const at = nowIso();
     const returnedAt = mission.properties?.["Возвращена"]?.date?.start || "";
     await patch(mission.id, {
@@ -276,6 +282,11 @@
       }
     }
     if (verdict === "master") {
+      // D-095: даже остановка не должна оставлять приёмку без сессии: Мастер
+      // нажмёт «Продолжить», а работа в слитой ветке всё равно не начнётся.
+      if (typeof finishReviewerTurn === "function") {
+        await finishReviewerTurn("приёмка просит Мастера").catch(() => {});
+      }
       pause(`Приёмка просит Мастера: ${firstLine(decision.reason || decision.remarks || "причина не указана")}. Миссия не закрыта.`, {
         kind: "review-needs-master", ref: mission.id,
       });

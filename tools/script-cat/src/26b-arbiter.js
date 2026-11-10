@@ -371,6 +371,11 @@
       });
       return true;
     }
+    // D-095: разбор петли — тоже ход приёмки. Сессия Warden закрывается здесь,
+    // а не при следующей отправке: следующая работа идёт в его же ветку.
+    if (typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("петля разобрана").catch(() => {});
+    }
     const fresh = await notion("GET", `pages/${mission.id}`).catch(() => mission);
     await requestPlan(
       fresh,

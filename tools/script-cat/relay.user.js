@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.23
+// @version      1.14.24
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "d29018c5f39b5ecc",
+    buildFingerprint: "c5d7c8039490d213",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.23";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.24";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -9229,6 +9229,47 @@
     return continueButton() ? "stuck" : "pressed";
   }
 
+  /**
+   * D-095: завершить ход приёмки так, чтобы у Warden осталась рабочая сессия.
+   *
+   * Continue на странице приёмки появляется не всегда — но когда она есть, она
+   * означает ровно то же, что у исполнителя: прошлый PR слит, сессия стоит на
+   * мёртвой ветке, и следующая работа в ней не начнётся.
+   *
+   * 10.11 в 10:31 вопрос был закрыт приёмкой, и Continue на её странице осталась
+   * не нажатой. В журнале об этом не было ни строки: `ensureFreshBranch` стоит
+   * только перед отправкой из очереди, а ход приёмки заканчивается переходом на
+   * Координатора — то есть ВНЕ отправки. Нажимать Continue приходилось Мастеру,
+   * и без этого Warden не получал новую ветку и не смог бы слить следующий PR.
+   *
+   * Поэтому ход приёмки закрывается здесь — в одном месте для ответа на вопрос,
+   * приёмки миссии и разбора петли. Функция ничего не решает за Мастера: она
+   * только возвращает агенту сессию, в которой можно работать.
+   */
+  async function finishReviewerTurn(why = "ход приёмки закрыт") {
+    if (typeof continueButton !== "function") return "none";
+    const found = continueButton() ? true : Boolean(
+      await waitFor(() => continueButton(), patience(C.continueWaitMs), 700),
+    );
+    if (!found) return "none";
+    const done = await ensureFreshBranch(why);
+    if (done === "stuck") {
+      log(
+        `«${why}»: Continue на странице приёмки не принялась (кнопка на месте после двух кликов). ` +
+          "Агент останется на слитой ветке — проверьте страницу вручную.",
+        true,
+        { tone: "warn", title: "Relay: Continue не принята" },
+      );
+      return "stuck";
+    }
+    log(
+      `«${why}»: нажал Continue на странице приёмки — агент получит новую ветку и сможет работать дальше.`,
+      false,
+      { tone: "ok", ntfy: "quiet" },
+    );
+    return done;
+  }
+
   /** Что из PR-интерфейса видно прямо сейчас. */
   const prSurface = () => ({
     merged: mergedFlag(),
@@ -15305,6 +15346,12 @@
 
   /** Закрыть миссию. Право на это есть только у приёмки и у Мастера. */
   async function closeMission(mission, reviewer) {
+    // D-095: миссия закрыта, автоцикл выключен — но сессия приёмки должна
+    // остаться рабочей. Continue нажимается до объявления результата: если
+    // Мастер увидит «миссия принята» и уйдёт, ветка останется слитой.
+    if (typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("миссия принята").catch(() => {});
+    }
     const at = nowIso();
     const returnedAt = mission.properties?.["Возвращена"]?.date?.start || "";
     await patch(mission.id, {
@@ -15486,6 +15533,11 @@
       }
     }
     if (verdict === "master") {
+      // D-095: даже остановка не должна оставлять приёмку без сессии: Мастер
+      // нажмёт «Продолжить», а работа в слитой ветке всё равно не начнётся.
+      if (typeof finishReviewerTurn === "function") {
+        await finishReviewerTurn("приёмка просит Мастера").catch(() => {});
+      }
       pause(`Приёмка просит Мастера: ${firstLine(decision.reason || decision.remarks || "причина не указана")}. Миссия не закрыта.`, {
         kind: "review-needs-master", ref: mission.id,
       });
@@ -15871,6 +15923,11 @@
         kind: "arbiter-nomission", ref: cardId,
       });
       return true;
+    }
+    // D-095: разбор петли — тоже ход приёмки. Сессия Warden закрывается здесь,
+    // а не при следующей отправке: следующая работа идёт в его же ветку.
+    if (typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("петля разобрана").catch(() => {});
     }
     const fresh = await notion("GET", `pages/${mission.id}`).catch(() => mission);
     await requestPlan(
@@ -16271,6 +16328,15 @@
         ref: mission.id,
       });
       return true;
+    }
+    // D-095: ход приёмки заканчивается здесь, и сессия Warden должна остаться
+    // рабочей. Continue после слитого PR появляется именно на этой странице;
+    // без клика следующая работа пойдёт в мёртвую ветку. 10.11 её пришлось
+    // нажимать Мастеру — в журнале не было даже строки об этом.
+    if (typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("вопрос закрыт приёмкой").catch((e) => {
+        log(`Continue на странице приёмки не нажата: ${e.message}. Ход возвращается Координатору.`, true);
+      });
     }
     const queue = await queueOf(mission).catch(() => ({ summary: "очередь не прочитана" }));
     const note = answerRecorded ? "Ответ на вопрос записан — учти его и продолжи план." :

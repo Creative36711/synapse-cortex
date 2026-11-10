@@ -1668,5 +1668,42 @@
       "probe": "tests/relay-heal-loop-smoke.mjs",
       "suites": 114
     }
+  },
+  "d095": {
+    "version": "1.14.24",
+    "title": "Ход приёмки закрывается нажатой Continue, а не руками Мастера",
+    "date": "2026-11-10",
+    "decision": [
+      "19-pull-requests.finishReviewerTurn",
+      "27-review-answers.answerStep",
+      "26-review.reviewStep",
+      "26-review.closeMission",
+      "26b-arbiter.arbiterStep"
+    ],
+    "incident": {
+      "at": "2026-11-10T10:31:00.000Z",
+      "kind": "review-turn",
+      "cls": "transport",
+      "reason": "вопрос закрыт приёмкой, ход вернулся Координатору, Continue на странице Warden осталась не нажатой",
+      "context": "без Continue Warden остаётся на слитой ветке: в той же сессии следующий PR слить нельзя; Мастер нажал вручную"
+    },
+    "fix": [
+      "общий конец хода приёмки finishReviewerTurn: ищет Continue, ждёт её появления, кликает общим ensureFreshBranch",
+      "вызывается во всех трёх путях приёмки: ответ на вопрос, приёмка миссии (принята/возвращена/просит Мастера), разбор петли",
+      "клик до записи результата и до перехода на Координатора",
+      "отказ Continue виден в журнале: «Continue на странице приёмки не принялась»"
+    ],
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.11: Continue — действие интерфейса Arena, маркеры и виды хода не менялись.",
+    "safety": [
+      "Continue нажимается только если она реально видна: отсутствие кнопки — не повод ждать и не повод для паузы",
+      "ход исполнителя не переделан: finishMerge ищет Continue сам, ensureFreshBranch перед отправкой остался",
+      "сбой Continue не съедает завершённый ход: ошибка ловится, результат приёмки всё равно применяется",
+      "после двух кликов кнопка на месте — предупреждение в журнале, а не молчание и не цикл"
+    ],
+    "evidence": {
+      "probe": "tests/relay-reviewer-continue-smoke.mjs",
+      "suites": 115
+    }
   }
 }
