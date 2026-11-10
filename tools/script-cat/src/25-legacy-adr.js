@@ -242,6 +242,43 @@
     return [...new Set(out)];
   }
 
+  /**
+   * D-103: занятый номер — не повод останавливать ход.
+   *
+   * 10.11, 13:23: приёмка ответила «ответ заявляет номером D-099, но он уже
+   * занят (последний занятый — D-102)» — и транспорт поставил паузу, хотя
+   * приёмка была права по сути и ей нужен был только свободный номер. Ответ
+   * верный, номер — нет; чинится это подстановкой, а не остановкой.
+   *
+   * `renumberDecisionAnswer` заменяет заявленные занятые номера на свободные по
+   * порядку и возвращает новый текст вместе со списком замен. Замена видна в
+   * журнале: транспорт меняет ответ агента и обязан сказать, что именно.
+   * Номера внутри пересказа («последний занятый — D-102») не трогаются: их
+   * `decisionClaim` заявкой не считает.
+   */
+  function renumberDecisionAnswer(answer, taken) {
+    const text = String(answer || "");
+    const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
+    if (!text || !free.size) return { text, replaced: [] };
+    const claimed = decisionClaim(text).filter((id) => free.has(id.toUpperCase()));
+    if (!claimed.length) return { text, replaced: [] };
+    let last = [...free].map((x) => Number(String(x).replace(/\D/g, "")) || 0).sort((a, b) => b - a)[0] || 0;
+    const replaced = [];
+    let out = text;
+    for (const id of claimed) {
+      const next = `D-${String(last + 1).padStart(3, "0")}`;
+      last += 1;
+      // Меняем только заявку: первое вхождение не в пересказе. Пересказ уже
+      // отфильтрован `decisionClaim`, поэтому границы те же.
+      out = out.replace(new RegExp(`${id}(?![\\d])`), next);
+      replaced.push({ from: id, to: next });
+    }
+    if (!replaced.length) return { text, replaced: [] };
+    out += `\n\nНомер решения: транспорт поставил ${replaced.map((r) => `${r.to} вместо ${r.from} (${r.from} уже занят)`).join("; ")}. ` +
+      "Суть решения от этого не меняется.";
+    return { text: out, replaced };
+  }
+
   function decisionNumberConflict(answer, taken) {
     const free = new Set((taken || []).map((x) => String(x).toUpperCase()));
     if (!free.size) return "";

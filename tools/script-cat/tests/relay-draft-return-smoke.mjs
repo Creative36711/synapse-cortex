@@ -91,7 +91,7 @@ assert.match(deliverSrc, /отпечаток \$\{String\(textHash\(text\)\)\}/,
 assert.match(deliverSrc, /let dispatched = false;/, 'клик засчитывается только если он действительно прошёл');
 
 // ── 5. Версия и решение ─────────────────────────────────────────────────────
-assert.match(src, /@version\s+1\.14\.(?:19|2[0-9])/, 'сборка 1.14.19');
+assert.match(src, /@version\s+1\.(?:14\.(?:19|2[0-9]|3[0-9])|1[5-9]\.\d+)/, 'сборка 1.14.19');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-090/, 'решение D-090 записано');
 

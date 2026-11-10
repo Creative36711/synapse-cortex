@@ -185,6 +185,17 @@ has('сообщение ${delivery.msgId}', 'id сообщения в журна
   const { PromptCompiler, dispatchRequest } = await import('./helpers/prompt-env.mjs');
   const t = PromptCompiler.compile(dispatchRequest('Executor')).text;
   assert.match(t, /не HTML-комментарий/, 'маркер ordinary text, не HTML-комментарий');
+  // D-103: причина повтора названа прямо — «Arena не приняла», а не «после лимита
+  // инструментов». Проверяется на собранном повторе выдачи: ровно этим текстом
+  // агент получает 8-ю попытку после «Something went wrong».
+  const again = PromptCompiler.compile({
+    kind: 'retry', profileId: 'delivery.compact', role: dispatchRequest('Executor').role,
+    task: dispatchRequest('Executor').task, mission: dispatchRequest('Executor').mission,
+    delivery: { tier: 'compact', attempt: 1, reason: 'retry' },
+  });
+  assert.match(again.text, /повтор той же выдачи/, 'повтор не выдаёт себя за новый ход');
+  assert.match(again.text, /ID прежние/, 'IDs первого хода названы прежними');
+  assert.doesNotMatch(again.text, /лимита инструментов/, 'лимита инструментов в повторе нет');
 }
 
 console.log('arena-swallow: ok');

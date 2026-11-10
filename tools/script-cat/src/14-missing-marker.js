@@ -176,20 +176,21 @@
           kind: "answer", role, turnId: expect.turnId || "",
           mission: { id: expect.missionId || "" },
           question: { id: expect.ref, turnId: expect.turnId || "" },
-          delivery: { tier: "compact", attempt },
+          // D-103: причина повтора — «Arena не приняла», а не лимит инструментов.
+          delivery: { tier: "compact", attempt, reason: "retry" },
         }, `retry ${expect.ref}`);
       }
       if (expect.kind === "review") {
         return compileOrPause({
           kind: "review", role, mission: { id: expect.missionId || expect.ref }, turnId: expect.turnId || "",
-          delivery: { tier: "compact", attempt },
+          delivery: { tier: "compact", attempt, reason: "retry" },
         }, `retry ${expect.ref}`);
       }
       return compileOrPause({
         kind: "arbiter", role, turnId: expect.turnId || "",
         mission: { id: expect.missionId || "" },
         arbiter: { cardId: expect.ref, cardTitle: expect.title || "", ...(expect.arbiter || {}) },
-        delivery: { tier: "compact", attempt },
+        delivery: { tier: "compact", attempt, reason: "retry" },
       }, `retry ${expect.ref}`);
     }
     // Обычная выдача: здесь runId есть, и профиль карточки — правильный.
@@ -208,7 +209,7 @@
       kind: "retry", profileId: "delivery.compact",
       role: { fn: expect.roleFn || "Executor", name: expect.roleName || "" },
       task: { id: expect.ref, runId: expect.runId, title: expect.title, url: expect.url },
-      delivery: { tier: "compact", attempt },
+      delivery: { tier: "compact", attempt, reason: "retry" },
     }, `retry ${expect.ref}`);
   }
 

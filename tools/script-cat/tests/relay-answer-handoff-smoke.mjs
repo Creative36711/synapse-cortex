@@ -38,7 +38,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 
 const src = readFileSync(new URL('../relay.user.js', import.meta.url), 'utf8');
-assert.match(src, /@version\s+1\.14\.2[0-9]/, 'сборка не старее 1.14.20');
+assert.match(src, /@version\s+1\.(?:14\.(?:2[0-9]|3[0-9])|1[5-9]\.\d+)/, 'сборка не старее 1.14.20');
 
 const cut = (from, to) => {
   const a = src.indexOf(from);

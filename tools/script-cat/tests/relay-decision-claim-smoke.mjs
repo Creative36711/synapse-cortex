@@ -79,13 +79,17 @@ assert.equal(decisionNumberConflict('Зоны = D-087.', []), '', 'без спи
 assert.equal(decisionNumberConflict('Обычный ответ без номеров.', TAKEN), '', 'номеров нет — не блокируем');
 
 // ── 5. Гейт подключён к приёмке и остался в классе transport ────────────────
-assert.match(src, /const conflict = decisionNumberConflict\(answer, await decisionNumbersTaken\(\)\)/,
+// D-103: гейт по-прежнему на пути ответа, но занятый номер теперь чинится
+// подстановкой: ответ приёмки верный, номер — нет.
+assert.match(src, /const taken = await decisionNumbersTaken\(\);\s+const conflict = decisionNumberConflict\(answer, taken\);/,
   'гейт стоит на пути ответа приёмки');
+assert.match(src, /renumberDecisionAnswer\(answer, taken\)/, 'занятый номер заменяется свободным');
+assert.match(src, /pause\(conflict, \{ kind: "answer-decisions"/, 'пауза осталась на случай, когда заменить нечем');
 assert.match(src, /kind: "answer-decisions"/, 'пауза названа своим видом');
 assert.match(src, /"answer-decisions": "transport",/, 'пауза остаётся транспорту');
 
 // ── 6. Версия и решение ─────────────────────────────────────────────────────
-assert.match(src, /@version\s+1\.14\.(?:1[89]|2[0-9])/, 'сборка не старее 1.14.18');
+assert.match(src, /@version\s+1\.(?:14\.(?:1[89]|2[0-9]|3[0-9])|1[5-9]\.\d+)/, 'сборка не старее 1.14.18');
 const decisions = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 assert.match(decisions, /## D-089/, "решение D-089 записано");
 
