@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.30
+// @version      1.14.31
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "7461937c25e0644e",
+    buildFingerprint: "28c4d7fc7573a19e",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -105,6 +105,9 @@
     // первой, а не новой остановкой. `arena-error` приходит через секунду после
     // паузы сборки промпта; через полминуты та же карточка — уже новый случай.
     pauseCascadeMs: 15000,
+    // D-104: окно, в котором та же поломка не запускает второй разбор. Паузы
+    // нет, поэтому предохранитель «один инцидент — один разбор» живёт здесь.
+    noticeRepeatMs: 120000,
     composerGraceMs: 8000, // сколько ждём возврата поля ввода, если оно исчезло при перерисовке
     sendRetries: 3, // сколько тиков ждём дорисовку страницы, прежде чем звать Мастера
     sendReadyMs: 20000, // столько ждём активную кнопку Send на дорисовывающейся странице
@@ -360,6 +363,9 @@
     merged: "cfn-merged:",
     branch: "cfn-branch",
     pause: "cfn-pause-context",
+    // D-104: последние разборы без остановки — по ним видно, что транспорт
+    // чинил, пока цикл шёл. Отдельный ключ: паузы-то не было.
+    notice: "cfn-notice-log",
     ntfyTopic: "cfn-ntfy-topic",
     ntfyToken: "cfn-ntfy-token",
     ghToken: "cfn-github-token",
@@ -728,7 +734,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.30";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.31";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -1198,7 +1204,15 @@
     } catch {
       info.with = "";
     }
-    const forHuman = !info.with || info.with === "master";
+    // D-104: пауза — это когда цикл стоит. Разбор — когда он продолжается.
+    //
+    // `pause()` вызывается и там, где ничего останавливать не надо: временный
+    // сбой повторяется сам, поломка уходит Maintainer'у. Раньше эти вызовы
+    // писали в журнал «ПАУЗА» и снимали паузу кнопкой «Продолжить», хотя цикл
+    // шёл дальше. Теперь вид остановки сам решает, стоит ли цикл, и запись
+    // называется по факту: «ПАУЗА» — только там, где действительно стоим.
+    const holds = typeof healHoldsCycle === "function" ? healHoldsCycle(info.kind, info.reason) : true;
+    const forHuman = holds && (!info.with || info.with === "master");
     // D-094: вторая пауза того же инцидента не подменяет первую.
     //
     // 09.11 в 23:27:22 пришли две паузы в одну секунду: `prompt-compile` и
@@ -1259,15 +1273,48 @@
       setStatus();
       return;
     }
+    if (!holds) {
+      // Цикл не останавливаем: причина уходит в журнал, разбор продолжает сам.
+      //
+      // Паузы нет — значит нет и естественного ограничителя: следующий тик
+      // увидит ту же поломку и позвал бы разбор второй раз. Один инцидент =
+      // один разбор, как и с паузой (D-094): повтор внутри окна
+      // `pauseCascadeMs` только дописывает строку в журнал.
+      const seen = Array.isArray(GM_getValue(K.notice, null)) ? GM_getValue(K.notice, null) : [];
+      const key = typeof healIncidentKey === "function" ? healIncidentKey(info) : `${info.kind}|${info.reason}`;
+      const last = seen.at(-1);
+      const repeat = last && last.key === key && info.at - Number(last.at || 0) <= (Number(C.noticeRepeatMs) || 120000);
+      const tail = seen.slice(-9);
+      if (repeat) {
+        tail[tail.length - 1] = { ...last, at: info.at, count: (Number(last.count) || 1) + 1 };
+        GM_setValue(K.notice, tail);
+        log(`Тот же разбор продолжается (${Number(last.count) || 1} раз): ${info.reason}`, false, { skip: true, ntfy: false });
+        return;
+      }
+      tail.push({ key, kind: info.kind, reason: info.reason, at: info.at, with: info.with || "transport", count: 1 });
+      GM_setValue(K.notice, tail);
+      log(
+        `Разбор без остановки${info.with === "transport" ? " (решает транспорт)" : info.with === "self" ? " (решает повтор)" : ""}: ${info.reason}`,
+        true,
+        { skip: true },
+      );
+      setStatus();
+      if (context.heal !== false && typeof healAfterPause === "function") {
+        Promise.resolve()
+          .then(() => healAfterPause(info))
+          .catch((e) => log(`Разбор остановки не выполнен: ${(e && e.message) || e}`, true, { ntfy: false }));
+      }
+      return;
+    }
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
-    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
+    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : info.with === "install" ? "установка сборки" : "повтор"})`}: ${info.reason}`, true, { skip: true });
     // Тихая пауза — для остановок, которые Мастер не разбирает: вопрос ушёл
     // приёмке, миссию закрыли в обход неё, приёмка сама решает по существу.
     // С 1.4.80 такие события не повод звонить в телефон: их закрывает приёмка,
     // а Мастер нужен только там, где без него физически нельзя (нет роли,
     // нет прав, предел доработок).
-    if (context.quiet || !forHuman) {
+    if (context.quiet || !forHuman || info.with === "install") {
       notifyNtfy(`Цикл остановлен: ${info.reason}`, {
         title: context.notifyTitle || "Relay: пауза",
         priority: "2",
@@ -1645,7 +1692,7 @@
     // «нужен Мастер», а теперь это не так: постановку разбирает приёмка,
     // поломку — транспорт. Красный цвет — только тому, что правда ждёт человека.
     const who = String(GM_getValue(K.pause, null)?.with || "");
-    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор" }[who] || "";
+    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор", install: "ждёт установки сборки" }[who] || "";
     const text = extra || (paused ? `Пауза${label ? ` (${label})` : ""}: ${short}` : auto ? "Работает" : "Выключен");
     el.textContent = me ? `${text} · ${me}` : text;
     el.title = paused || text;
@@ -18605,6 +18652,87 @@
   };
 
   /**
+   * D-104: виды остановки, которые действительно останавливают цикл.
+   *
+   * До этой правки `pause()` останавливал цикл всегда, а решение «кто это
+   * разбирает» принималось уже после — в `healAfterPause`. Поэтому каждая
+   * поломка сначала показывалась Мастеру как ПАУЗА и только потом уходила
+   * транспорту: 04.11 журнал показал «ПАУЗА (решает повтор)» три раза подряд
+   * там, где цикл продолжался сам, а в конце — «ПАУЗА (решает транспорт)»
+   * перед передачей Maintainer'у, которая паузой не является.
+   *
+   * Теперь вид остановки сам говорит, стоит ли цикл:
+   *   • временный сбой и поломка транспорта — НЕ стоят: их разбирает тот, кто
+   *     и так продолжит работу (повтор или передача Maintainer'у);
+   *   • ожидание установки — стоит: без установки новой сборки продолжать
+   *     нельзя, и это единственный случай, где нужен Мастер;
+   *   • закрытый список `MASTER_ONLY` — стоит всегда: человек решает (роль,
+   *     доступы, деньги, продукт);
+   *   • нераспознанная остановка — стоит: чинить наугад нельзя, а запись
+   *     «пауза без причины» — худший вид вранья в журнале.
+   */
+  const HEAL_HOLDING = [
+    // Ждём установку: продолжение закрыто до новой сборки, это делает Мастер.
+    "heal-await-update",
+    // Разбор кончился ничем: дальше только человек.
+    "heal-exhausted",
+    "heal-no-maintainer",
+    // Пределы и данные: без человека решение не принимается.
+    "heal-maintainer-done",
+    "rework-limit",
+    "no-reply",
+    "busy-stuck",
+    "marker-mismatch",
+    "poll-loop",
+    "captcha",
+    "auth",
+    // Неоднозначность доставки: отправлять вслепую — дубль. Пока человек не
+    // посмотрит чат и карточку, продолжать нечем, поэтому стоим.
+    "orphan-dispatch",
+    "orphan-review",
+    "delivery-state-lost",
+    "handoff-kind",
+    "reviewer-task-check",
+    "reviewer-task-pending",
+    "closed-with-running",
+    "closed-unreviewed",
+    "mission-change-running",
+    "mission-change-answer",
+    "dispatch-changed",
+    "answer-changed",
+    "update-recovery",
+  ];
+
+  /**
+   * Стоит ли цикл по этой остановке. `false` — это разбор, а не пауза: цикл
+   * продолжает тот, кто умеет продолжать (повтор или транспорт).
+   *
+   * Признак считается здесь, рядом с таблицей классов: решение должно быть в
+   * одном месте, иначе `pause()` и разбор разойдутся, и в журнале снова
+   * появится «ПАУЗА», после которой ничего не стоит.
+   */
+  function healHoldsCycle(kind, reason = "") {
+    const key = String(kind || "").trim();
+    if (!key) return true;
+    // Явный список сильнее класса: «неоднозначность доставки» размечена
+    // транспортом (её и разбирает транспорт), но продолжать вслепую нельзя —
+    // отправка дала бы дубль. Поэтому сначала список, потом класс.
+    if (HEAL_HOLDING.includes(key)) return true;
+    const verdict = classifyPause(key, reason);
+    // Закрытый список: человек решает — значит стоим.
+    if (verdict.with === "master") return true;
+    // Ожидание установки: Мастер ставит сборку, без неё продолжения нет.
+    if (verdict.with === "install") return true;
+    // D-092: нераспознанный вид — работа транспорта. Стоять на нём незачем:
+    // разбор всё равно пойдёт, а ожидание нажатия только подменило бы работу.
+    if (verdict.unknown) return false;
+    // Временный сбой повторяется сам, поломка уходит Maintainer'у — оба идут
+    // дальше без остановки.
+    if (verdict.cls === "momentary" || verdict.cls === "transport") return false;
+    return false;
+  }
+
+  /**
    * Вид паузы → класс причины. Список сверяется с кодом машинно: проба собирает
    * все `kind:"…"` из `pause(...)` и падает, если вид паузы не назван здесь.
    * Поэтому «нераспознанное» остаётся аварийным исходом, а не обычным путём.
@@ -18774,7 +18902,15 @@
   function healResolveWith(kind, cls, config = {}) {
     const key = String(kind || "");
     const list = Array.isArray(config.masterOnly) && config.masterOnly.length ? config.masterOnly : MASTER_ONLY;
+    // D-104: «ждём установку» — не решение и не поломка: адресат `install`.
+    // Пункта закрытого списка у неё нет намеренно (D-102): человек здесь не
+    // решает, он ставит сборку, и пауза об этом прямо и говорит.
+    if (key === "heal-await-update") return { with: "install", point: "install" };
     const point = HEAL_MASTER_ONLY[key];
+    // D-104: установка сборки — действие Мастера, но не решение: адресат
+    // называется отдельно, чтобы `pause()` не считал её человеческой
+    // остановкой и не звонил, а разбор знал, кого ждать.
+    if (point === "install") return { with: "install", point };
     if (point && list.includes(point)) return { with: "master", point };
     // Капча и вход — физическое действие в браузере: его выполняет человек, но
     // это не «решение», а действие. Отдельного пункта списка у него нет, и это
@@ -19653,6 +19789,15 @@
             ref: info.ref, runId: info.runId, turnId: info.turnId,
           },
         });
+        // D-104: это единственная остановка, которую оставляет транспорт:
+        // правка уже в репозитории, а в браузере работает прежняя сборка.
+        // Слова «остановка» здесь — по факту: цикл действительно встал.
+        log(
+          `Остановка до установки: Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
+            "Правка в репозитории; в браузере работает прежняя сборка.",
+          true,
+          { skip: true, ntfy: false },
+        );
         pause(
           `Maintainer «${role.name}» назвал поломку исправленной, но ${gate.why}. ` +
             "Продолжение закрыто до установки новой сборки: установите её и нажмите «Продолжить».",
@@ -19745,6 +19890,15 @@
 
     const counters = healCounters(key);
     const decision = decideHeal(verdict, counters, C);
+    // D-104: разбор не оставляет за собой стоящую паузу, если решил продолжать.
+    //
+    // Пауза ставится ДО разбора (её ставит `pause()`), и до этой правки каждый
+    // «временный сбой» и каждая передача транспорту требовали нажатия
+    // «Продолжить» — то есть работа шла, а цикл формально стоял. Теперь, если
+    // решение — повтор, передача Maintainer'у или строка приёмке, пауза
+    // снимается здесь же: «ПАУЗА» в журнале остаётся только у того, что правда
+    // ждёт человека.
+    const continues = (v) => ["retry", "maintainer", "warden"].includes(v.action);
     // D-092: каждая остановка попадает в метрику с адресатом решения. Считается
     // до действия: даже если передача не удалась, факт «человека звали» важнее.
     healCountStop(verdict.with);
@@ -19766,9 +19920,17 @@
 
     if (verdict.cls === "momentary" && decision.action === "retry") {
       healBump(key, "retries");
+      // Повтор продолжает ход сам — паузы под ним быть не должно.
+      if (typeof isPaused === "function" && isPaused()) resume("временный сбой: повторяю сам");
+      // D-104: временный сбой цикл больше не останавливает, поэтому «продолжу
+      // через 30 с» было бы неправдой: ход и так идёт. Ждём только там, где
+      // пауза правда стоит — тогда её и снимаем.
+      const held = typeof isPaused === "function" && isPaused();
       log(
-        `${decision.why}. Продолжу сам через ${Math.round(decision.delayMs / 1000)} с: ` +
-          "состояние хода сохранено, оракул не трогается.",
+        held
+          ? `${decision.why}. Продолжу сам через ${Math.round(decision.delayMs / 1000)} с: ` +
+              "состояние хода сохранено, оракул не трогается."
+          : `${decision.why}. Цикл не останавливаю: следующий шаг повторит сам, состояние хода сохранено.`,
         false,
         { ntfy: "quiet", title: "Relay: временный сбой" },
       );
@@ -19788,6 +19950,8 @@
     // ответ ложится в её «Ответ», а цикл не стоит и не ждёт нажатия.
     if (decision.action === "warden") {
       healBump(key, "tickets");
+      // Решение ушло приёмке строкой — цикл не стоит и не ждёт нажатия.
+      if (typeof isPaused === "function" && isPaused()) resume("остановка передана приёмке");
       try {
         const row = await askQuestion(
           {
@@ -19834,6 +19998,9 @@
     // Повтор, который исчерпал свои пределы, — тоже дефект, а не «стоп»: раньше
     // он падал в общую ветку и оставлял цикл без адресата.
     if (decision.action === "maintainer") {
+      // Передача Maintainer'у — не остановка: разбор уже идёт, продолжать будет
+      // он же. Пауза снимается до передачи, чтобы «Продолжить» не понадобилось.
+      if (typeof isPaused === "function" && isPaused()) resume("поломка передана транспорту");
       saveHealState({
         ...healState(),
         pending: {

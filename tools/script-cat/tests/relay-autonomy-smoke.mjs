@@ -24,7 +24,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(here, '..', 'src');
 const src = (name) => readFileSync(join(srcDir, name), 'utf8');
 
-const { MASTER_ONLY, HEAL_MASTER_ONLY, HEAL_PAUSE_CLASS, classifyPause, decideHeal, healResolveWith } = healApi;
+const { MASTER_ONLY, HEAL_MASTER_ONLY, HEAL_PAUSE_CLASS, classifyPause, decideHeal, healResolveWith, healHoldsCycle } = healApi;
 
 // ── 1. Закрытый список: четыре пункта, и он закрыт ─────────────────────────
 assert.deepEqual(MASTER_ONLY, ['install', 'agent', 'money', 'product'],
@@ -44,10 +44,37 @@ assert.deepEqual(MASTER_ONLY, ['install', 'agent', 'money', 'product'],
   }
 }
 
-// Всякий вид, у которого есть пункт списка, действительно уходит человеку.
+// Всякий вид, у которого есть пункт списка, действительно уходит человеку —
+// кроме установки сборки: это действие Мастера, но не решение (D-104), поэтому
+// адресат у неё свой — «install».
 for (const kind of Object.keys(HEAL_MASTER_ONLY)) {
   assert.ok(HEAL_PAUSE_CLASS[kind], `пункт списка для «${kind}» указывает на несуществующий вид паузы`);
-  assert.equal(classifyPause(kind, 'причина').with, 'master', `«${kind}»: пункт списка сильнее класса`);
+  const who = classifyPause(kind, 'причина').with;
+  assert.ok(['master', 'install'].includes(who), `«${kind}»: пункт списка сильнее класса, а не «${who}»`);
+  if (HEAL_MASTER_ONLY[kind] === 'install') {
+    assert.equal(who, 'install', `«${kind}»: установку ждёт Мастер, но решает не он`);
+  } else {
+    assert.equal(who, 'master', `«${kind}»: пункт списка сильнее класса`);
+  }
+}
+
+// ── 1-бис. Стоит ли цикл: разбор — не пауза (D-104) ────────────────────────
+{
+  // 04.11 журнал трижды показал «ПАУЗА (решает повтор)» там, где цикл шёл сам,
+  // и один раз «ПАУЗА (решает транспорт)» перед передачей Maintainer'у.
+  assert.equal(healHoldsCycle('error', 'временный сбой сети'), false, 'временный сбой продолжается сам');
+  assert.equal(healHoldsCycle('send', 'сообщение не ушло'), false, 'поломку отправки разбирает транспорт');
+  assert.equal(healHoldsCycle('prompt-compile', 'нет task.runId'), false, 'сборка промпта — работа транспорта');
+  assert.equal(healHoldsCycle('heal-await-update', 'работает прежняя сборка'), true,
+    'ждём установку — стоим: без новой сборки продолжения нет');
+  assert.equal(healHoldsCycle('rework-limit', 'предел доработок'), true, 'предел решает человек — стоим');
+  assert.equal(healHoldsCycle('provision', 'нужна строка роли'), true, 'нет доступа — без человека нельзя');
+  assert.equal(healHoldsCycle('never-seen-kind-92', 'причина не названа'), false,
+    'нераспознанный вид разбирает транспорт — цикл ждать нажатия не обязан');
+  // Разбор без остановки виден отдельной строкой и отдельным журналом.
+  const panel = src('06-pause-panel.js');
+  assert.match(panel, /Разбор без остановки/, 'журнал называет разбор разбором');
+  assert.match(panel, /const holds = typeof healHoldsCycle === "function"/, 'решение «стоим или нет» — из таблицы видов');
 }
 
 // ── 2. Инверсия по умолчанию ───────────────────────────────────────────────
@@ -112,10 +139,11 @@ for (const kind of Object.keys(HEAL_MASTER_ONLY)) {
 // ── 6. Громкий сигнал только человеку ──────────────────────────────────────
 {
   const panel = src('06-pause-panel.js');
-  assert.match(panel, /const forHuman = !info\.with \|\| info\.with === "master";/,
-    'пауза знает, кому она адресована');
-  assert.match(panel, /if \(context\.quiet \|\| !forHuman\) \{/,
-    'тихий пуш — для остановок, которые решает не человек');
+  assert.match(panel, /const forHuman = holds && \(!info\.with \|\| info\.with === "master"\);/,
+    'громко только тому, что правда стоит и правда ждёт человека');
+  assert.match(panel, /info\.with === "install" \? "установка сборки"/, 'панель называет ожидание установки');
+  assert.match(panel, /if \(context\.quiet \|\| !forHuman \|\| info\.with === "install"\) \{/,
+    'тихий пуш — для остановок, которые решает не человек, и для ожидания установки');
   assert.match(panel, /info\.with = verdict \? String\(verdict\.with \|\| ""\) : "";/,
     'адресат попадает в состояние паузы');
   assert.match(panel, /with: "",/, 'поле объявлено в самой паузе: старое состояние читается как «решает человек»');

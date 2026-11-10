@@ -88,7 +88,15 @@
     } catch {
       info.with = "";
     }
-    const forHuman = !info.with || info.with === "master";
+    // D-104: пауза — это когда цикл стоит. Разбор — когда он продолжается.
+    //
+    // `pause()` вызывается и там, где ничего останавливать не надо: временный
+    // сбой повторяется сам, поломка уходит Maintainer'у. Раньше эти вызовы
+    // писали в журнал «ПАУЗА» и снимали паузу кнопкой «Продолжить», хотя цикл
+    // шёл дальше. Теперь вид остановки сам решает, стоит ли цикл, и запись
+    // называется по факту: «ПАУЗА» — только там, где действительно стоим.
+    const holds = typeof healHoldsCycle === "function" ? healHoldsCycle(info.kind, info.reason) : true;
+    const forHuman = holds && (!info.with || info.with === "master");
     // D-094: вторая пауза того же инцидента не подменяет первую.
     //
     // 09.11 в 23:27:22 пришли две паузы в одну секунду: `prompt-compile` и
@@ -149,15 +157,48 @@
       setStatus();
       return;
     }
+    if (!holds) {
+      // Цикл не останавливаем: причина уходит в журнал, разбор продолжает сам.
+      //
+      // Паузы нет — значит нет и естественного ограничителя: следующий тик
+      // увидит ту же поломку и позвал бы разбор второй раз. Один инцидент =
+      // один разбор, как и с паузой (D-094): повтор внутри окна
+      // `pauseCascadeMs` только дописывает строку в журнал.
+      const seen = Array.isArray(GM_getValue(K.notice, null)) ? GM_getValue(K.notice, null) : [];
+      const key = typeof healIncidentKey === "function" ? healIncidentKey(info) : `${info.kind}|${info.reason}`;
+      const last = seen.at(-1);
+      const repeat = last && last.key === key && info.at - Number(last.at || 0) <= (Number(C.noticeRepeatMs) || 120000);
+      const tail = seen.slice(-9);
+      if (repeat) {
+        tail[tail.length - 1] = { ...last, at: info.at, count: (Number(last.count) || 1) + 1 };
+        GM_setValue(K.notice, tail);
+        log(`Тот же разбор продолжается (${Number(last.count) || 1} раз): ${info.reason}`, false, { skip: true, ntfy: false });
+        return;
+      }
+      tail.push({ key, kind: info.kind, reason: info.reason, at: info.at, with: info.with || "transport", count: 1 });
+      GM_setValue(K.notice, tail);
+      log(
+        `Разбор без остановки${info.with === "transport" ? " (решает транспорт)" : info.with === "self" ? " (решает повтор)" : ""}: ${info.reason}`,
+        true,
+        { skip: true },
+      );
+      setStatus();
+      if (context.heal !== false && typeof healAfterPause === "function") {
+        Promise.resolve()
+          .then(() => healAfterPause(info))
+          .catch((e) => log(`Разбор остановки не выполнен: ${(e && e.message) || e}`, true, { ntfy: false }));
+      }
+      return;
+    }
     GM_setValue(K.paused, info.reason);
     GM_setValue(K.pause, info);
-    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : "повтор"})`}: ${info.reason}`, true, { skip: true });
+    log(`ПАУЗА${forHuman ? "" : ` (решает ${info.with === "warden" ? "приёмка" : info.with === "transport" ? "транспорт" : info.with === "install" ? "установка сборки" : "повтор"})`}: ${info.reason}`, true, { skip: true });
     // Тихая пауза — для остановок, которые Мастер не разбирает: вопрос ушёл
     // приёмке, миссию закрыли в обход неё, приёмка сама решает по существу.
     // С 1.4.80 такие события не повод звонить в телефон: их закрывает приёмка,
     // а Мастер нужен только там, где без него физически нельзя (нет роли,
     // нет прав, предел доработок).
-    if (context.quiet || !forHuman) {
+    if (context.quiet || !forHuman || info.with === "install") {
       notifyNtfy(`Цикл остановлен: ${info.reason}`, {
         title: context.notifyTitle || "Relay: пауза",
         priority: "2",
@@ -535,7 +576,7 @@
     // «нужен Мастер», а теперь это не так: постановку разбирает приёмка,
     // поломку — транспорт. Красный цвет — только тому, что правда ждёт человека.
     const who = String(GM_getValue(K.pause, null)?.with || "");
-    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор" }[who] || "";
+    const label = { master: "ждёт Мастера", warden: "решает приёмка", transport: "решает транспорт", self: "повтор", install: "ждёт установки сборки" }[who] || "";
     const text = extra || (paused ? `Пауза${label ? ` (${label})` : ""}: ${short}` : auto ? "Работает" : "Выключен");
     el.textContent = me ? `${text} · ${me}` : text;
     el.title = paused || text;

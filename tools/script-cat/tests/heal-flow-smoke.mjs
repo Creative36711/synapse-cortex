@@ -112,7 +112,10 @@ const info = (over = {}) => ({
   assert.equal(result.retried, true, 'временный сбой уходит в автопродолжение');
   assert.equal(env.sends.length, 0, 'Maintainer не тревожится');
   assert.equal(env.api.classifyPause('nav', 'Не удалось открыть страницу').cls, 'momentary');
-  assert.match(env.logs.map((l) => l.text).join('\n'), /Продолжу сам через 1 с/, 'выдержка названа');
+  // D-104: временный сбой цикл не останавливает — паузы, которую надо снимать
+  // по таймеру, нет. В журнале это сказано словами, а не обещанием выдержки.
+  assert.match(env.logs.map((l) => l.text).join('\n'), /Цикл не останавливаю: следующий шаг повторит сам/,
+    'разбор без остановки назван словами');
   const state = env.store.get('cfn-heal-state');
   const counters = Object.values(state.incident)[0];
   assert.equal(counters.retries, 1, 'счётчик инцидента вырос');

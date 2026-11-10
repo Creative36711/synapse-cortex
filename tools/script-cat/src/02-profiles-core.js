@@ -198,6 +198,9 @@
     merged: "cfn-merged:",
     branch: "cfn-branch",
     pause: "cfn-pause-context",
+    // D-104: последние разборы без остановки — по ним видно, что транспорт
+    // чинил, пока цикл шёл. Отдельный ключ: паузы-то не было.
+    notice: "cfn-notice-log",
     ntfyTopic: "cfn-ntfy-topic",
     ntfyToken: "cfn-ntfy-token",
     ghToken: "cfn-github-token",

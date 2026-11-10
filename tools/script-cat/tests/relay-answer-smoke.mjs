@@ -133,7 +133,8 @@ assert.match(
   'закрытие в обход приёмки — тихая пауза, а не ночной звонок',
 );
 // D-092: молчание паузы определяется адресатом: `quiet` или «решает не человек».
-assert.match(src, /if \(context\.quiet \|\| !forHuman\) \{/, 'пауза умеет молчать и молчит, когда решает агент');
+assert.match(src, /if \(context\.quiet \|\| !forHuman \|\| info\.with === "install"\) \{/,
+  'пауза умеет молчать и молчит, когда решает агент или ждёт установки');
 assert.match(
   src,
   /ntfy: failed && \(running \|\| waited\) \? "loud" : "quiet",/,
