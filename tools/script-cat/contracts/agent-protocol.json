@@ -509,6 +509,12 @@
       "requiredFor": [
         "Reviewer"
       ]
+    },
+    "R-PR": {
+      "title": "Правила PR между ролями (D-097)",
+      "requiredFor": [
+        "Executor"
+      ]
     }
   },
   "delivery": {
@@ -1704,6 +1710,66 @@
     "evidence": {
       "probe": "tests/relay-reviewer-continue-smoke.mjs",
       "suites": 115
+    }
+  },
+  "d097": {
+    "version": "1.14.25",
+    "title": "Правила PR между ролями и preflight перед push",
+    "date": "2026-11-10",
+    "decision": [
+      "tools/script-cat/preflight.mjs",
+      "docs/agents/pr-rules.md"
+    ],
+    "problem": {
+      "cls": "process",
+      "reason": "несколько ролей выпускают правки в один репозиторий параллельно, и каждая правка выпуска трогает одни и те же семь файлов",
+      "wrongDiagnosis": "«ветки с несвязанными историями» — на самом деле усечённый клон: .git/shallow содержал собственный коммит, rev-list --count --all давал 1; после git fetch --deepen=50 — 107 коммитов и один корень 91886d70",
+      "hotspots": "последние 40 коммитов: docs/DECISIONS.md 38, relay.user.js 32, contracts/agent-protocol.json 32, src/00-header.js 30, src/04-notifications.js 30, tests/docs-smoke.mjs 26, tests/dispatch-coordinator-smoke.mjs 25",
+      "noCi": ".github в репозитории отсутствует — обязательных проверок на стороне GitHub нет, гейт только локальный (npm run verify)"
+    },
+    "rules": [
+      "Р1 один PR — одна карточка и один номер решения; номер сверяется с origin/main до push",
+      "Р2 перед push merge origin/main в свою ветку: конфликты разрешаются у себя, а не в PR",
+      "Р3 relay.user.js не мержится руками — только пересборка из src/** и build --check",
+      "Р4 docs/DECISIONS.md при конфликте разрешается union: сохраняются обе записи",
+      "Р5 версию поднимает только выпуск транспорта (правка src/**); docs и тесты версию не трогают",
+      "Р6 правки транспорта идут по одной: метка transport-lock на открытом PR",
+      "Р7 зона роли — граница PR; файлы вне зоны отклоняются",
+      "Р8 PR живёт часы: черновик вместо долгой ветки",
+      "Р9 вливать --merge, не --squash: история выпусков нужна для отката",
+      "Р10 сомнение — карточка, а не коммит"
+    ],
+    "preflight": {
+      "path": "tools/script-cat/preflight.mjs",
+      "invocation": "node tools/script-cat/preflight.mjs [--zone \"tools/script-cat/**\"] [--json]",
+      "checks": [
+        "клон не усечён (--is-shallow-repository): в усечённом rev-list HEAD..origin/main врёт нулём",
+        "ветка не отстала от origin/main",
+        "relay.user.js собран из src/**",
+        "ровно одно новое решение и его ключ есть в контракте",
+        "версия поднята только вместе с правкой src/**",
+        "файлы вне зоны роли (при --zone)",
+        "нет маркеров конфликта в отслеживаемых файлах"
+      ],
+      "exit": "0 — можно пушить, 1 — есть блокеры"
+    },
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.11: правила PR — процесс, маркеры, виды хода и бюджеты не менялись",
+    "safety": [
+      "preflight только читает: git-запросы и build --check без записи, релиз не пересобирается",
+      "недоступный origin/main не роняет проверку: отставание деградирует в понятное сообщение",
+      "замок transport-lock снимает Coordinator по решению приёмки, если PR без движения 24 часа"
+    ],
+    "evidence": {
+      "probe": "tests/pr-preflight-smoke.mjs",
+      "suites": 116
+    },
+    "prompt": {
+      "ruleId": "R-PR",
+      "carrier": "repo.target (v3) — там же, где предупреждение про shallow",
+      "budget": "D-034 не нарушен: overhead executor.card 2795 из 2800, отдельный блок не добавлен — бюджет впритык",
+      "roleDoc": "docs/agents/roles/executor.md: раздел «PR перед пушем (R-PR, D-097)»",
+      "why": "правила в документации роль не читает; до исполнителя они доходят только промптом"
     }
   }
 }

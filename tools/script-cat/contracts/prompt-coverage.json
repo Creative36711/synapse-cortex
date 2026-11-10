@@ -58,6 +58,9 @@
     "R-PHASES": [
       "phases.bans"
     ],
+    "R-PR": [
+      "repo.target"
+    ],
     "R-QUESTIONS": [
       "adr.protocol",
       "answer.protocol",
@@ -102,6 +105,7 @@
       "R-EVIDENCE",
       "R-GIT",
       "R-MARKER",
+      "R-PR",
       "R-QUESTIONS",
       "R-REPO-BOUNDARY",
       "R-ROLES",
@@ -158,6 +162,7 @@
       "R-I18N",
       "R-MARKER",
       "R-PHASES",
+      "R-PR",
       "R-QUESTIONS",
       "R-REPO-BOUNDARY",
       "R-ROLES",
@@ -195,6 +200,7 @@
       "R-EVIDENCE",
       "R-MARKER",
       "R-MASTER-ONLY",
+      "R-PR",
       "R-ROLES",
       "R-VERIFY-GITHUB"
     ],

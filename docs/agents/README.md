@@ -17,6 +17,8 @@
 - Закулисная роль (D-063): [roles/transport-maintainer.md](roles/transport-maintainer.md) —
   `Transport Maintainer`, зона `tools/script-cat/**` под гейтом D-027; карточек из очереди не
   получает и в опции «Кому» базы «Запросы» не значится.
+- [pr-rules.md](pr-rules.md) — правила PR между ролями: замок транспорта, зоны, merge
+  `main`, `relay.user.js` только пересборкой; проверка `tools/script-cat/preflight.mjs`.
 - [troubleshooting.md](troubleshooting.md) — классы отказов доставки и что делать.
 - [onboarding.md](onboarding.md) — как подключить роль и запустить первый ход.
 - [acceptance-report.md](acceptance-report.md) — отчёт Warden о приёмке пакета 1.9.0.
