@@ -486,4 +486,21 @@ for (const [role, file] of Object.entries(roleDoc)) {
   assert.match(rulesDoc, /--unshallow/, 'лечение усечённого клона описано');
 }
 
+// 20. D-098 (1.14.26): границу зоны проверяет транспорт, а не дисциплина.
+{
+  const d098 = contract.d098;
+  assert.ok(d098, 'D-098 записан в контракт');
+  assert.match(d098.version || '', /^1\.14\.26$/, 'D-098 относится к сборке 1.14.26');
+  assert.match((d098.behaviour || []).join(' '), /boundary/, 'отказ границы назван');
+  assert.match((d098.behaviour || []).join(' '), /unknown/, 'недоступные данные не запрет');
+  assert.match((d098.safety || []).join(' '), /не блокируется/, 'сеть не превращается в запрет');
+  assert.match(d098.evidence?.probe || '', /relay-pr-zone-smoke/, 'проба названа');
+  assert.ok(existsSync(join(root, 'tools/script-cat/src/43-pr-zone.js')), 'разбор зоны вынесен в модуль');
+  const decisions = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+  assert.match(decisions, /## D-098 \(1\.14\.26\)/, 'D-098 есть в журнале решений');
+  const pr = readFileSync(join(root, 'tools/script-cat/src/19-pull-requests.js'), 'utf8');
+  assert.match(pr, /async function zoneCheck/, 'проверка в транспорте');
+  assert.match(pr, /githubPrFiles/, 'файлы PR читаются из GitHub');
+}
+
 console.log('OK: docs — комплект на месте, маркеры прогнаны боевым разбором, бюджеты и ruleId согласованы');

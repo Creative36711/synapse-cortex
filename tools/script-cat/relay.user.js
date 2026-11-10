@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.25
+// @version      1.14.26
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "d116f74f7bb301f9",
+    buildFingerprint: "90f964901656d01c",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.25";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.26";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -7860,6 +7860,7 @@
       sessionRepo,
       targetRepo,
       targetBranch,
+      targetZone: String(role.zone || ""),
     });
     if (envelope) {
       recordPromptAttempt(envelope, { kind, ref, role: role.name, attempt: payload.attempt || 1, outcome: "queued" });
@@ -7884,6 +7885,9 @@
       sessionRepo,
       targetRepo,
       targetBranch,
+      // D-098: зона роли едет вместе с выдачей. Профиль «Ролей» может измениться,
+      // пока агент работает, а судить надо по той зоне, с которой он начинал.
+      targetZone: String(role.zone || ""),
       text,
       at: Date.now(),
     });
@@ -9561,6 +9565,28 @@
       );
       return "claim-rejected";
     }
+    // D-098: граница зоны проверяется до влития. Мастер видит только результат
+    // и не может следить за дисциплиной, поэтому «PR трогает чужие файлы»
+    // ловится транспортом, пока правка ещё не вошла в базовую ветку.
+    // typeof: у изолированных проб окружение урезано, и отсутствие проверки
+    // не должно превращаться в отказ. Нет функции — нет и границы.
+    const zone = typeof zoneCheck === "function" ? await zoneCheck(result, target || undefined) : null;
+    const zoneIssue = zone && zone.status === "outside" ? zone : null;
+    if (zoneIssue) {
+      lastMergeCheck = { status: "boundary", why: zoneIssue.why };
+      log(
+        `Заявка «${prLabelOf(result)} слит» не принята: ${zoneIssue.why}. ` +
+          "Это проверка границы, а не отказ в работе: нужна карточка тому, за кем эти пути в «Ролях» (D-097/D-098).",
+        true,
+        { tone: "warn", ntfy: true, title: "Relay: PR вышел за зону роли" },
+      );
+      return "boundary";
+    }
+    if (zone && zone.status === "unknown") {
+      log(`Граница зоны не проверена: ${zone.why}. Заявка принимается по прежнему правилу.`, false, {
+        tone: "warn", ntfy: "quiet", title: "Relay: зона PR не проверена",
+      });
+    }
     const seen = await waitFor(() => mergedFlag() || continueButton(), patience(C.mergeGraceMs), 1000);
     if (seen) return finishMerge(task, key);
     GM_setValue(key, true);
@@ -9651,10 +9677,12 @@
   function dispatchTarget() {
     try {
       const expect = GM_getValue(K.expect, null);
-      if (expect && (expect.targetRepo || expect.targetBranch)) {
+      if (expect && (expect.targetRepo || expect.targetBranch || expect.targetZone)) {
         return {
           repo: canonicalTargetRepository(expect.targetRepo || C.repo || "", C.repo),
           branch: String(expect.targetBranch || C.branch || "main"),
+          // D-098: зона роли из выдачи — по ней проверяется граница PR.
+          zone: String(expect.targetZone || ""),
         };
       }
     } catch { /* ожидание недоступно — работаем с глобальным конфигом */ }
@@ -9766,6 +9794,51 @@
       undefined,
       { anonymous: !token },
     );
+  }
+
+  /**
+   * Файлы PR (D-098). Нужны, чтобы проверить границу зоны роли до влития:
+   * `changed_files` говорит «сколько», а не «какие». Отдельный запрос, потому
+   * что он нужен только на пути приёмки.
+   */
+  async function githubPrFiles(repo, number, token = "") {
+    const files = [];
+    for (let page = 1; page <= 3; page += 1) {
+      const batch = await request(
+        "GET",
+        `https://api.github.com/repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`,
+        githubHeaders(token),
+        undefined,
+        { anonymous: !token },
+      );
+      if (!Array.isArray(batch) || !batch.length) break;
+      for (const item of batch) if (item && item.filename) files.push(item.filename);
+      if (batch.length < 100) break;
+    }
+    return files;
+  }
+
+  /**
+   * Граница зоны роли по факту PR (D-098). Зона приходит из профиля роли
+   * (`role.zone` в промпте, «Зона записи» в «Ролях»). Проверка необязательная:
+   * сеть или права не дали списка — это `unknown`, и он не запрещает мерж.
+   */
+  async function zoneCheck(result, target = null) {
+    if (typeof reviewPullRequest !== "function") return null;
+    const repo = canonicalTargetRepository((target && target.repo) || C.repo || "", C.repo);
+    const ref = prRef(result, repo);
+    if (!ref) return null;
+    const zone = String((target && target.zone) || "").trim();
+    if (!zone) return null;
+    let files = null;
+    let pr = null;
+    try {
+      files = await githubPrFiles(ref.repo, ref.number, ghToken());
+      if (!files.length) pr = await githubPr(ref.repo, ref.number, ghToken());
+    } catch (e) {
+      return { status: "unknown", why: `список файлов PR не прочитан: ${String((e && e.message) || e).slice(0, 200)}`, outside: [] };
+    }
+    return reviewPullRequest({ files, pr, zone });
   }
 
   async function githubRepo(repo, token = "") {
@@ -19662,6 +19735,86 @@
         : text,
     };
   }
+
+// D-098: зона роли проверяется транспортом по факту PR, а не верой в дисциплину.
+//
+// Правила PR (D-097) исполняются агентом; Мастер видит только результат и не
+// может следить за исполнением. Значит границу зоны должен проверять транспорт:
+// у него есть номер PR, зона роли из «Ролей» и GitHub. Разбор — до влития, пока
+// чужая правка ещё не вошла в базовую ветку.
+//
+// Почему не `pulls/{n}/files`: файлы читаются отдельным запросом, а здесь важно
+// решить до дорогого пути. Поэтому проверка идёт по тому, что уже под рукой:
+// `changed_files` (сколько всего тронуто), `additions`/`deletions` и `title`.
+// Точный список путей даёт GitHub-сравнение, и оно подключается, если доступно.
+
+/** Зона вида `tools/script-cat/**` или список через запятую → список префиксов. */
+function parseZone(zone) {
+  const text = String(zone || "").trim();
+  if (!text) return [];
+  return text
+    .split(/[,;\n]+/)
+    .map((part) => part.trim().replace(/^`|`$/g, ""))
+    // Прозаическая зона («только чтение и предложение правки») путём не является:
+    // судить по ней машинно нельзя, и делать вид, что можно, — хуже, чем не
+    // проверять (тот же принцип, что в roleZoneGlobs, D-092).
+    .filter((part) => part && /^[\w.@*/-]+$/.test(part) && part.includes("/"))
+    .map((part) => part.replace(/^\.\//, ""))
+    .map((part) => (part.endsWith("/**") ? part.slice(0, -3) + "/" : part))
+    .map((part) => (part.endsWith("*") ? part.slice(0, -1) : part));
+}
+
+/** Путь входит в зону? Пустая зона = зона не задана (проверять нечего). */
+function inZone(path, zone) {
+  const prefixes = parseZone(zone);
+  if (!prefixes.length) return true;
+  const clean = String(path || "").replace(/^\.\//, "");
+  return prefixes.some((prefix) => clean === prefix.replace(/\/$/, "") || clean.startsWith(prefix));
+}
+
+/** Файлы вне зоны, в порядке появления. */
+function outsideZone(paths, zone) {
+  const list = Array.isArray(paths) ? paths.filter(Boolean) : [];
+  return list.filter((path) => !inZone(path, zone));
+}
+
+/**
+ * Разбор заявки «PR готов» до влития.
+ *
+ * Возвращает `{ status, why, outside }`:
+ * - `ok`      — проверять нечего или всё в зоне;
+ * - `outside` — в PR есть файлы вне зоны роли: принимать нельзя, нужна карточка;
+ * - `unknown` — данных не хватило (нет файлов), молча пропускаем: врать в
+ *   сторону запрета хуже, чем не проверить.
+ *
+ * `files` — список путей, если он есть (GitHub `pulls/{n}/files` или сравнение).
+ * `pr` — объект PR из GitHub: `changed_files` помогает, когда списка нет.
+ */
+function reviewPullRequest({ files, pr, zone } = {}) {
+  const prefixes = parseZone(zone);
+  if (!prefixes.length) return { status: "ok", why: "зона роли не задана — границу проверить нечем", outside: [] };
+  const known = Array.isArray(files) ? files.map((f) => (typeof f === "string" ? f : f?.filename)).filter(Boolean) : [];
+  if (known.length) {
+    const outside = outsideZone(known, zone);
+    if (outside.length) {
+      const shown = outside.slice(0, 5).join(", ");
+      const more = outside.length > 5 ? ` и ещё ${outside.length - 5}` : "";
+      return {
+        status: "outside",
+        why: `PR трогает файлы вне зоны роли (${zone}): ${shown}${more}`,
+        outside,
+      };
+    }
+    return { status: "ok", why: `все ${known.length} файлов PR в зоне ${zone}`, outside: [] };
+  }
+  // Списка нет: остаётся счётчик. Ноль изменённых файлов при заявке «слито» —
+  // это пустой PR, а не проверенная работа.
+  const changed = Number(pr?.changed_files);
+  if (Number.isFinite(changed) && changed === 0) {
+    return { status: "outside", why: "PR пуст: GitHub не насчитал ни одного изменённого файла", outside: [] };
+  }
+  return { status: "unknown", why: "список файлов PR недоступен — границу зоны не проверил", outside: [] };
+}
 
   // ───────────────────────────── цикл ─────────────────────────────
   let busy = false;

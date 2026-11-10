@@ -435,6 +435,28 @@
       );
       return "claim-rejected";
     }
+    // D-098: граница зоны проверяется до влития. Мастер видит только результат
+    // и не может следить за дисциплиной, поэтому «PR трогает чужие файлы»
+    // ловится транспортом, пока правка ещё не вошла в базовую ветку.
+    // typeof: у изолированных проб окружение урезано, и отсутствие проверки
+    // не должно превращаться в отказ. Нет функции — нет и границы.
+    const zone = typeof zoneCheck === "function" ? await zoneCheck(result, target || undefined) : null;
+    const zoneIssue = zone && zone.status === "outside" ? zone : null;
+    if (zoneIssue) {
+      lastMergeCheck = { status: "boundary", why: zoneIssue.why };
+      log(
+        `Заявка «${prLabelOf(result)} слит» не принята: ${zoneIssue.why}. ` +
+          "Это проверка границы, а не отказ в работе: нужна карточка тому, за кем эти пути в «Ролях» (D-097/D-098).",
+        true,
+        { tone: "warn", ntfy: true, title: "Relay: PR вышел за зону роли" },
+      );
+      return "boundary";
+    }
+    if (zone && zone.status === "unknown") {
+      log(`Граница зоны не проверена: ${zone.why}. Заявка принимается по прежнему правилу.`, false, {
+        tone: "warn", ntfy: "quiet", title: "Relay: зона PR не проверена",
+      });
+    }
     const seen = await waitFor(() => mergedFlag() || continueButton(), patience(C.mergeGraceMs), 1000);
     if (seen) return finishMerge(task, key);
     GM_setValue(key, true);
@@ -525,10 +547,12 @@
   function dispatchTarget() {
     try {
       const expect = GM_getValue(K.expect, null);
-      if (expect && (expect.targetRepo || expect.targetBranch)) {
+      if (expect && (expect.targetRepo || expect.targetBranch || expect.targetZone)) {
         return {
           repo: canonicalTargetRepository(expect.targetRepo || C.repo || "", C.repo),
           branch: String(expect.targetBranch || C.branch || "main"),
+          // D-098: зона роли из выдачи — по ней проверяется граница PR.
+          zone: String(expect.targetZone || ""),
         };
       }
     } catch { /* ожидание недоступно — работаем с глобальным конфигом */ }
@@ -640,6 +664,51 @@
       undefined,
       { anonymous: !token },
     );
+  }
+
+  /**
+   * Файлы PR (D-098). Нужны, чтобы проверить границу зоны роли до влития:
+   * `changed_files` говорит «сколько», а не «какие». Отдельный запрос, потому
+   * что он нужен только на пути приёмки.
+   */
+  async function githubPrFiles(repo, number, token = "") {
+    const files = [];
+    for (let page = 1; page <= 3; page += 1) {
+      const batch = await request(
+        "GET",
+        `https://api.github.com/repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`,
+        githubHeaders(token),
+        undefined,
+        { anonymous: !token },
+      );
+      if (!Array.isArray(batch) || !batch.length) break;
+      for (const item of batch) if (item && item.filename) files.push(item.filename);
+      if (batch.length < 100) break;
+    }
+    return files;
+  }
+
+  /**
+   * Граница зоны роли по факту PR (D-098). Зона приходит из профиля роли
+   * (`role.zone` в промпте, «Зона записи» в «Ролях»). Проверка необязательная:
+   * сеть или права не дали списка — это `unknown`, и он не запрещает мерж.
+   */
+  async function zoneCheck(result, target = null) {
+    if (typeof reviewPullRequest !== "function") return null;
+    const repo = canonicalTargetRepository((target && target.repo) || C.repo || "", C.repo);
+    const ref = prRef(result, repo);
+    if (!ref) return null;
+    const zone = String((target && target.zone) || "").trim();
+    if (!zone) return null;
+    let files = null;
+    let pr = null;
+    try {
+      files = await githubPrFiles(ref.repo, ref.number, ghToken());
+      if (!files.length) pr = await githubPr(ref.repo, ref.number, ghToken());
+    } catch (e) {
+      return { status: "unknown", why: `список файлов PR не прочитан: ${String((e && e.message) || e).slice(0, 200)}`, outside: [] };
+    }
+    return reviewPullRequest({ files, pr, zone });
   }
 
   async function githubRepo(repo, token = "") {

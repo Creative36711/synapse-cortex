@@ -20,7 +20,7 @@ const parts = [
   '20-technical-context.js', '21-prompts.js', '22-executor.js', '23-coordinator.js', '24-feedback.js',
   '25-legacy-adr.js', '26-review.js', '26b-arbiter.js', '27-review-answers.js', 'pilot-transport.js', '30-tool-limit.js',
   '31-provision-core.js', '32-provision-dom.js', '33-provision-flow.js', '34-provision-ui.js',
-  '40-heal-core.js', '41-heal.js', '42-roster.js',
+  '40-heal-core.js', '41-heal.js', '42-roster.js', '43-pr-zone.js',
   '28-cycle.js', '29-boot.js',
 ];
 const read = (name) => readFile(join(here, 'src', name), 'utf8');

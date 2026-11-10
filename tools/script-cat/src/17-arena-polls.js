@@ -1319,6 +1319,7 @@
       sessionRepo,
       targetRepo,
       targetBranch,
+      targetZone: String(role.zone || ""),
     });
     if (envelope) {
       recordPromptAttempt(envelope, { kind, ref, role: role.name, attempt: payload.attempt || 1, outcome: "queued" });
@@ -1343,6 +1344,9 @@
       sessionRepo,
       targetRepo,
       targetBranch,
+      // D-098: зона роли едет вместе с выдачей. Профиль «Ролей» может измениться,
+      // пока агент работает, а судить надо по той зоне, с которой он начинал.
+      targetZone: String(role.zone || ""),
       text,
       at: Date.now(),
     });
