@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.27
+// @version      1.14.28
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "869676a6e70ac8b2",
+    buildFingerprint: "17ee479a0127a947",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -728,7 +728,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.27";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.28";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -16240,6 +16240,60 @@
     return true;
   }
 
+  /**
+   * D-101: реплика этой выдачи в чате — доказательство, что сообщение дошло.
+   *
+   * Ищем не «похожий текст», а то, за что можно зацепиться: `turn_id` этой
+   * выдачи (он есть только в нашем задании), либо маркер приёмки с её
+   * question_id/turn_id, либо собственный хвост вопроса. Раньше доставку считали
+   * состоявшейся по одному водяному знаку: «после отметки есть сообщения» — а
+   * сообщения могли быть от прошлой выдачи.
+   */
+  function deliveryEcho(message, expect) {
+    const text = String((message && (message.raw || message.text)) || "");
+    if (!text) return false;
+    const turn = String(expect.turnId || "");
+    if (turn && text.includes(turn)) return true;
+    if (text.includes("CF_ANSWER_RESULT") && text.includes(String(expect.ref || "—"))) return true;
+    // Проба вопроса из задания: маркер начала, иначе хвост текста вопроса.
+    const opening = "ОТВЕТ НА ВОПРОС";
+    if (text.includes(opening)) return true;
+    const own = String(expect.questionFirstLine || "").trim();
+    return Boolean(own && own.length > 24 && text.includes(own.slice(0, 40)));
+  }
+
+  /**
+   * Ответа нет и доставка не подтверждена. Пауза здесь была бы ошибкой: она
+   * запрещает повторную отправку — единственное, что в этом случае помогает.
+   * Возвращаем задание в очередь и говорим об этом Мастеру один раз.
+   */
+  function undeliveredAnswer(expect, manual) {
+    const live = GM_getValue(K.expect, null);
+    const mine = live && norm(live.ref) === norm(expect.ref) && norm(live.turnId) === norm(expect.turnId);
+    if (!mine && !manual) return false;
+    // Возвращаем вопрос в ту же очередь приёмки: `queueAnswer` заменяет запись
+    // по id, поэтому повторной пары «вопрос + копия» не образуется.
+    const item = answerQueue().find((q) => norm(q.id) === norm(expect.ref)) || null;
+    const restored = item || {
+      id: expect.ref, text: expect.questionFirstLine || "", fullText: "",
+      roleName: expect.roleName || "", card: expect.card || "", mission: expect.missionId || "",
+    };
+    queueAnswer({ id: expect.ref }, {
+      id: expect.ref, text: restored.text || "", fullText: restored.fullText || restored.text || "",
+      fallback: restored.fallback, options: restored.options, gate: restored.gate,
+      need: restored.need, url: restored.url,
+    }, { roleName: restored.role || restored.roleName, card: restored.card, mission: restored.mission });
+    GM_setValue(K.expect, null);
+    log(
+      `Доставка не подтвердилась: в чате «${expect.roleName || "приёмки"}» нет ни реплики этой выдачи ` +
+        `(turn ${String(expect.turnId || "").slice(0, 8)}), ни маркера. Ответа агент не видел — это сбой доставки, а не его ответ. ` +
+        "Задание возвращено в очередь и уйдёт следующим шагом; если в чате пусто, обновите страницу.",
+      true,
+      { tone: "warn", ntfy: "quiet", title: "Relay: вопрос не дошёл до приёмки" },
+    );
+    return true;
+  }
+
   /** Ход приёмки по вопросу: записать ответ или позвать Мастера. */
   async function answerStep(role, expect, manual = false) {
     const replies = messagesAfter(expect.watermark);
@@ -16262,13 +16316,60 @@
         logThrottled(`master-answer-read:${expect.ref}`, `Не удалось проверить ручной ответ Мастера: ${e.message}. Ожидание сохранено.`, true);
       }
     }
-    if (!decision) return markerMissing(role, expect, "CF_ANSWER_RESULT", manual);
+    if (!decision) {
+      // D-101: «ответа не видно» и «доставка не подтвердилась» — разные беды.
+      //
+      // 10.11, 09:59: сообщение на вопрос 4146f0cf ушло в чат Warden и там не
+      // появилось (сбой Arena), Мастер обновил страницу — и ход сразу ушёл
+      // Transport Maintainer'у как marker-mismatch. Ответа не было вовсе, а
+      // разбор искал несовпадение ID. Пока доставка не подтверждена (в чате нет
+      // ни реплики этой выдачи, ни маркера), пауза запрещает ровно то, что
+      // нужно: повторную отправку. Ждём так же, как ждёт `markerMissing`: пока
+      // агент печатает и пока страница не отрисована.
+      // Доставка подтверждается репликой этой выдачи: пустой чат после
+      // отметки — это не «агент промолчал», а «сообщение не дошло».
+      const all = messagesAfter(expect.watermark);
+      const echo = all.some((m) => deliveryEcho(m, expect));
+      if (!all.length || (!echo && !all.some((m) => String((m && (m.raw || m.text)) || "").trim().length > 200))) {
+        if (stillWorking()) {
+          if (manual) log(`${role.name} ещё отвечает (${busyLabel(busyReason())}) — подождите, потом нажмите «Шаг».`);
+          return false;
+        }
+        const page = pageReady(expect);
+        if (page.ok !== true) {
+          // Ждём, но не молчим: 09:59 Мастер минуты смотрел на «ничего не
+          // происходит» и не знал, что реплики в чате нет вовсе. Переотправки
+          // здесь нет намеренно — агент мог думать и дольше минуты.
+          const waited = Date.now() - Number(expect.sentAt || 0);
+          if (waited > 60_000) {
+            logThrottled(
+              `answer-undelivered:${expect.ref}:${expect.turnId}`,
+              `В чате «${role.name}» нет реплики этой выдачи (${page.why}) уже ${Math.round(waited / 60000)} мин. ` +
+                "Похоже, сообщение не дошло. Ожидание держу: обновите страницу агента — если чат пуст, вопрос уйдёт заново.",
+              true,
+              { ntfy: "quiet", title: "Relay: вопрос не дошёл до приёмки" },
+            );
+          }
+          if (manual) log(`Страница «${role.name}» ещё не отрисовалась (${page.why}) — подождите.`);
+          return false;
+        }
+        if (!all.length) return undeliveredAnswer(expect, manual);
+      }
+      return markerMissing(role, expect, "CF_ANSWER_RESULT", manual);
+    }
     // Одного нового сообщения в чате недостаточно: оно может относиться к
     // предыдущему вопросу или повторной попытке того же вопроса. Не очищаем
     // ожидание и не записываем решение, пока обе границы не подтверждены.
     const qid = String(decision.question_id || "").trim();
     const turn = String(decision.turn_id || "").trim();
     const live = GM_getValue(K.expect, null);
+    // Живое ожидание — тот же вопрос и тот же ход, но привязка могла быть
+    // восстановлена другим написанием (регистр, старый формат без дефисов).
+    // Это не подмена: ID маркера совпадают с этой выдачей, и ответ — её.
+    if (live && norm(live.ref) === norm(expect.ref) && norm(live.turnId) === norm(expect.turnId) &&
+        norm(live.kind) === norm(expect.kind) && norm(live.turnId) === norm(turn)) {
+      expect = { ...expect, ...live };
+    }
     const matches = Boolean(isUuid(expect.ref) && isUuid(expect.turnId) && isUuid(qid) && isUuid(turn) && live && live.kind === "answer" &&
       norm(qid) === norm(expect.ref) && norm(turn) === norm(expect.turnId) &&
       norm(live.ref) === norm(expect.ref) && norm(live.turnId) === norm(expect.turnId) &&
@@ -16276,7 +16377,25 @@
       (!live.roleId || (expect.roleId && norm(live.roleId) === norm(expect.roleId))));
     if (!matches) {
       const retained = retainRejectedResult(expect, "answer-identity", replies);
-      pause("Ответ не подтверждён для текущего вопроса и хода (question_id / turn_id / адресат). " +
+      // Какой именно признак не сошёлся: без этого строка «question_id /
+      // turn_id / адресат» отправляла Мастера проверять три вещи сразу.
+      const expectQ = norm(expect.ref);
+      const expectT = norm(expect.turnId);
+      const liveQ = norm(live?.ref);
+      const liveT = norm(live?.turnId);
+      const why = [];
+      if (!isUuid(qid) || !isUuid(turn)) why.push("в маркере не UUID");
+      else {
+        if (norm(qid) !== expectQ) why.push("question_id чужой");
+        if (norm(turn) !== expectT) why.push("turn_id чужой");
+      }
+      if (!live || live.kind !== "answer") why.push(`ожидание уже не ответ (${live?.kind || "пусто"})`);
+      else {
+        if (liveQ !== expectQ) why.push("ожидание переписано другим вопросом");
+        if (liveT !== expectT) why.push("ожидание переписано другим ходом");
+      }
+      if (expect.roleId && norm(role?.id) !== norm(expect.roleId)) why.push("адресат не тот агент");
+      pause("Ответ не подтверждён для текущего вопроса и хода: " + (why.join(", ") || "признаки не сошлись") + ". " +
         (retained ? "Ожидание и копия ответа сохранены локально; " : "Ожидание сохранено, локальная копия не записалась — сохраните ответ из чата вручную; ") +
         "попросите приёмку повторить маркер с ID этой выдачи.", {
         kind: "marker-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",

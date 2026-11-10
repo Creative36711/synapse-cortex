@@ -183,6 +183,9 @@ const api = new Function(
   'recordQuestionChange',
   'logThrottled',
   'withQuestionWriteLock', 'isUuid', 'retainRejectedResult',
+  // D-101: разбор доставки. Проба даёт их сама — «агент не работает» и
+  // «страница отрисована» это состояние окружения, а не логика ответа.
+  'stillWorking', 'busyLabel', 'busyReason', 'pageReady',
   `${promptShim}
 ${block}
    return { answerQueue, queueAnswer, dropAnswer, answerPending, answerPrompt, startAnswer, answerStep };`,
@@ -250,6 +253,12 @@ ${block}
   () => {},
   () => {},
   (work) => work(), (value) => Boolean(value), () => true,
+  // D-101: окружение доставки. По умолчанию агент не печатает и страница
+  // отрисована; конкретные пробы меняют эти два факта через api.__working/__page.
+  () => Boolean(api.__working),
+  () => 'Stop generating',
+  () => (api.__working ? { kind: 'stop' } : null),
+  () => api.__page || { ok: true },
 );
 
 const runAnswerStep = (expect) => { const live = { kind:'answer', turnId:'t', ...expect }; store.set('cfn-expect', live); return api.answerStep(reviewer, live); };
@@ -276,6 +285,8 @@ const reset = () => {
   api.__roles = [coordinator, reviewer];
   api.__mission = mission;
   api.__messages = [];
+  api.__working = false;
+  api.__page = { ok: true };
 };
 
 const question = {
@@ -450,6 +461,55 @@ const question = {
   await runAnswerStep({ watermark: 'w-5', ref: 'q-1' });
   assert.equal(calls.pauses[0].kind, 'marker-mismatch', 'чужой вопрос не закрывается');
   assert.equal(calls.patches.length, 0, 'ничего не изменено');
+}
+
+// ── 11б. D-101: сообщение не дошло — это доставка, а не чужой ID ───────────
+// 10.11, 09:59: реплика ушла в чат Warden и там не появилась (сбой Arena),
+// Мастер обновил страницу, и ход сразу ушёл Maintainer'у как marker-mismatch.
+{
+  reset();
+  store.set('cfn-answer-queue', [{ id: 'q-1', text: 'вопрос про D-099', fullText: 'вопрос про D-099' }]);
+  api.__messages = []; // чат пуст: сообщения в этой сессии нет вовсе
+  const handled = await runAnswerStep({ watermark: 'w-5', ref: 'q-1', turnId: 't-1', roleName: 'Warden', sentAt: Date.now() - 120000 });
+  assert.equal(calls.pauses.length, 0, 'пустой чат — не повод звать Мастера по «чужому ID»');
+  assert.equal(handled, true, 'шаг обработан: задание возвращено в очередь');
+  assert.ok(calls.logs.some((l) => /Доставка не подтвердилась/.test(l)), 'в журнале сказано, что это доставка');
+  assert.equal(store.get('cfn-expect'), null, 'ожидание снято: ответа по нему не будет');
+  const queue = store.get('cfn-answer-queue') || [];
+  assert.equal(queue.filter((q) => q.id === 'q-1').length, 1, 'вопрос остался в очереди ровно один раз — уйдёт следующим шагом');
+}
+
+// ── 11в. Пока страница не отрисована, «не дошло» не объявляется ────────────
+{
+  reset();
+  store.set('cfn-answer-queue', [{ id: 'q-1', text: 'вопрос', fullText: 'вопрос' }]);
+  api.__messages = [];
+  api.__page = { ok: false, why: 'ни реплик, ни поля ввода' };
+  const handled = await runAnswerStep({ watermark: 'w-5', ref: 'q-1', turnId: 't-1', sentAt: Date.now() });
+  assert.equal(handled, false, 'неотрисованная страница — ждём, а не судим');
+  assert.equal(calls.pauses.length, 0, 'и не паузим');
+  assert.notEqual(store.get('cfn-expect'), null, 'ожидание на месте');
+}
+
+// ── 11г. Агент ещё печатает — тоже ждём ────────────────────────────────────
+{
+  reset();
+  api.__messages = [];
+  api.__working = true;
+  const handled = await runAnswerStep({ watermark: 'w-5', ref: 'q-1', turnId: 't-1', sentAt: Date.now() });
+  assert.equal(handled, false, 'пока идёт генерация, выводов не делаем');
+  assert.equal(calls.pauses.length, 0, 'и не паузим');
+}
+
+// ── 11д. Настоящая подмена: в маркере чужой turn_id — пауза остаётся ───────
+// Различие, ради которого D-101 и делался: ответ ЕСТЬ, но он не про этот ход.
+{
+  reset();
+  api.__messages = [{ raw: 'Отчёт.\nCF_ANSWER_RESULT {"question_id":"q-1","turn_id":"turn-ЧУЖОЙ","verdict":"answer","answer":"Да"}' }];
+  await runAnswerStep({ watermark: 'w-5', ref: 'q-1', turnId: 't-1', sentAt: Date.now() - 60000 });
+  assert.equal(calls.pauses.length, 1, 'подмена остаётся паузой');
+  assert.equal(calls.pauses[0].kind, 'marker-mismatch');
+  assert.match(calls.pauses[0].reason, /turn_id чужой/, 'и причина названа точно, а не списком из трёх');
 }
 
 // ── 12. Маркера нет — обычное ожидание ─────────────────────────────────────
