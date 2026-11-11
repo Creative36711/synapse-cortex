@@ -82,13 +82,14 @@ const rt = (p) =>
   assert.ok(ownerBranch > 0, 'ветка «ожидание другой роли» на месте');
   assert.ok(at < ownerBranch, 'очередь приёмки важнее ожидания чужого хода');
 
-  const around = src.slice(Math.max(0, at - 700), at + 400);
-  assert.match(around, /me\.fn !== "Reviewer"/, 'приёмка не зовёт себя');
-  assert.match(around, /startAnswer\(missionForAnswer, waiting\)/, 'и ставит ход отдельной записью');
-
   // Раньше вопрос не доходил: цикл возвращался к странице ожидания выше.
   const tick = cut('async function tick(fromToggle = false) {', '\n  // ──');
+  const answerGate = tick.indexOf('if ((fromToggle || autoOn()) && !GM_getValue(K.expect, null))');
   const early = tick.indexOf('const waiting = answerPending();');
+  assert.ok(answerGate >= 0 && answerGate < early, 'новый ответный ход запускается только без живого ожидания');
+  assert.ok(tick.includes('const missionForAnswer = await missionForQuestion(waiting, await activeMission().catch(() => null));'),
+    'адресатный ход собирает контекст миссии исходного вопроса');
+  assert.ok(tick.includes('startAnswer(missionForAnswer, waiting)'), 'адресатный ход использует собранную миссию');
   const late = tick.indexOf('if (expect?.kind === "dispatch")');
   assert.ok(early > 0 && late > early, 'проверка стоит в начале тика, до разбора хода');
 }

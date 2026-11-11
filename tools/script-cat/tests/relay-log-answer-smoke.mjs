@@ -86,7 +86,37 @@ const report =
   assert.equal(answer.parts, 1, 'ответ не потерялся и не удвоился');
 }
 
-// 1.5. answerBody не считает служебные строки отчётом.
+// 1.5. Адресный возврат — граница исходного отчёта: он и реплики после него
+// не примешиваются к результату автора, который позже читается Coordinator.
+{
+  const returned = 'АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА · question_id q1';
+  const laterReply = 'Ответ автора на адресный возврат: уточнение, не часть отчёта.';
+  const before = [
+    { id: 'm1', text: report },
+    { id: 'm2', text: marker('d1', 'r1') },
+    { id: 'm3', text: returned },
+    { id: 'm4', text: laterReply },
+  ];
+  const { runAnswer } = buildAnswer(() => before);
+  const preserved = runAnswer({ watermark: 'w' }, before[1]);
+  assert.equal(preserved.parts, 2, 'до адресного возврата сохранены отчёт и исходный маркер');
+  assert.ok(preserved.text.includes(report), 'исходный отчёт остаётся целым');
+  assert.ok(preserved.text.includes(marker('d1', 'r1')), 'исходное решение остаётся в журнале');
+  assert.doesNotMatch(preserved.text, /АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА|Ответ автора на адресный возврат/,
+    'транспортная реплика и ответ автора не портят исходный отчёт');
+
+  const after = [
+    { id: 'm1', text: report },
+    { id: 'm2', text: returned },
+    { id: 'm3', text: laterReply },
+    { id: 'm4', text: marker('d1', 'r1') },
+  ];
+  const bounded = buildAnswer(() => after).runAnswer({ watermark: 'w' }, after[3]);
+  assert.equal(bounded.parts, 1, 'маркер-хвост после возврата не примешивается к отчёту');
+  assert.equal(bounded.text, report, 'после возврата остаётся только исходное тело');
+}
+
+// 1.6. answerBody не считает служебные строки отчётом.
 {
   const { answerBody } = buildAnswer(() => []);
   assert.equal(answerBody('### Часть 1 из 2\n\nCF_AGENT_RESULT {"pr":32}'), 0, 'подпись части и маркер — не текст');
@@ -146,6 +176,7 @@ assert.ok(!/## Ответ \$\{role\.name\}\\n\\n\$\{hit\.text\}/.test(src), 'з�
     'dispatchGuard',
     'rt',
     'questionInMarker',
+    'deferredResultFor',
     'appendToJournal',
     // D-046: проверка противоречия pr/merged стоит до чтения карточки и до Drive.
     'prMergeConflict',
@@ -181,6 +212,7 @@ assert.ok(!/## Ответ \$\{role\.name\}\\n\\n\$\{hit\.text\}/.test(src), 'з�
     () => null,
     (value) => String(value ?? ''),
     () => ({ kind: 'none' }),
+    () => ({ found: false, decision: null, error: '' }),
     async (...args) => {
       appendCalls.push(args);
       throw stopAfterAppend;

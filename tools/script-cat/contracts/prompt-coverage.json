@@ -64,7 +64,9 @@
     "R-QUESTIONS": [
       "adr.protocol",
       "answer.protocol",
-      "questions.protocol"
+      "questions.outgoing",
+      "questions.protocol",
+      "role.answer.protocol"
     ],
     "R-QUEUE": [
       "authority.coordinator",
@@ -131,6 +133,9 @@
     "continuation.review": [
       "R-MARKER"
     ],
+    "continuation.role.answer": [
+      "R-MARKER"
+    ],
     "coordinator.plan": [
       "R-D028",
       "R-MARKER",
@@ -191,6 +196,7 @@
       "R-DOCS",
       "R-MARKER",
       "R-MASTER-ONLY",
+      "R-QUESTIONS",
       "R-ROLES",
       "R-VERIFY-GITHUB"
     ],
@@ -201,6 +207,7 @@
       "R-MARKER",
       "R-MASTER-ONLY",
       "R-PR",
+      "R-QUESTIONS",
       "R-ROLES",
       "R-VERIFY-GITHUB"
     ],
@@ -217,6 +224,10 @@
       "R-SECRETS",
       "R-VERIFY-GITHUB",
       "R-ZONES"
+    ],
+    "role.answer": [
+      "R-MARKER",
+      "R-QUESTIONS"
     ]
   },
   "profileAudience": {
@@ -245,6 +256,13 @@
     ],
     "continuation.review": [
       "Reviewer"
+    ],
+    "continuation.role.answer": [
+      "Executor",
+      "Auditor",
+      "Coordinator",
+      "Reviewer",
+      "Maintainer"
     ],
     "coordinator.plan": [
       "Coordinator"
@@ -278,7 +296,8 @@
     ],
     "reviewer.mission": [
       "Reviewer"
-    ]
+    ],
+    "role.answer": []
   },
   "profileGitWrite": {
     "admin.provision": [],
@@ -289,6 +308,7 @@
     "continuation.pilot": [],
     "continuation.plan": [],
     "continuation.review": [],
+    "continuation.role.answer": [],
     "coordinator.plan": [],
     "coordinator.recovery": [],
     "delivery.compact": [],
@@ -301,6 +321,7 @@
     "reviewer.answer": [],
     "reviewer.arbiter": [],
     "reviewer.card": [],
-    "reviewer.mission": []
+    "reviewer.mission": [],
+    "role.answer": []
   }
 }

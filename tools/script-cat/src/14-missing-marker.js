@@ -112,15 +112,32 @@
    */
   function runAnswer(expect, hit) {
     const seen = new Set();
+    const includedIds = new Set();
     const parts = [];
+    const isAddressReturn = (text) => /^АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА(?:\s|$)/i.test(String(text || "").trim());
     const push = (m) => {
       const text = String((m && m.text) || "").trim();
-      if (!text || seen.has(text)) return;
+      // Адресный ответ после gate — это продолжение состояния, не часть
+      // отчёта автора. Кириллица не входит в ASCII-границу \b, поэтому здесь
+      // проверяем явный пробел/конец строки и отсекаем весь хвост после возврата.
+      if (!text || isAddressReturn(text) || seen.has(text)) return;
       seen.add(text);
+      if (m?.id) includedIds.add(String(m.id));
       parts.push(text);
     };
-    messagesAfter(expect.watermark).forEach(push);
-    push(hit);
+    const replies = messagesAfter(expect.watermark);
+    let returnSeen = false;
+    for (const message of replies) {
+      if (isAddressReturn(message?.text || message?.raw)) {
+        returnSeen = true;
+        break;
+      }
+      push(message);
+    }
+    // После возврата роли-автору может ответить на уведомление, но этот текст
+    // уже не часть исходного отчёта. Сохраняем marker-hit до возврата, если он
+    // есть; синтетический fallback из более позднего сообщения не примешиваем.
+    if (!returnSeen || (hit?.id && includedIds.has(String(hit.id)))) push(hit);
     const text = parts
       .map((part, i) => (parts.length > 1 ? `### Часть ${i + 1} из ${parts.length}\n\n${part}` : part))
       .join("\n\n");

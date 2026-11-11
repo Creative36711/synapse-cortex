@@ -24,8 +24,9 @@
 
   const toolLimitRoleFn = (e) =>
     e.kind === "plan" ? "Coordinator"
-      : (e.kind === "review" || e.kind === "answer" || e.kind === "arbiter") ? "Reviewer"
-        : (e.roleFn || "Executor");
+      : (e.kind === "review" || e.kind === "arbiter") ? "Reviewer"
+        : e.kind === "answer" ? (e.roleFn || "Reviewer")
+          : (e.roleFn || "Executor");
 
   /** Запись исхода tool-limit в журнал попытки. Без секретов и полных текстов. */
   function journalToolLimit(expect, status, outcome, envelope) {

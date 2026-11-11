@@ -43,6 +43,7 @@ const rich = (text) => ({ rich_text: text ? [{ plain_text: text }] : [] });
 const ROLE = { id: '01a19d2b-bd07-722f-bbdb-20ba2f90028b', name: 'Executor Core', fn: 'Executor', url: 'https://arena.ai/agent/exec', status: 'Активна' };
 const K = {
   expect: 'cfn-expect', pending: 'cfn-pending', lastSend: 'cfn-last-send', deadSend: 'cfn-dead-send',
+  answers: 'cfn-answer-queue', answerReturns: 'cfn-answer-return-queue',
   log: 'cfn-console-log', pause: 'cfn-pause-context', paused: 'cfn-paused', step: 'cfn-step',
 };
 
@@ -156,7 +157,7 @@ function makeFlush({ withGM = true, ack = true, absent = [], fail = false, timeo
 }
 {
   const h = makeFlush();
-  assert.deepEqual(h.handoffKeys(), [K.expect, K.pending, K.lastSend, K.log, 'cfn-me', 'cfn-nav', 'cfn-prompt-journal-v1'],
+  assert.deepEqual(h.handoffKeys(), [K.expect, K.pending, K.answers, K.answerReturns, K.lastSend, K.log, 'cfn-me', 'cfn-nav', 'cfn-prompt-journal-v1'],
     'барьер накрывает всё, что теряется при переходе');
 }
 

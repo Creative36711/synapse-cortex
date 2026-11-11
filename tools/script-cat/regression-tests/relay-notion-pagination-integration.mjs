@@ -109,7 +109,7 @@ const queue = { summary: '0 Submitted, 0 Running, 0 Ready, 0 Rework, 0 Draft' };
   assert.match(h.sends[0].text, /Принятых карточек: 35/);
   assert.match(h.sends[0].text, /STAB-1\.35/);
   assert.match(h.sends[0].text, /STAB-1\.29.*Check=fail/);
-  assert.match(h.sends[0].text, /Accepted — состояние карточки, не доказательство pass/);
+  assert.match(h.sends[0].text, /Accepted не доказывает pass/);
   assert.match(h.sends[0].text, /CF_REVIEW_RESULT/);
   assert.match(h.sends[0].text, /Предел доработок 3/);
 }

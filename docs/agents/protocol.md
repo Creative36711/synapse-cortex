@@ -2,7 +2,8 @@
 
 ## Виды ходов (kind)
 `dispatch` (рабочая карточка), `plan` (очередь Координатора), `review` (приёмка
-миссии), `answer` (ответ на вопрос), `reminder` (напоминание о маркере),
+миссии), `answer` (ответ на вопрос: Warden/Reviewer по умолчанию или точная активная
+роль из `need`), `reminder` (напоминание о маркере),
 `retry` (компактный повтор), `pilot` (эфемерный прогон SYN-P1),
 `provision` (административный запрос создания/замены Arena-агентов, не миссия и
 не рабочая карточка), `arbiter` (D-053 — разбор повторяющейся петли перевыдачи:
@@ -16,7 +17,9 @@ D-034, 1.4 — прайм маркера Координатора и адрес 
 plan.note D-042; аддитивно к 1.0; D-043 — транспорт-внутренний порядок проверки
 бюджета выдачи, D-044 — квитанция подтверждённой доставки и восстановление отметки
 перед уборкой фантомов; версия контракта не менялась, 1.11 — противоречие
-`pr:null`/`merged:true` лечится напоминанием D-046).
+`pr:null`/`merged:true` лечится напоминанием D-046; D-105 аддитивно описывает
+необязательный `question` и durable-возврат результата при `gate:true + need`, не
+меняя required-поля и `protocolVersion`).
 
 ## Профили и бюджеты overhead
 | Профиль | Роль | Маркер | Overhead |
@@ -27,6 +30,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 | coordinator.recovery | Coordinator | CF_COORDINATOR_RESULT | ≤1500 |
 | reviewer.mission | Reviewer | CF_REVIEW_RESULT | ≤2400 |
 | reviewer.answer | Reviewer | CF_ANSWER_RESULT | ≤1800 |
+| role.answer | активная роль из точного `need` | CF_ANSWER_RESULT | ≤1800 |
 | reviewer.card | Reviewer | CF_AGENT_RESULT | ≤2000 |
 | reviewer.arbiter | Reviewer | CF_ARBITER_RESULT | ≤2400 |
 | reminder.marker | любая | по виду хода | ≤700 |
@@ -36,6 +40,7 @@ plan.note D-042; аддитивно к 1.0; D-043 — транспорт-вну�
 | continuation.plan | Coordinator | CF_COORDINATOR_RESULT | ≤700 |
 | continuation.review | Reviewer | CF_REVIEW_RESULT | ≤700 |
 | continuation.answer | Reviewer | CF_ANSWER_RESULT | ≤700 |
+| continuation.role.answer | активная роль из точного `need` | CF_ANSWER_RESULT | ≤700 |
 | continuation.arbiter | Reviewer | CF_ARBITER_RESULT | ≤700 |
 | continuation.pilot | pilot | нет | ≤250 |
 | admin.provision | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | ≤1800 |
@@ -408,6 +413,38 @@ Provisioning не пишет `K.pending/K.expect`, не создаёт стра�
 **protocolVersion остаётся 1.11** (аддитивно, форма маркера не менялась).
 Регрессия — `relay-answer-handoff-smoke`, обновлены `relay-answer-smoke` и
 `relay-question-gate-smoke`.
+
+## Durable-возврат результата по `gate` (D-105)
+
+В каждом result-маркере `question` — необязательное поле; объект вопроса несёт
+`text`, полный `default` и при необходимости `options`, `gate`, `need`. Обычный
+вопрос не меняет текущий маршрут. `need` без `gate:true` игнорируется, а `gate:true`
+без точного активного `need` не удерживает ход. Только пара
+`question.gate=true` + `question.need="<точное имя активной роли>"` включает
+адресный gate.
+
+Для такого gate транспорт сначала сохраняет в durable-очереди полный исходный
+результат: marker, `kind`, `ref`, исходный `run_id`/`turn_id`, снимок ожидания и
+объект решения. До ответа этот результат не применяется. Ответный ход `answer`
+адресуется точной активной роли из `need`; неизвестный, отключённый или
+неоднозначный адресат не заменяется Reviewer/Coordinator по умолчанию.
+
+После ответа в «Обратной связи» возврат сохраняется отдельной квитанцией ДО
+очистки живого ожидания. Транспорт отправляет его исходному автору по точному
+`sourceRoleId`; только подтверждённая доставка восстанавливает отложенный ход.
+Перед применением заново сверяются `question_id`, UUID возврата, исходная роль,
+маркер и исходные `kind/ref/run_id/turn_id`. Результат продолжается с теми же
+исходными ID; повтор после перезагрузки идемпотентен, несовпавшее ожидание не
+перезаписывается. Если Мастер уже поставил «Решено» в Notion, сохранённый ответ
+не переписывается. Адресная реплика и весь хвост после неё исключены из исходного
+отчёта/журнала.
+
+Особый маршрут Coordinator сохраняется: ответ на его плановый вопрос
+возвращается ему новым планом, а строку «Обратная связь» создаёт транспорт,
+не Координатор вручную. Пробы — `relay-deferred-result-smoke.mjs`,
+`relay-log-answer-smoke.mjs`, `relay-answer-smoke.mjs` и `prompts-smoke.mjs`.
+`protocolVersion` остаётся **1.11**: поля вопроса необязательны, required-поля
+существующих маркеров и их ID не меняются.
 
 ## Инварианты
 - #37: `Check=fail` не выдаётся как Rework+Ready одним ответом.

@@ -41,7 +41,7 @@
     // Профиль, у которого предел строже общего по роли: ответ на вопрос
     // содержит сам вопрос целиком (до 12000 знаков, D-072), и «Answer ≤6000» —
     // про инструкции, иначе вопрос не доедет.
-    const PROFILE_TOTAL = { "reviewer.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
+    const PROFILE_TOTAL = { "reviewer.answer": 14000, "role.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
 
     /** Предел текста для запроса: профиль важнее роли, роль важнее общего. */
     function totalLimit(request, profileId) {

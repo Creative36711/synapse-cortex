@@ -116,10 +116,10 @@ const cut = (start, end) => {
   // `new Function` не видит внешних `const`: каждое свободное имя фрагмента
   // передаётся параметром, иначе — ReferenceError или тихий `undefined`.
   const make = new Function(
-    'roleRows', 'norm', 'reviewerRole', 'log', 'logThrottled', 'oneLine', 'dropAnswer', 'answerQueue',
+    'roleRows', 'missionForQuestion', 'norm', 'reviewerRole', 'log', 'logThrottled', 'oneLine', 'dropAnswer', 'answerQueue',
     'notion', 'sel', 'Q', 'questionFromRowComplete', 'verifiedAdrMaterial', 'sendToRole', 'answerPrompt',
     'uid', 'GM_getValue', 'K',
-    `async function startAnswer(mission, item) {${body.slice(0, body.lastIndexOf('  }'))}} return startAnswer;`,
+    `async function startAnswer(mission, item) { const questionMission = await missionForQuestion(item, mission); ${body.slice(0, body.lastIndexOf('  }'))}} return startAnswer;`,
   );
   const roles = [
     { name: 'Warden', status: 'Активна', url: 'https://arena.ai/agent/01a1c045-1111-7222-8333-944455556666', fn: 'Reviewer' },
@@ -128,6 +128,7 @@ const cut = (start, end) => {
   ];
   const build = (over = {}) => make(
     async () => roles,
+    async (_item, fallback) => fallback,
     (x) => String(x || '').trim().toLowerCase(),
     async () => roles[1],
     (t) => calls.log.push(t),
@@ -200,19 +201,21 @@ const cut = (start, end) => {
   const coordinator = PromptCompiler.compile(planRequest()).text;
   const executor = PromptCompiler.compile(dispatchRequest('Executor')).text;
 
-  assert.match(coordinator, /Обратная связь — question в маркере/, 'канал назван «обратной связью», а не «вопросом»');
-  assert.match(coordinator, /gate\+need — ход ждёт этой роли/, 'сказано, что gate+need держит ход именно этой роли');
-  assert.match(coordinator, /ответ вернётся|вернётся следующим планом/, 'сказано, что ответ вернётся — иначе канал выглядит односторонним');
-  assert.match(coordinator, /Срочно нужен ответ роли — question с need:"<роль>", не next:"blocked"/,
+  assert.match(coordinator, /question в маркере/, 'канал обратной связи привязан к полю маркера');
+  assert.match(coordinator, /gate:true\s*\+\s*need:/, 'адресный gate-вопрос задаёт точную роль');
+  assert.match(coordinator, /Ответ вернётся Координатору новым планом/, 'ответ возвращает Координатора к следующему плану');
+  assert.match(coordinator, /Срочно нужен ответ: question с gate:true \+ need:/,
     'прямой канал противопоставлен остановке — именно это Координатор и не знал');
   assert.match(coordinator, /Обратную связь в Notion руками не пиши/, 'запрет ручной записи сохранён');
 
   // Исполнителю адрес не нужен, а бюджет его карточки платить не должен.
   assert.doesNotMatch(executor, /не next:"blocked"/, 'исполнителю клауза про остановку не нужна');
-  assert.match(executor, /Обратная связь — question в маркере/, 'канал назван и у исполнителя');
+  assert.match(executor, /question в маркере/, 'канал назван и у исполнителя');
+  assert.match(executor, /Результат вернётся с прежними ID после ответа/,
+    'gate-ответ возобновляет тот же результат с прежними ID');
 
   // Не «вопрос ради вопроса»: обычный вопрос по-прежнему не держит ход.
-  assert.match(executor, /Вопрос ход НЕ держит/, 'обычный вопрос не останавливает работу');
+  assert.match(executor, /Без gate — по default/, 'обычный вопрос не останавливает работу');
 }
 
 console.log('OK: D-083 — прямой вопрос к роли уходит адресату и держит ход, остановка для этого не нужна');

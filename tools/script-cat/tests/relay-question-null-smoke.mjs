@@ -44,9 +44,11 @@ assert.doesNotMatch(
 );
 assert.match(
   src,
-  /questionInMarker\(result\.question, "Работа идёт по решению исполнителя"\)/,
-  'исполнитель: вопрос без варианта получает вариант «решение исполнителя»',
+  /const outgoingQuestion = result\.question != null\s*\? result\.question\s*:\s*review\?\.decision\?\.question != null\s*\? review\.decision\.question : null;/,
+  'исполнитель: null не создаёт вопрос, а review-вопрос не теряется',
 );
+assert.match(src, /if \(!expect\.deferredResult && outgoingQuestion != null\)/,
+  'только непустой вопрос обрабатывается как follow-up');
 assert.match(
   src,
   // D-083: вариант по умолчанию зависит от next — при остановке работа по

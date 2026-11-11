@@ -83,19 +83,14 @@ assert.match(
   'ход уходит приёмке только по gate и этим завершается, иначе next применяется',
 );
 assert.match(src, /ход идёт дальше по /, 'и в журнале сказано, что ход продолжается');
-assert.match(
-  src,
-  /if \(expect\.kind === "answer"\) await answerStep\(me, expect, fromToggle\);/,
-  'в тике ход-ответ подключён к приёмке',
-);
+assert.match(src, /expect\?\.kind === "answer"/, 'в тике есть ветка адресного ответа');
+assert.match(src, /await answerStep\(me, expect, fromToggle\);/, 'адресный ход-ответ подключён к выбранной роли');
 // D-081: очередь приёмки проверяется ДО ветки «ожидание принадлежит другой
 // роли». Раньше проверка стояла ниже, и пока цикл чего-то ждал, вопрос в
 // приёмку не попадал вовсе — Координатор спрашивал, а Warden не получал хода.
-assert.match(
-  src,
-  /if \(me\.fn !== "Reviewer" && \(fromToggle \|\| autoOn\(\)\)\) \{\s*\n\s*const waiting = answerPending\(\);/,
-  'очередь приёмки читается до выбора страницы',
-);
+assert.match(src, /if \(\(fromToggle \|\| autoOn\(\)\) && !GM_getValue\(K\.expect, null\)\)/,
+  'очередь приёмки запускается только без другого живого ожидания');
+assert.match(src, /const waiting = answerPending\(\);/, 'очередь ответов читается в начале тика');
 {
   const at = src.indexOf('const waiting = answerPending();');
   const ownerBranch = src.indexOf('if (expect && norm(expect.roleId) !== norm(me.id)) {');
@@ -188,6 +183,7 @@ const api = new Function(
   // «страница отрисована» это состояние окружения, а не логика ответа.
   'stillWorking', 'busyLabel', 'busyReason', 'pageReady',
   `${promptShim}
+const roleRows = roles;
 ${block}
    return { answerQueue, queueAnswer, dropAnswer, answerPending, answerPrompt, startAnswer, answerStep };`,
 )(
@@ -252,7 +248,7 @@ ${block}
   },
   (url) => url || '',
   () => {},
-  () => {},
+  (_key, text) => calls.logs.push(String(text)),
   (work) => work(), (value) => Boolean(value), () => true,
   // D-101: окружение доставки. По умолчанию агент не печатает и страница
   // отрисована; конкретные пробы меняют эти два факта через api.__working/__page.
@@ -349,7 +345,7 @@ const question = {
   assert.equal(calls.pauses.length, 0, 'никого не будим');
 }
 
-// ── 8. Приёмки нет: вопрос остаётся Мастеру, цикл не встаёт ────────────────
+// ── 8. Приёмки нет: вопрос остаётся в durable-очереди без ложной паузы ───────
 {
   reset();
   api.__reviewer = null;
@@ -357,9 +353,10 @@ const question = {
   const sent = await api.startAnswer(mission, item);
   assert.equal(sent, false, 'передавать некому');
   assert.equal(calls.sends.length, 0, 'никому не отправлено');
-  assert.equal(api.answerQueue().length, 0, 'из очереди снят, чтобы не крутиться');
-  assert.equal(calls.pauses.length, 0, 'паузы нет: вопрос закроется сроком или Мастером');
-  assert.ok(calls.logs.some((l) => /отвечать некому/.test(l)), 'сказано честно');
+  assert.equal(api.answerQueue().length, 1, 'вопрос сохраняется для повтора, когда появится активный адресат');
+  assert.equal(api.answerPending().id, 'q-1', 'отсутствие Reviewer не теряет единственную копию вопроса');
+  assert.equal(calls.pauses.length, 0, 'паузы нет: очередь ждёт готового Reviewer');
+  assert.ok(calls.logs.some((l) => /активный Warden\/Reviewer/.test(l)), 'причина названа без потери durable-очереди');
 }
 
 // ── 9. Вердикт answer: «Ответ», «Решено», ход Координатору ─────────────────
@@ -382,7 +379,7 @@ const question = {
   assert.equal(calls.plans.length, 1, 'ход вернулся Координатору');
   assert.equal(calls.plans[0].role, 'Coordinator', 'план запрошен у Координатора');
   assert.equal(calls.plans[0].opts.force, true, 'троттлинг плана не мешает');
-  assert.match(calls.plans[0].note, /Ответ на вопрос записан/, 'Координатору сказано, что делать');
+  assert.match(calls.plans[0].note, /Ответ на вопрос .*записан/, 'Координатору сказано, что ответ уже записан');
   assert.equal(calls.pauses.length, 0, 'цикл не встал');
 }
 
@@ -535,7 +532,7 @@ const question = {
   await runAnswerStep({ watermark: 'w-7', ref: 'q-1', kind: 'answer' });
   assert.equal(calls.patches.length, 0, 'чужое решение не перезаписано');
   assert.equal(api.answerQueue().length, 0, 'с очереди снят');
-  assert.ok(calls.logs.some((l) => /закрыт раньше приёмки/.test(l)), 'в журнале сказано, почему');
+  assert.ok(calls.logs.some((l) => /закрыт раньше адресата/.test(l)), 'в журнале сказано, почему ответ не перезаписывался');
   assert.equal(calls.plans.length, 1, 'ход всё равно возвращается Координатору');
   assert.equal(calls.pauses.length, 0, 'паузы нет');
   api.__rowStatus = 'Ждёт';

@@ -179,8 +179,8 @@ assert.match(refreshSrc, /статус файла меняет исполнит�
 // ── 5. Промпт приёмки знает про предложения (декларативно) ────────────────
 const { PromptCompiler, answerRequest, dispatchRequest } = await import('./helpers/prompt-env.mjs');
 const ans = PromptCompiler.compile(answerRequest()).text;
-assert.match(ans, /Отвечай по существу/, 'приёмка отвечает по существу');
-assert.match(ans, /сам оракул\/файлы не меняй/, 'статус/файлы меняет не приёмка');
+assert.match(ans, /Дай самодостаточное решение/, 'приёмка отвечает по существу');
+assert.match(ans, /оракул\/файлы не меняй/, 'статус/файлы меняет не приёмка');
 const exe = PromptCompiler.compile(dispatchRequest('Executor')).text;
 assert.match(exe, /статус accepted\/rejected после ответа/, 'статус файла меняет исполнитель');
 

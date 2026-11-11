@@ -43,7 +43,7 @@
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
       // D-087: `git.docs` — потому что объявленная редакция ТЗ и очереди публикуется
       // веткой и PR, а раньше у приёмки не было ни права, ни порядка это делать.
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.outgoing", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
@@ -56,12 +56,24 @@
       budget: { overhead: 1800 },
       conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
     });
+    // Addressed replies use the target role, not the Reviewer profile. This
+    // keeps Maintainer outside ordinary dispatch/provisioning while allowing
+    // it (and the four standard functions) to answer a gate-question.
+    const answerRoles = [...team, "Maintainer"];
+    def("role.answer", {
+      audience: answerRoles, marker: "CF_ANSWER_RESULT",
+      blocks: ["identity.answer", "answer.question", "role.answer.protocol", "questions.protocol", "answer.resume", "marker.answer"],
+      requiredFacts: ["role.name", "question.id", "turnId"],
+      forbidden: ["git.executor", "git.auditor", "task.assignment", "queue.coordinator", "review.evidence", "review.protocol"],
+      budget: { overhead: 1800 },
+      conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
+    });
     // D-053: разбор повторяющейся петли. Это не приёмка миссии: оракула
     // миссии здесь нет, зато есть факты одной карточки и её журнал попыток.
     // Полного задания и git-записи у арбитра нет — он ничего не делает руками.
     def("reviewer.arbiter", {
       audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
-      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "marker.arbiter"],
+      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "questions.outgoing", "marker.arbiter"],
       requiredFacts: ["arbiter.cardId", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "marker.review", "marker.answer",
         "task.assignment", "task.acceptance", "task.scope", "task.intent", "task.invariants", "task.freedom",
@@ -71,7 +83,7 @@
     });
     def("reviewer.card", {
       audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.outgoing", "marker.agent"],
       requiredFacts: ["task.id", "task.runId"],
       forbidden: ["git.executor"],
       budget: { overhead: 2000 },
@@ -128,6 +140,12 @@
     });
     def("continuation.answer", {
       audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
+      requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.role.answer", {
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], marker: "CF_ANSWER_RESULT",
       blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
       requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
       budget: { overhead: 700 },
@@ -195,7 +213,7 @@
       // без git.
       if (kind === "answer" || kind === "review" || kind === "arbiter") {
         if (tier === "compact" || tier === "retry") {
-          return kind === "answer" ? "continuation.answer"
+          return kind === "answer" ? (fn === "Reviewer" ? "continuation.answer" : "continuation.role.answer")
             : kind === "review" ? "continuation.review" : "continuation.arbiter";
         }
       }
@@ -204,7 +222,7 @@
         if (kind === "pilot") return "continuation.pilot";
         if (kind === "plan") return "continuation.plan";
         if (kind === "review") return "continuation.review";
-        if (kind === "answer") return "continuation.answer";
+        if (kind === "answer") return fn === "Reviewer" ? "continuation.answer" : "continuation.role.answer";
         if (kind === "arbiter") return "continuation.arbiter";
         return "continuation.dispatch";
       }
@@ -212,7 +230,7 @@
       if (kind === "reminder") return "reminder.marker";
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
       if (kind === "review") return "reviewer.mission";
-      if (kind === "answer") return "reviewer.answer";
+      if (kind === "answer") return fn === "Reviewer" ? "reviewer.answer" : "role.answer";
       if (kind === "arbiter") return "reviewer.arbiter";
       if (kind === "dispatch" || kind === "retry") {
         if (fn === "Auditor") return "auditor.card";

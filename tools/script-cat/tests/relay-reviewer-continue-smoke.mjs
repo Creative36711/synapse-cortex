@@ -42,16 +42,18 @@ assert.match(body, /Continue на странице приёмки не прин�
 assert.match(body, /continueButton\(\) \? true : Boolean/, 'сначала быстрая проверка: нет кнопки — нет лишних пяти секунд');
 
 // ── 2. Три пути приёмки вызывают этот конец хода ────────────────────────────
-assert.match(answers, /finishReviewerTurn\("вопрос закрыт приёмкой"\)/, 'ответ на вопрос закрывает ход приёмки');
+assert.match(answers, /finishReviewerTurn\("ответ на вопрос сохранён"\)/, 'ответ на вопрос закрывает ход приёмки');
 assert.match(review, /finishReviewerTurn\("миссия принята"\)/, 'принятая миссия закрывает ход приёмки');
 assert.match(review, /finishReviewerTurn\("приёмка просит Мастера"\)/, 'остановка тоже не оставляет сессию слитой');
 assert.match(arbiter, /finishReviewerTurn\("петля разобрана"\)/, 'разбор петли закрывает ход приёмки');
 
 // ── 3. Порядок: Continue до результата и до перехода ───────────────────────
 {
-  const i = answers.indexOf('finishReviewerTurn("вопрос закрыт приёмкой")');
+  const i = answers.indexOf('finishReviewerTurn("ответ на вопрос сохранён")');
+  const directReturn = answers.indexOf('const result = await startAnswerReturn(returnEvent)', i);
   const plan = answers.indexOf('await requestPlan(mission, coord, queue, note', i);
-  assert.ok(i > 0 && plan > i, 'Continue нажимается до запроса плана, а не после');
+  assert.ok(i > 0 && directReturn > i && plan > directReturn,
+    'Continue нажимается до адресного возврата; план запрашивается только после его обработки');
   const j = review.indexOf('finishReviewerTurn("миссия принята")');
   const patch = review.indexOf('await patch(mission.id, {', j);
   assert.ok(j > 0 && patch > j, 'Continue нажимается до записи «Завершена»');
@@ -59,7 +61,7 @@ assert.match(arbiter, /finishReviewerTurn\("петля разобрана"\)/, '
 
 // ── 4. Ни одного «пустого» вызова: ошибка Continue не съедает ход ──────────
 for (const [file, pattern] of [
-  ['27-review-answers.js', /finishReviewerTurn\("вопрос закрыт приёмкой"\)\.catch/],
+  ['27-review-answers.js', /finishReviewerTurn\("ответ на вопрос сохранён"\)\.catch/],
   ['26-review.js', /finishReviewerTurn\("миссия принята"\)\.catch/],
   ['26b-arbiter.js', /finishReviewerTurn\("петля разобрана"\)\.catch/],
 ]) {

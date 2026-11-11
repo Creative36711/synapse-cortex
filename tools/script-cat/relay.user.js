@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.31
+// @version      1.14.32
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "28c4d7fc7573a19e",
+    buildFingerprint: "2cd985f043b52665",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -384,6 +384,10 @@
     deadSend: "cfn-dead-send",
     qQueue: "cfn-q-queue",
     answers: "cfn-answer-queue",
+    // Ответы, которые записаны в Notion, но ещё не возвращены напрямую автору
+    // вопроса. Отдельная durable queue: K.pending остаётся единственным
+    // последовательным транспортом, а этот ключ переживает навигацию/сбой.
+    answerReturns: "cfn-answer-return-queue",
     collapsed: "cfn-panel-collapsed",
     stateV: "cfn-state-v",
     rolesCache: "cfn-roles-cache",
@@ -506,7 +510,7 @@
   }
 
   /** Ключи, потеря которых при переходе ломает ход, а не только удобство. */
-  const handoffKeys = () => [K.expect, K.pending, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
+  const handoffKeys = () => [K.expect, K.pending, K.answers, K.answerReturns, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
 
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */
@@ -734,7 +738,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.31";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.32";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -5428,15 +5432,32 @@
    */
   function runAnswer(expect, hit) {
     const seen = new Set();
+    const includedIds = new Set();
     const parts = [];
+    const isAddressReturn = (text) => /^АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА(?:\s|$)/i.test(String(text || "").trim());
     const push = (m) => {
       const text = String((m && m.text) || "").trim();
-      if (!text || seen.has(text)) return;
+      // Адресный ответ после gate — это продолжение состояния, не часть
+      // отчёта автора. Кириллица не входит в ASCII-границу \b, поэтому здесь
+      // проверяем явный пробел/конец строки и отсекаем весь хвост после возврата.
+      if (!text || isAddressReturn(text) || seen.has(text)) return;
       seen.add(text);
+      if (m?.id) includedIds.add(String(m.id));
       parts.push(text);
     };
-    messagesAfter(expect.watermark).forEach(push);
-    push(hit);
+    const replies = messagesAfter(expect.watermark);
+    let returnSeen = false;
+    for (const message of replies) {
+      if (isAddressReturn(message?.text || message?.raw)) {
+        returnSeen = true;
+        break;
+      }
+      push(message);
+    }
+    // После возврата роли-автору может ответить на уведомление, но этот текст
+    // уже не часть исходного отчёта. Сохраняем marker-hit до возврата, если он
+    // есть; синтетический fallback из более позднего сообщения не примешиваем.
+    if (!returnSeen || (hit?.id && includedIds.has(String(hit.id)))) push(hit);
     const text = parts
       .map((part, i) => (parts.length > 1 ? `### Часть ${i + 1} из ${parts.length}\n\n${part}` : part))
       .join("\n\n");
@@ -8133,6 +8154,24 @@
     return null;
   }
 
+  /** Своя реплика прямого возврата ответа — только по его уникальному turn_id. */
+  function answerReturnInChat(expect) {
+    const turnId = String(expect?.turnId || "");
+    if (expect?.kind !== "answer-return" || !isUuid(turnId)) return null;
+    if (!expect.roleId || norm(roleFromPath()) !== norm(expect.roleId)) return null;
+    if (expect.captcha === true || GM_getValue(K.pending, null)?.captcha === true) return null;
+    const dead = GM_getValue(K.deadSend, "");
+    const shape = new RegExp(`"turn_id"\\s*:\\s*"${turnId}"`, "i");
+    const nodes = userMessages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      if (!shape.test(messageRaw(nodes[i]))) continue;
+      const id = nodeId(nodes[i]);
+      if (!id || (dead && id === dead)) continue;
+      return { id, at: idTime(id) };
+    }
+    return null;
+  }
+
   /**
    * Восстановить отметку отправки по квитанции или по самой реплике в чате.
    * Возвращает восстановленное ожидание либо null, если доказательств нет.
@@ -8143,7 +8182,7 @@
     const proof = receipt
       ? { messageId: receipt.messageId, sentAt: Number(receipt.sentAt), watermark: receipt.watermark, seen: receipt.seen, source: "квитанция доставки" }
       : (() => {
-          const node = dispatchPromptInChat(expect) || reviewTurnInChat(expect);
+          const node = dispatchPromptInChat(expect) || reviewTurnInChat(expect) || answerReturnInChat(expect);
           if (!node) return null;
           return {
             messageId: node.id, sentAt: node.at || Number(expect.at) || Date.now(),
@@ -8196,6 +8235,19 @@
     if (!expect || Number(expect.sentAt)) return null;
     if (!ignoreQueue && GM_getValue(K.pending, null)) return null;
     if (restoreMissingSendMark(expect)) return null;
+    if (expect.kind === "answer-return") {
+      if (!GM_getValue(K.pending, null) && String(expect.text || "").trim()) {
+        GM_setValue(K.pending, {
+          roleId: expect.roleId, roleName: expect.roleName, roleUrl: expect.roleUrl,
+          roleFn: expect.roleFn || "", kind: expect.kind, ref: expect.ref,
+          questionId: expect.questionId || expect.ref, missionId: expect.missionId || "",
+          turnId: expect.turnId, title: expect.title || "прямой возврат ответа",
+          sourceRoleName: expect.sourceRoleName || "", sourceRoleId: expect.sourceRoleId || "",
+          text: expect.text, at: Date.now(),
+        });
+      }
+      return null;
+    }
     const rolled = await releaseUndelivered(expect, why);
     GM_setValue(K.expect, null);
     GM_setValue("cfn-plan-at", 0);
@@ -8379,6 +8431,61 @@
     return false;
   }
 
+  /** Восстановить прямой возврат ответа по question_id + уникальному turn_id. */
+  async function adoptOrphanAnswerReturn(pending, me) {
+    if (GM_getValue(K.expect, null) || pending?.kind !== "answer-return") return false;
+    const questionId = String(pending.questionId || pending.ref || "");
+    const ref = String(pending.ref || questionId);
+    const turnId = String(pending.turnId || "");
+    if (!isUuid(questionId) || !isUuid(ref) || norm(questionId) !== norm(ref) || !isUuid(turnId) || !pending.roleId) {
+      pause("В очереди остался прямой возврат ответа без корректных question_id/turn_id/адресата. Квитанцию и текст сохраняю; вслепую не отправляю.", {
+        kind: "orphan-answer-return", ref, turnId,
+      });
+      return true;
+    }
+    const restored = {
+      roleId: pending.roleId, roleName: pending.roleName || "", roleUrl: pending.roleUrl || "",
+      roleFn: pending.roleFn || "", kind: "answer-return", ref, questionId,
+      missionId: String(pending.missionId || ""), turnId,
+      title: pending.title || "прямой возврат ответа автору вопроса",
+      sourceRoleName: pending.sourceRoleName || "", sourceRoleId: pending.sourceRoleId || "",
+      watermark: "", seen: [], at: Number(pending.at) || Date.now(),
+      tries: 0, lastReplySig: "", lastReplyAt: 0,
+      text: String(pending.text || ""), prompt: null, adoptedFromQueue: true,
+    };
+    if (!restored.text.trim()) {
+      pause("Очередь прямого возврата не содержит текста. Ответ в Notion не потерян; отправку не повторяю вслепую.", {
+        kind: "orphan-answer-return", ref, turnId,
+      });
+      return true;
+    }
+    const who = await roleAddress(pending);
+    if (!who || who.status !== "Активна" || !who.url) {
+      pause(`Автор ответа «${pending.roleName || pending.roleId}» не готов к сверке чата. Очередь и квитанция сохранены; не отправляю ролью по умолчанию.`, {
+        kind: "answer-return-role", ref, turnId,
+      });
+      return true;
+    }
+    if (!me || norm(me) !== norm(pending.roleId)) {
+      return navigateTo(who, "там ждёт прямой возврат ответа без ожидания");
+    }
+    const shell = appReady();
+    if (!shell.ok) {
+      pendingSay(pending, `Страница «${who.name}» ещё грузится (${shell.why}) — сверю адресный возврат, не повторяя его.`);
+      return true;
+    }
+    GM_setValue(K.expect, restored);
+    if (restoreMissingSendMark(restored)) {
+      GM_setValue(K.pending, null);
+      pendingNoticeAt = 0;
+      log(`Прямой возврат ответа восстановлен по квитанции/turn_id ${turnId}: дубль не отправляю, проверяю подтверждение.`, true);
+      return true;
+    }
+    GM_setValue(K.pending, { ...pending, at: Date.now() });
+    log(`Прямой возврат ответа ${turnId} восстановлен без доказательства доставки; повторяю только сохранённое сообщение один раз.`, true);
+    return false;
+  }
+
   async function adoptOrphanDispatch(pending, me) {
     if (GM_getValue(K.expect, null)) return false;
     const text = String(pending.text || "");
@@ -8537,7 +8644,8 @@
     // маркер, который ход просит вернуть. Нераспознанная очередь сохраняет
     // прежнее осторожное поведение — её не отправляем.
     const queueText = String(pending.text || "");
-    const reviewQueue = isReviewTurnKind(waitingForPolicy?.kind) ||
+    const answerReturnQueue = waitingForPolicy?.kind === "answer-return" || (!waitingForPolicy && pending.kind === "answer-return");
+    const reviewQueue = isReviewTurnKind(waitingForPolicy?.kind) || answerReturnQueue ||
       (!waitingForPolicy && /\bCF_(REVIEW|ANSWER|ARBITER)_RESULT\b/.test(queueText));
     if (workPending && (waitingForPolicy.roleFn === "Reviewer" ||
         norm(waitingForPolicy.roleName) === norm("Warden"))) {
@@ -8548,9 +8656,9 @@
     if (workPending || orphanPending) {
       // Старые очереди без roleFn, псевдонимы с тем же URL и роли, изменившиеся
       // после постановки в очередь. На границе отправки нельзя верить кешу.
-      if (workPending && norm(waitingForPolicy.roleId) !== norm(pending.roleId)) {
-        pause("Ожидание и очередь адресованы разным агентам. Оба сохранены; проверьте чат и Run ID.",
-          { kind: "reviewer-task-check", ref: waitingForPolicy.ref || "" });
+      if ((workPending || (answerReturnQueue && waitingForPolicy)) && norm(waitingForPolicy.roleId) !== norm(pending.roleId)) {
+        pause("Ожидание и очередь адресованы разным агентам. Оба сохранены; проверьте чат и ID возврата.",
+          { kind: answerReturnQueue ? "answer-return-changed" : "reviewer-task-check", ref: waitingForPolicy.ref || "", turnId: waitingForPolicy.turnId || "" });
         return true;
       }
       let owners;
@@ -8582,6 +8690,10 @@
       }
     }
 
+    // Прямой ответ автору — тоже не рабочая карточка: при потерянном ожидании
+    // его сверяем по question_id/turn_id и чату, не снимая ответ из Notion.
+    if (await adoptOrphanAnswerReturn(pending, me)) return true;
+
     // Ход приёмки без ожидания сверяется по номеру хода, а не по карточке:
     // карточки у него нет (D-055).
     if (await adoptOrphanReview(pending, me)) return true;
@@ -8601,6 +8713,14 @@
     const age = Date.now() - Number(pending.at || 0);
     // Неотправленное задание ждёт Мастера дольше: он узнаёт о паузе не сразу,
     // а очередь — это тот же ход, который не надо начинать заново.
+    if (age > (pending.undelivered ? C.undeliveredTtlMs : C.pendingTtlMs) && pending.kind === "answer-return") {
+      GM_setValue(K.pending, { ...pending, at: Date.now(), busySince: 0 });
+      pause(`Прямой возврат ответа автору «${pending.roleName || pending.roleId}» не подтверждён за ${Math.round(age / 60000)} мин. ` +
+        "Очередь, ожидание и ответ в Notion сохранены; не считаю доставленным и не отправляю Coordinator вместо автора. Проверьте чат и нажмите «Продолжить».", {
+        kind: "answer-return-undelivered", ref: pending.ref || "", turnId: pending.turnId || "",
+      });
+      return true;
+    }
     if (age > (pending.undelivered ? C.undeliveredTtlMs : C.pendingTtlMs)) {
       GM_setValue(K.pending, null);
       // Карточку возвращаем с любой страницы: отметки отправки нет, работы не
@@ -10335,12 +10455,12 @@
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const defs = {
       CF_COORDINATOR_RESULT: { kind: "plan", ids: ["mission_id", "turn_id"], role: "Coordinator" },
-      CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
-      CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
-      CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
+      CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor|Reviewer", optional: ["check", "report", "pr", "merged", "question", "artifacts"] },
+      CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer", optional: ["summary", "remarks", "reason", "dispatch_id", "run_id", "question"] },
+      CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Executor|Auditor|Coordinator|Reviewer|Maintainer", optional: ["answer", "reason", "question"] },
       // D-053: разбор повторяющейся петли. Карточка и ход названы явно: вердикт
       // арбитра обязан относиться именно к этой выдаче, а не к похожей.
-      CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer" },
+      CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer", optional: ["action", "reason", "fix", "summary", "question"] },
       CF_AGENT_PROVISION_RESULT: { kind: "provision", ids: ["request_id"], role: "Coordinator|Reviewer" },
     };
     const forKind = (kind, roleFn) => {
@@ -10501,17 +10621,17 @@
     // руками, он находит лишь затем, чтобы подписать и передать приёмке.
     // Поэтому первая фраза теперь называет канал явно, а «не пиши руками» —
     // отдельным запретом, а не следствием из формата.
-    def("questions.protocol", { version: 4, ruleIds: ["R-QUESTIONS"], render: (c) => [
-      'Обратная связь — question в маркере {"text","options","default","gate","need"}; default обязателен, пиши его целиком (длина не ограничена); ≤1/ход; ответ строкой. Вопрос ход НЕ держит; gate+need — ход ждёт этой роли, ответ вернётся. Опрос в чате — остановка, не делай.',
-      // D-082: клауза только Координатору.
-      //
-      // Правило общее, но нарушил его он один: 09.11 создал два предложения
-      // прямо в «Обратной связи» и считал, что спросил Warden. Держать запрет в
-      // общем блоке не вышло — карточка исполнителя упирается в свой бюджет
-      // (2800) на каждом знаке, а платили бы все роли за промах одной. У
-      // Координатора запас есть, и запрет стоит там, где его и нарушают.
-      c.role?.fn === "Coordinator" ? " Обратную связь в Notion руками не пиши — только этим полем, запись делает транспорт. Срочно нужен ответ роли — question с need:\"<роль>\", не next:\"blocked\"." : "",
-    ].filter(Boolean).join("") });
+    def("questions.protocol", { version: 7, ruleIds: ["R-QUESTIONS"], audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
+      'Обратная связь: question в маркере: text/options/default/gate/need; default пиши его целиком (длина не ограничена); ≤1/ход. Без gate — по default; gate:true+need:"<точная активная роль>" держат результат. Чат-опрос запрещён.',
+      c.role?.fn === "Coordinator" && c.kind === "plan"
+        ? ' Ответ вернётся Координатору новым планом. Срочно нужен ответ: question с gate:true + need:"<роль>", не next:"blocked". Обратную связь в Notion руками не пиши — запись делает транспорт.'
+        : ' Результат вернётся с прежними ID после ответа.',
+    ].join("") });
+    // Встречный вопрос не заменяет исходный result. gate+need адресуют ответ
+    // и после него возобновляют прежнее решение с теми же ID.
+    def("questions.outgoing", { version: 2, ruleIds: ["R-QUESTIONS"],
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      'Вопрос — поле question того же маркера: {text,options,default,gate,need}; default обязателен целиком, ≤1/ход. Без gate маршрут не меняется. gate:true + need:"<точное имя активной роли>" удерживают результат до ответа; Relay продолжит его с прежними ID.' });
 
     def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
       "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
@@ -10557,9 +10677,17 @@
       c.mission?.result ? `ИТОГ МИССИИ:\n${c.mission.result}` : "ИТОГ МИССИИ: поле «Итог» пусто — повод не принимать.",
     ].filter(Boolean).join("\n") });
     def("review.protocol", { ruleIds: ["R-EVIDENCE", "R-VERIFY-GITHUB"], audience: ["Reviewer"], render: () =>
-      "Смотри, выполнено ли то, о чём миссия, а не только «всё ли выдано». Каждый пункт оракула закрывай командой или артефактом; нельзя запустить команду — это замечание. Accepted — состояние карточки, не доказательство pass; Check=fail и остатки не скрывай. Заявленное в «Итоге» сверь с реально сделанным карточками." });
+      "Проверь цель миссии и каждый пункт оракула командой или артефактом; незапущенное — замечание. Accepted не доказывает pass: не скрывай Check=fail и остатки. Сверь «Итог» с реально сделанными карточками." });
 
-    def("answer.question", { verbatim: true, render: (c) => [
+    def("identity.answer", { verbatim: true,
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
+      `Адресный ответ для роли «${c.role?.name}» (${c.role?.fn}).`,
+      `question_id: ${c.question?.id}`,
+      `turn_id: ${c.turnId || c.question?.turnId}`,
+      c.mission?.id ? `mission_id: ${c.mission.id}` : "",
+    ].filter(Boolean).join("\n") });
+    def("answer.question", { verbatim: true,
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
       c.question?.role ? `Вопрос задал: ${c.question.role}` + (c.question.card ? ` · карточка «${c.question.card}»` : "") : "",
       "ВОПРОС",
       c.question?.fullText || c.question?.text,
@@ -10574,9 +10702,12 @@
         : "",
     ].filter(Boolean).join("\n") });
     def("answer.protocol", { ruleIds: ["R-QUESTIONS"], audience: ["Reviewer"], render: () =>
-      "Отвечай по существу: что делать, где граница, по какому признаку считать сделанным. Ответ самодостаточен — агент увидит его без твоего чата. По ADR решай в пределах делегированных полномочий, сам оракул/файлы не меняй. Мастера зови только когда без него физически нельзя (новый агент, доступ, решение по ТЗ)." });
-    def("answer.resume", { audience: ["Reviewer"], render: () =>
-      "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
+      "Дай самодостаточное решение: действие, граница, проверяемый критерий. ADR решай в делегированных пределах; оракул/файлы не меняй. Зови Мастера лишь при физической необходимости (агент, доступ, ТЗ)." });
+    def("role.answer.protocol", { ruleIds: ["R-QUESTIONS"],
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      "Ты отвечаешь на адресный вопрос в пределах своей функции и зоны: дай самодостаточное решение, границу и проверяемый критерий. Не меняй статусы и не повторяй работу. Если для ответа нужен другой адресат — вопрос добавь в свой CF_ANSWER_RESULT; gate:true + need временно удержат этот результат и вернут его с тем же turn_id после подтверждённого ответа." });
+    def("answer.resume", { audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      "Продолжай тот же вопрос с прежними question_id/turn_id, без нового хода. Если Мастер поставил «Решено» в Notion — не перезаписывай ответ." });
 
     // ── D-053: арбитраж повторяющейся петли ────────────────────────────────
     // Пауза «карточку перевыдали N раз» перестала быть первой реакцией: сначала
@@ -10601,8 +10732,8 @@
 
     const markerJson = (c, name) => {
       if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
-      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
-      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
+      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>","question":null}`;
+      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>","question":null}`;
       const auditor = c.role?.fn === "Auditor";
       // D-046: литерал `"merged":true` рядом с `"pr":"<URL|null>"` учил агента
       // противоречию «PR нет, но слит» — проверочные K-27 и K-34 уходили в
@@ -10610,7 +10741,8 @@
       // для настоящего PR ведёт к проверке по GitHub, а не вместо неё. Когда
       // ставить true, говорит правило ниже. Шаблон обязан оставаться валидным
       // JSON: `validateMarkerIds` разбирает его целиком.
-      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":false}`);
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` +
+        (auditor ? "}" : `,"pr":"<URL|null>","merged":false${c.role?.fn === "Reviewer" ? `,"question":null` : ""}}`);
     };
     def("marker.agent", { version: 3, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
@@ -10658,20 +10790,22 @@
       // в который полный текст маркера не влезает (815).
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
+        "Если нужен встречный вопрос, добавь его в question; блокирует только gate:true + need.",
         "Если доказательств не хватает — не принимай миссию.",
-        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
+        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","question":null}`,
       ].join("\n");
       return [
-      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
+      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Встречный вопрос добавь в question; маршрут меняет только gate:true вместе с need. Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
       ].filter(Boolean).join("\n");
     } });
     def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
-      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
+      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>","question":null}`;
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
-        "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Встречный вопрос — в question; блокирует только gate:true + need.",
         "Решение по карточке обязательно: resolve с action или master.",
         resolve,
       ].join("\n");
@@ -10679,19 +10813,25 @@
       // строка продолжает работу по решению арбитра, но не останавливает цикл
       // молча. Остановка — осознанный выбор, а не значение по умолчанию.
       return [
-        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл.",
-        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>"}`,
+        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл. Встречный вопрос — в question; задерживает только gate:true вместе с need.",
+        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>","question":null}`,
         resolve,
       ].join("\n");
     } });
-    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
-        "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
-        "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
-        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,
+        "Последней строкой — CF_ANSWER_RESULT: answer или master.",
+        "Встречный вопрос — в question; только gate:true + need удерживают результат.",
+        "Ручное «Решено» в Notion не перезаписывай.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","question":null}`,
       ].join("\n");
-      return [
-        "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+      if (c.kind === "reminder") return [
+        "В конце дай CF_ANSWER_RESULT: verdict answer или master.",
+        "Встречный question: поля text, options, default, gate, need; default обязателен целиком. Только gate:true + need удерживают результат; Relay продолжит его с прежними ID.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","question":null}`,
+      ].join("\n");
+      return [,
+        "Последней строкой — один маркер: answer (решение) или master (причина). Вопрос — поле question (text/options/default/gate/need), default обязателен целиком. Только gate:true + need:\"<точное имя активной роли>\" удерживают этот результат до ответа и возобновляют с прежними ID. Ответ увидят агент и Координатор:",
         c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
         markerJson(c, "CF_ANSWER_RESULT"),
       ].filter(Boolean).join("\n");
@@ -10768,7 +10908,7 @@
     } });
 
     // ── continuation после tool-call limit: тот же ход, новые IDs не создаём ──
-    def("delivery.tool_limit", { version: 2, render: (c) => {
+    def("delivery.tool_limit", { version: 2, audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       // D-103: причина повтора — отдельный факт.
       //
       // 10.11 Arena дважды отклонила сообщение Warden'у («Something went
@@ -10792,7 +10932,7 @@
       if (c.kind === "arbiter") return "Продолжи разбор петли после лимита инструментов. Это не новая карточка и не новая выдача.\nНе правь код и карточки. Дочитай факты и вынеси решение по этой же карточке.";
       return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
     } });
-    def("identity.continue", { render: (c) => {
+    def("identity.continue", { audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
       if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
       if (c.kind === "arbiter") return `IDs прежние: dispatch_id=${c.arbiter?.cardId}, turn_id=${c.turnId}.`;
@@ -10888,7 +11028,7 @@
       audience: ["Reviewer"], marker: "CF_REVIEW_RESULT",
       // D-087: `git.docs` — потому что объявленная редакция ТЗ и очереди публикуется
       // веткой и PR, а раньше у приёмки не было ни права, ни порядка это делать.
-      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.protocol", "marker.review"],
+      blocks: ["identity.mission", "queue.snapshot", "repo.boundary", "role.zone", "authority.core", "authority.reviewer", "git.docs", "evidence.rule", "review.evidence", "review.protocol", "questions.outgoing", "marker.review"],
       requiredFacts: ["mission.id", "turnId"],
       forbidden: ["git.executor", "marker.agent", "task.assignment"],
       budget: { overhead: 2400 },
@@ -10901,12 +11041,24 @@
       budget: { overhead: 1800 },
       conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
     });
+    // Addressed replies use the target role, not the Reviewer profile. This
+    // keeps Maintainer outside ordinary dispatch/provisioning while allowing
+    // it (and the four standard functions) to answer a gate-question.
+    const answerRoles = [...team, "Maintainer"];
+    def("role.answer", {
+      audience: answerRoles, marker: "CF_ANSWER_RESULT",
+      blocks: ["identity.answer", "answer.question", "role.answer.protocol", "questions.protocol", "answer.resume", "marker.answer"],
+      requiredFacts: ["role.name", "question.id", "turnId"],
+      forbidden: ["git.executor", "git.auditor", "task.assignment", "queue.coordinator", "review.evidence", "review.protocol"],
+      budget: { overhead: 1800 },
+      conditions: { "answer.resume": (c) => Boolean(c.question?.masterEscalated) },
+    });
     // D-053: разбор повторяющейся петли. Это не приёмка миссии: оракула
     // миссии здесь нет, зато есть факты одной карточки и её журнал попыток.
     // Полного задания и git-записи у арбитра нет — он ничего не делает руками.
     def("reviewer.arbiter", {
       audience: ["Reviewer"], marker: "CF_ARBITER_RESULT",
-      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "marker.arbiter"],
+      blocks: ["identity.mission", "arbiter.case", "authority.reviewer", "arbiter.protocol", "questions.outgoing", "marker.arbiter"],
       requiredFacts: ["arbiter.cardId", "turnId"],
       forbidden: ["git.executor", "git.auditor", "marker.agent", "marker.review", "marker.answer",
         "task.assignment", "task.acceptance", "task.scope", "task.intent", "task.invariants", "task.freedom",
@@ -10916,7 +11068,7 @@
     });
     def("reviewer.card", {
       audience: ["Reviewer"], marker: "CF_AGENT_RESULT",
-      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "marker.agent"],
+      blocks: ["identity.task", "repo.target", "authority.reviewer", "evidence.rule", "drive.artifacts", "task.acceptance", "task.scope", "task.assignment", "questions.outgoing", "marker.agent"],
       requiredFacts: ["task.id", "task.runId"],
       forbidden: ["git.executor"],
       budget: { overhead: 2000 },
@@ -10973,6 +11125,12 @@
     });
     def("continuation.answer", {
       audience: ["Reviewer"], marker: "CF_ANSWER_RESULT",
+      blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
+      requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
+      budget: { overhead: 700 },
+    });
+    def("continuation.role.answer", {
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], marker: "CF_ANSWER_RESULT",
       blocks: ["delivery.tool_limit", "identity.continue", "marker.answer"],
       requiredFacts: ["question.id", "turnId"], forbidden: contForbidden,
       budget: { overhead: 700 },
@@ -11040,7 +11198,7 @@
       // без git.
       if (kind === "answer" || kind === "review" || kind === "arbiter") {
         if (tier === "compact" || tier === "retry") {
-          return kind === "answer" ? "continuation.answer"
+          return kind === "answer" ? (fn === "Reviewer" ? "continuation.answer" : "continuation.role.answer")
             : kind === "review" ? "continuation.review" : "continuation.arbiter";
         }
       }
@@ -11049,7 +11207,7 @@
         if (kind === "pilot") return "continuation.pilot";
         if (kind === "plan") return "continuation.plan";
         if (kind === "review") return "continuation.review";
-        if (kind === "answer") return "continuation.answer";
+        if (kind === "answer") return fn === "Reviewer" ? "continuation.answer" : "continuation.role.answer";
         if (kind === "arbiter") return "continuation.arbiter";
         return "continuation.dispatch";
       }
@@ -11057,7 +11215,7 @@
       if (kind === "reminder") return "reminder.marker";
       if (kind === "plan") return tier === "recovery" || tier === "compact" ? "coordinator.recovery" : "coordinator.plan";
       if (kind === "review") return "reviewer.mission";
-      if (kind === "answer") return "reviewer.answer";
+      if (kind === "answer") return fn === "Reviewer" ? "reviewer.answer" : "role.answer";
       if (kind === "arbiter") return "reviewer.arbiter";
       if (kind === "dispatch" || kind === "retry") {
         if (fn === "Auditor") return "auditor.card";
@@ -11113,7 +11271,7 @@
     // Профиль, у которого предел строже общего по роли: ответ на вопрос
     // содержит сам вопрос целиком (до 12000 знаков, D-072), и «Answer ≤6000» —
     // про инструкции, иначе вопрос не доедет.
-    const PROFILE_TOTAL = { "reviewer.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
+    const PROFILE_TOTAL = { "reviewer.answer": 14000, "role.answer": 14000, "reviewer.reminder": 1600, "coordinator.recovery": 5000 };
 
     /** Предел текста для запроса: профиль важнее роли, роль важнее общего. */
     function totalLimit(request, profileId) {
@@ -11862,6 +12020,13 @@
     const candidates = replies
       .map((m) => ({ ...m, result: parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_REVIEW_RESULT") }))
       .filter((m) => m.result);
+    const restored = deferredResultFor(expect, "CF_AGENT_RESULT");
+    if (restored.error) {
+      pause(`Отложенный результат карточки не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "dispatch-handoff-mismatch", ref: expect.ref || "", runId: expect.runId || "",
+      });
+      return true;
+    }
     // Синонимы допустимы, но ни один из них не может противоречить выдаче.
     // Совпадение только карточки недостаточно: она могла быть перевыдана.
     const matchesId = (result, names, expected) => {
@@ -11873,6 +12038,10 @@
     // Последний результат не заменяем более ранним подходящим: если новый
     // прислан с чужими ID, нужно сохранить его и остановиться для разбора.
     let hit = candidates.at(-1);
+    if (restored.found) {
+      const persistedReply = hit || replies.at(-1);
+      if (persistedReply) hit = { ...persistedReply, result: restored.decision };
+    }
     if (!hit) {
       // Напоминания исчерпаны — дальше пауза не помогает: работа сделана, а
       // страдает только формат. Читаем ответ по тексту, но обязательно с id
@@ -12043,31 +12212,8 @@
         return markerMissing(role, expect, "CF_REVIEW_RESULT", manual);
       }
     }
-    // `"question":null` — это «вопроса нет», а не «вопрос без варианта».
-    const asked = questionInMarker(result.question, "Работа идёт по решению исполнителя");
-    if (asked.kind === "asked") {
-      await askQuestion(asked.question, {
-        roleName: role.name,
-        card: taskTitle(page),
-        mission: rt(page.properties["Миссия"]),
-        key: `${result.dispatch_id}:${result.run_id}`,
-      });
-    } else if (asked.kind === "text") {
-      // Вопрос написан, а варианта по умолчанию нет. Раньше он выбрасывался:
-      // Мастер видел громкую ошибку и не видел вопроса. Записываем с честным
-      // вариантом — работа и так идёт по решению исполнителя.
-      log(
-        `Вопрос исполнителя пришёл без варианта по умолчанию — записан с вариантом «${asked.question.fallback}»: ответ Мастера дойдёт следующим ходом.`,
-        false,
-        { ntfy: "quiet", title: "Relay: вопрос без варианта по умолчанию" },
-      );
-      await askQuestion(asked.question, {
-        roleName: role.name,
-        card: taskTitle(page),
-        mission: rt(page.properties["Миссия"]),
-        key: `${result.dispatch_id}:${result.run_id}`,
-      });
-    }
+    // Вопрос обработается после проверки отчёта: gate не должен передать
+    // заведомо неполный/невалидный результат другому адресату.
     // Журнал собирается из всего хода: ответ мог прийти частями — отчёт первым
     // сообщением, маркер отдельным после напоминания. Маркер без отчёта в журнал
     // не пишем вовсе: именно такая запись и обманула Координатора на NAR-1.8.
@@ -12075,6 +12221,21 @@
     if (answer.body < C.minAnswerChars) {
       log(`В ответе ${role.name} только маркер, отчёта нет — в журнал не пишу.`, true);
       return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "thin");
+    }
+    const outgoingQuestion = result.question != null
+      ? result.question
+      : review?.decision?.question != null ? review.decision.question : null;
+    if (!expect.deferredResult && outgoingQuestion != null) {
+      const followup = await deferResultForQuestion(outgoingQuestion,
+        "Работа идёт по решению исполнителя", {
+          roleName: role.name,
+          roleId: role.id,
+          card: taskTitle(page),
+          mission: rt(page.properties["Миссия"]),
+          missionId: mission.id,
+          key: `${result.dispatch_id}:${result.run_id}`,
+        }, expect, "CF_AGENT_RESULT", result);
+      if (followup.held) return true;
     }
     const declaredLog = rt(page.properties["Output Drive File ID"]);
     if (!declaredLog) throw new Error("В карточке нет Output Drive File ID.");
@@ -15686,7 +15847,14 @@
       return true;
     }
     const replies = messagesAfter(expect.watermark);
-    const decision = replies.map((m) => parseMarker(m.raw, "CF_REVIEW_RESULT"))
+    const restored = deferredResultFor(expect, "CF_REVIEW_RESULT");
+    if (restored.error) {
+      pause(`Отложенный результат приёмки не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "review-handoff-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    const decision = restored.found ? restored.decision : replies.map((m) => parseMarker(m.raw, "CF_REVIEW_RESULT"))
       .filter(Boolean)
       .at(-1);
     if (!decision) return markerMissing(role, expect, "CF_REVIEW_RESULT", manual);
@@ -15701,6 +15869,17 @@
       return true;
     }
     const verdict = String(decision.verdict || "").trim().toLowerCase();
+    if (!restored.found && ["accept", "rework", "master"].includes(verdict) && decision.question != null) {
+      const followup = await deferResultForQuestion(decision.question,
+        "Результат приёмки подготовлен; встречный вопрос — адресный ход.", {
+          roleName: role.name,
+          roleId: role.id,
+          mission: rt(mission.properties["Миссия"]),
+          missionId: mission.id,
+          key: `review-followup:${mission.id}:${expect.turnId}`,
+        }, expect, "CF_REVIEW_RESULT", decision);
+      if (followup.held) return true;
+    }
     if (verdict === "accept") {
       // Очередь могла измениться, пока Reviewer проверял миссию. Старый
       // вердикт не распространяется на новые или незакрытые карточки.
@@ -16032,7 +16211,14 @@
       return true;
     }
     const replies = messagesAfter(expect.watermark);
-    const decision = replies.map((m) => parseMarker(m.raw, "CF_ARBITER_RESULT")).filter(Boolean).at(-1);
+    const restored = deferredResultFor(expect, "CF_ARBITER_RESULT");
+    if (restored.error) {
+      pause(`Отложенный арбитраж не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "arbiter-handoff-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    const decision = restored.found ? restored.decision : replies.map((m) => parseMarker(m.raw, "CF_ARBITER_RESULT")).filter(Boolean).at(-1);
     if (!decision) return markerMissing(role, expect, "CF_ARBITER_RESULT", manual);
 
     const turn = String(decision.turn_id || "").trim();
@@ -16052,6 +16238,18 @@
 
     const verdict = String(decision.verdict || "").trim().toLowerCase();
     if (verdict === "master") {
+      if (!restored.found && decision.question != null) {
+        const followup = await deferResultForQuestion(decision.question,
+          "Арбитраж подготовлен; встречный вопрос — адресный ход.", {
+            roleName: role.name,
+            roleId: role.id,
+            card: expect.title || cardId,
+            missionId: expect.missionId || "",
+            mission: expect.arbiter?.missionName || expect.missionName || "",
+            key: `arbiter-followup:${cardId}:${expect.turnId}`,
+          }, expect, "CF_ARBITER_RESULT", decision);
+        if (followup.held) return true;
+      }
       // Остановка цикла — право арбитра, но снимает её по-прежнему человек.
       GM_setValue(K.expect, null);
       GM_setValue(arbiterKey(cardId), []);
@@ -16091,6 +16289,18 @@
         { kind: "arbiter-marker", ref: cardId, turnId: expect.turnId || "" },
       );
       return true;
+    }
+    if (!restored.found && decision.question != null) {
+      const followup = await deferResultForQuestion(decision.question,
+        "Арбитраж подготовлен; встречный вопрос — адресный ход.", {
+          roleName: role.name,
+          roleId: role.id,
+          card: expect.title || cardId,
+          mission: expect.arbiter?.missionName || expect.missionName || "арбитраж по карточке",
+          missionId: expect.missionId || "",
+          key: `arbiter-followup:${cardId}:${expect.turnId}`,
+        }, expect, "CF_ARBITER_RESULT", decision);
+      if (followup.held) return true;
     }
 
     // Дальше карточка читается заново: между разбором и решением её могли
@@ -16204,8 +16414,11 @@
       options: Array.isArray(q.options) ? q.options : [],
       url: questionMaterial(q.url, `${q.text || ""} ${q.fullText || ""}`),
       role: ctx.roleName || "",
+      sourceRoleId: ctx.roleId || ctx.sourceRoleId || "",
       card: ctx.card || "",
       mission: ctx.mission || "",
+      missionId: ctx.missionId || "",
+      deferred: ctx.deferred || null,
       // D-083: адресат прямого вопроса обязан пережить очередь.
       //
       // `gate` держит ход, но «держать» без имени — это остановка ради
@@ -16228,14 +16441,143 @@
 
   const dropAnswer = (id) => GM_setValue(K.answers, answerQueue().filter((item) => item.id !== id));
 
+  const answerReturns = () => {
+    const stored = GM_getValue(K.answerReturns, []);
+    return Array.isArray(stored) ? stored : [];
+  };
+  const answerReturnPending = () => answerReturns()[0] || null;
+  function queueAnswerReturn(item, answer, deferred = null) {
+    const held = deferred || item?.deferred || null;
+    const sourceRoleId = String(item?.sourceRoleId || held?.sourceRoleId || held?.expect?.roleId || "");
+    const sourceName = String(item?.role || item?.sourceRoleName || held?.expect?.roleName || "").trim();
+    if (!item?.id || (!sourceRoleId && !sourceName) || !String(answer || "").trim()) return null;
+    const old = answerReturns().find((entry) => norm(entry.questionId) === norm(item.id));
+    const event = {
+      questionId: item.id,
+      sourceName,
+      sourceRoleId,
+      answer: String(answer).trim(),
+      question: String(item.text || item.questionText || ""),
+      card: String(item.card || item.sourceCard || ""),
+      mission: String(item.mission || ""),
+      missionId: String(item.missionId || item.sourceMissionId || ""),
+      deferred: held || old?.deferred || null,
+      turnId: old?.turnId || uid(),
+      at: old?.at || Date.now(),
+    };
+    const list = answerReturns().filter((entry) => norm(entry.questionId) !== norm(event.questionId));
+    list.push(event);
+    GM_setValue(K.answerReturns, list);
+    return event;
+  }
+  const dropAnswerReturn = (event) => GM_setValue(K.answerReturns, answerReturns().filter((row) =>
+    norm(row.questionId) !== norm(event?.questionId) || norm(row.turnId) !== norm(event?.turnId)));
+  function markAnswerReturnResuming(event) {
+    const list = answerReturns().map((row) =>
+      norm(row.questionId) === norm(event?.questionId) && norm(row.turnId) === norm(event?.turnId)
+        ? { ...row, resuming: true } : row);
+    GM_setValue(K.answerReturns, list);
+    return list.find((row) => norm(row.questionId) === norm(event?.questionId) && norm(row.turnId) === norm(event?.turnId)) || null;
+  }
+  function deferredReturnExpectation(event) {
+    const deferred = event?.deferred;
+    if (deferred?.version !== 1 || !deferred?.expect) {
+      return { expect: null, error: "нет поддерживаемого снимка исходного ожидания" };
+    }
+    const original = deferred.expect;
+    const saved = deferred.result;
+    const markerForKind = {
+      dispatch: "CF_AGENT_RESULT", review: "CF_REVIEW_RESULT",
+      arbiter: "CF_ARBITER_RESULT", answer: "CF_ANSWER_RESULT",
+    };
+    const sourceRoleId = deferred.sourceRoleId || original.roleId || "";
+    const idsValid = isUuid(original.ref) && isUuid(original.roleId) &&
+      (original.kind === "dispatch" ? isUuid(original.runId) : isUuid(original.turnId));
+    if (!isUuid(event?.questionId) || !isUuid(event?.turnId) || !idsValid ||
+        !sourceRoleId || norm(sourceRoleId) !== norm(original.roleId) ||
+        !saved || saved.version !== 1 || saved.marker !== markerForKind[original.kind] ||
+        norm(saved.kind) !== norm(original.kind) || norm(saved.ref) !== norm(original.ref) ||
+        norm(saved.turnId) !== norm(original.turnId) || !saved.decision || typeof saved.decision !== "object") {
+      return { expect: null, error: "маркер, решение, адресат или kind/ref/ID исходного хода не совпадает" };
+    }
+    const expect = { ...original, followupResolved: true, deferredResult: saved };
+    expect.resumedAnswerReturn = { questionId: event.questionId, turnId: event.turnId };
+    return { expect, error: "" };
+  }
+  function resumeDeferredAnswerReturn(event) {
+    const restored = deferredReturnExpectation(event);
+    if (restored.error) {
+      pause(`Прямой возврат ответа нельзя продолжить: ${restored.error}. Квитанция и очередь сохранены.`, {
+        kind: "answer-return-changed", ref: event?.questionId || "", turnId: event?.turnId || "",
+      });
+      return true;
+    }
+    const live = GM_getValue(K.expect, null);
+    const token = restored.expect.resumedAnswerReturn;
+    const sameIdentity = (left, right) => left && right &&
+      norm(left.kind) === norm(right.kind) && norm(left.ref) === norm(right.ref) &&
+      norm(left.turnId) === norm(right.turnId) &&
+      (!right.roleId || (left.roleId && norm(left.roleId) === norm(right.roleId)));
+    const tokenMatches = live?.resumedAnswerReturn &&
+      norm(live.resumedAnswerReturn.questionId) === norm(token.questionId) &&
+      norm(live.resumedAnswerReturn.turnId) === norm(token.turnId);
+    const alreadyRestored = Boolean(tokenMatches && sameIdentity(live, restored.expect));
+    const sameSource = sameIdentity(live, restored.expect);
+    const sameReturn = live?.kind === "answer-return" && norm(live.ref) === norm(event.questionId) &&
+      norm(live.turnId) === norm(event.turnId) &&
+      (!event.sourceRoleId || (live.roleId && norm(live.roleId) === norm(event.sourceRoleId)));
+    if (alreadyRestored) {
+      // Возврат пережил перезапуск уже после восстановления ожидания.
+    } else if (tokenMatches) {
+      pause("Квитанция возврата пережила перезапуск, но живое ожидание не совпадает с исходным ходом. Ничего не перезаписываю; решение сохранено.", {
+        kind: "answer-return-changed", ref: event.questionId || "", turnId: event.turnId || "",
+      });
+      return true;
+    } else if (!live || sameReturn || sameSource) {
+      GM_setValue(K.expect, restored.expect);
+    } else {
+      pause("Ответ доставлен, но живое ожидание уже относится к другому ходу. Ничего не перезаписываю; очередь возврата сохранена.", {
+        kind: "answer-return-changed", ref: event.questionId || "", turnId: event.turnId || "",
+      });
+      return true;
+    }
+    dropAnswerReturn(event);
+    return true;
+  }
+  function acknowledgeResumedAnswerReturn(expect) {
+    const token = expect?.resumedAnswerReturn;
+    if (!token) return expect;
+    const event = answerReturns().find((row) => norm(row.questionId) === norm(token.questionId) &&
+      norm(row.turnId) === norm(token.turnId));
+    if (event) dropAnswerReturn(event);
+    const clean = { ...expect };
+    delete clean.resumedAnswerReturn;
+    const live = GM_getValue(K.expect, null);
+    if (!live || norm(live.kind) !== norm(expect.kind) || norm(live.ref) !== norm(expect.ref) ||
+        norm(live.turnId) !== norm(expect.turnId) ||
+        (expect.roleId && (!live.roleId || norm(live.roleId) !== norm(expect.roleId)))) {
+      pause("Квитанция адресного возврата относится к другому живому ожиданию. Маркер и решение сохранены; не продолжаю чужой ход.", {
+        kind: "answer-return-changed", ref: token.questionId || "", turnId: token.turnId || "",
+      });
+      return expect;
+    }
+    GM_setValue(K.expect, clean);
+    return clean;
+  }
+
   const answerPending = () => answerQueue()[0] || null;
 
-  /** Промпт приёмке: ответить на вопрос агента по существу или позвать Мастера. */
+  /** Ответ на адресный вопрос; профиль выбирается по фактической роли-адресату. */
   function answerPrompt(mission, role, item, turnId) {
+    const missionId = mission?.id || item?.missionId || "";
     return compileOrPause({
       kind: "answer",
       role: promptRole(role),
-      mission: { id: mission.id, name: rt(mission.properties["Миссия"]) || "миссия", tzUrl: mission.properties["ТЗ URL"]?.url || "" },
+      mission: {
+        id: missionId,
+        name: rt(mission?.properties?.["Миссия"]) || item?.mission || "вопрос между ролями",
+        tzUrl: mission?.properties?.["ТЗ URL"]?.url || "",
+      },
       turnId, // тот же turn_id; после masterEscalated новый не создаётся
       question: {
         id: item.id, turnId,
@@ -16244,15 +16586,23 @@
         fallback: item.fallback, sourceUrl: item.pageUrl || item.url || "",
         role: item.role || "", card: item.card || "",
         masterEscalated: Boolean(item.masterEscalated),
-        // D-082: приёмка отвечает на одну запись за ход — так устроен ход, и это
-        // не изменится. Но «сколько ещё ждёт» она знать должна: 09.11 Warden
-        // отвечал на предложение и не видел второго, хотя оба лежали в базе.
-        // Факт ниже считает очередь приёмки, а не открытые строки базы: именно
-        // эта очередь и будет отдана ей следующими ходами, по одной.
         pending: answerQueue().length,
       },
       delivery: { tier: "full", attempt: 1 },
     }, `answer ${item.id}`);
+  }
+
+  /** Возвращает снимок миссии вопроса; закрытый статус не отменяет адресный ответ. */
+  async function missionForQuestion(item, candidate = null) {
+    const wanted = String(item?.missionId || "").trim();
+    if (candidate && (!wanted || norm(candidate.id) === norm(wanted))) return candidate;
+    if (wanted) {
+      try { return await notion("GET", `pages/${wanted}`); }
+      catch (e) {
+        logThrottled(`answer-mission:${wanted}`, `Миссию вопроса ${wanted} не удалось прочитать (${e.message}); использую активную, если она есть.`, true);
+      }
+    }
+    return candidate || await activeMission().catch(() => null);
   }
 
   /** Проверяем настоящий Git blob текста, а не один формальный маркер SHA. */
@@ -16277,10 +16627,7 @@
     return false;
   }
 
-  /**
-   * Передать вопрос приёмке. `true` — ход ушёл ей; `false` — отвечать некому
-   * (вопрос остаётся «Ждёт»; обычный может закрыться сроком, ADR ждёт ответа).
-   */
+  /** Передать gate-вопрос точной активной роли из need; иначе — Warden/Reviewer. */
   async function startAnswer(mission, item) {
     if (typeof questionBodyPending === "function" && questionBodyPending(item.id)) return false;
     if (typeof questionQueuedForAnswer === "function" && questionQueuedForAnswer(item)) return false;
@@ -16297,25 +16644,15 @@
         }
         item = { ...item, fullText: complete.fullText, url: complete.url || item.url };
       } catch (e) {
-        logThrottled(`adr-body:${item.id}`, `Предложение не передано приёмке: ${e.message}. Вопрос и ожидание сохранены; проверьте полный текст и SHA.`, true);
+        logThrottled(`adr-body:${item.id}`, `Предложение не передано адресату: ${e.message}. Вопрос и ожидание сохранены; проверьте полный текст и SHA.`, true);
         return false;
       }
     }
-    // D-083: «прямая обратная связь» — это адресованная обратная связь.
-    //
-    // Раньше адресата выбирала только функция роли: любой вопрос уходил
-    // активному Reviewer, а `need` из маркера не читался никем. Отсюда и
-    // тупик 09.11: Координатору нужен был именно Warden, назвать его было
-    // нечем — `need` работал только как повод остановить цикл. Теперь имя из
-    // `need` выбирает роль, а функция Reviewer остаётся запасным ответом.
+    const questionMission = await missionForQuestion(item, mission);
     const asked = String(item.need || "").trim();
-    const directory = asked ? await roleRows().catch(() => []) : [];
+    const directory = await roleRows().catch(() => []);
     const named = asked ? directory.find((r) => norm(r.name) === norm(asked)) : null;
-    // Роль названа, но ответить физически не может (нет строки, не «Активна»,
-    // пуст «Agent URL») — это не повод молча отдать вопрос другому: так
-    // Координатор и не узнал, что звал в пустоту. Оставляем в очереди: когда
-    // Мастер дозаполнит роль, вопрос уйдёт сам.
-    if (asked && !(named && (named.status || "") === "Активна" && named.url)) {
+    if (asked && !(named && named.status === "Активна" && named.url)) {
       logThrottled(
         `answer-need:${item.id}`,
         `Обратная связь «${oneLine(item.text, 90)}» адресована роли «${asked}», а она не готова ` +
@@ -16326,39 +16663,162 @@
       );
       return false;
     }
-    const role = named || (await reviewerRole());
+    let role = named || (await reviewerRole());
+    // Вопрос Warden'а без `need` не должен отправляться Warden'у самому.
+    // Явный `need` к себе — ошибка адресации; не подменяем его молча.
+    if (role && norm(role.name) === norm(item.role || "")) {
+      if (asked) {
+        logThrottled(`answer-self:${item.id}`, `Вопрос «${oneLine(item.text, 90)}» адресован автору «${role.name}» самому: назовите другую роль в need.`, true);
+        return false;
+      }
+      role = directory.find((r) => r.fn === "Coordinator" && r.status === "Активна" && r.url &&
+        norm(r.name) !== norm(item.role || "")) || null;
+    }
     if (!role) {
-      log(
-        "Вопрос записан, но активной роли с функцией Reviewer нет: отвечать некому, а адресат не назван — вопрос ждёт Мастера.",
-        false,
+      logThrottled(
+        `answer-no-role:${item.id}`,
+        `Вопрос «${oneLine(item.text, 90)}» не имеет доступного адресата-ответчика. Очередь сохранена; нужен активный Warden/Reviewer либо явный need.`,
+        true,
         { ntfy: "quiet", title: "Relay: отвечать на вопрос некому" },
       );
-      dropAnswer(item.id);
       return false;
     }
     const turnId = uid();
-    // D-068: «передан» пишем только тогда, когда ход действительно поставлен в
-    // очередь. Раньше строка печаталась до отправки и оставалась правдой даже
-    // при защитном отказе `sendToRole` (дубль, запрещённый адресат, окно
-    // настроек): в журнале ход «ушёл», а в очереди его нет — и цикл молча
-    // остаётся на странице Координатора.
-    const queued = await sendToRole(role, answerPrompt(mission, role, item, turnId), "answer", item.id, {
+    const queued = await sendToRole(role, answerPrompt(questionMission, role, item, turnId), "answer", item.id, {
       questionId: item.id,
-      missionId: mission.id,
+      missionId: questionMission?.id || item.missionId || "",
       turnId,
-      title: "ответ на вопрос агента",
+      title: "адресный ответ на вопрос",
+      sourceRoleName: String(item.role || ""),
+      sourceRoleId: String(item.sourceRoleId || ""),
+      sourceMissionId: String(item.missionId || questionMission?.id || ""),
+      sourceCard: String(item.card || ""),
+      questionText: String(item.text || ""),
+      // Keep the held source result on the live answer handoff as well as in
+      // K.answers: a storage interruption must not strand the only copy.
+      deferred: item.deferred || null,
     });
     if (!queued) {
-      log(
-        `Вопрос «${oneLine(item.text, 90)}» не передан приёмке: транспорт не поставил ход в очередь ` +
-          "(защитный отказ или окно настроек). Вопрос остаётся «Ждёт» и повторится на следующем шаге.",
+      logThrottled(
+        `answer-send:${item.id}:${turnId}`,
+        `Вопрос «${oneLine(item.text, 90)}» не передан «${role.name}»: транспорт не поставил ход в очередь. Вопрос остаётся «Ждёт» и не теряется.`,
         true,
         { ntfy: "quiet", title: "Relay: вопрос не передан" },
       );
       return false;
     }
-    log(`Вопрос «${oneLine(item.text, 90)}» передан приёмке «${role.name}».`, false, { ntfy: "quiet" });
+    log(`Вопрос «${oneLine(item.text, 90)}» передан роли «${role.name}»${asked ? ` (need=${asked})` : ""}.`, false, { ntfy: "quiet" });
     return true;
+  }
+
+  /** Разобрать и записать встречный вопрос из обычного result-маркера. */
+  async function askQuestionFromMarker(raw, fallback, ctx = {}) {
+    const parsed = questionInMarker(raw, fallback);
+    // В результатных маркерах только gate+need — блокирующая передача. Не
+    // превращаем gate без адресата в очередь на дефолтного Reviewer.
+    if (parsed.question?.gate && !String(parsed.question.need || "").trim()) {
+      parsed.question = { ...parsed.question, gate: false, need: "" };
+    }
+    if (parsed.kind === "none") return parsed;
+    if (parsed.kind === "text") {
+      log(
+        `Встречный вопрос роли «${ctx.roleName || "?"}» пришёл без варианта по умолчанию — записываю с вариантом «${parsed.question.fallback}».`,
+        false,
+        { ntfy: "quiet", title: "Relay: вопрос без варианта по умолчанию" },
+      );
+    }
+    const row = await askQuestion(parsed.question, ctx);
+    const queued = parsed.question.gate
+      ? answerQueue().find((entry) => entry.gate === true && norm(entry.text) === norm(parsed.question.text) &&
+          (!ctx.roleName || norm(entry.role) === norm(ctx.roleName))) || null
+      : null;
+    return { ...parsed, row, queued };
+  }
+
+  /** Связать gate-вопрос с полным результатом, который он временно удерживает. */
+  function attachDeferredQuestion(parsed, ctx, expect, result = null, parentDeferred = null) {
+    if (!parsed?.question?.gate || !parsed.question.need || !expect) return null;
+    const exactId = parsed.queued?.id || parsed.row?.id || "";
+    const index = answerQueue().findIndex((entry) => exactId
+      ? norm(entry.id) === norm(exactId)
+      : entry.gate === true && norm(entry.text) === norm(parsed.question.text) &&
+        (!ctx?.roleName || norm(entry.role) === norm(ctx.roleName)));
+    if (index < 0) return null;
+    const list = answerQueue();
+    const item = list[index];
+    let savedResult = null;
+    if (result?.marker && result?.decision) {
+      try {
+        savedResult = {
+          version: 1,
+          marker: String(result.marker),
+          kind: String(expect.kind || ""),
+          ref: String(expect.ref || ""),
+          turnId: String(expect.turnId || ""),
+          decision: JSON.parse(JSON.stringify(result.decision)),
+          parentDeferred: parentDeferred ? JSON.parse(JSON.stringify(parentDeferred)) : null,
+          at: Date.now(),
+        };
+      } catch (e) {
+        dbg("вопрос: результат не сериализовался", e.message);
+        return null;
+      }
+    }
+    const deferred = {
+      version: 1,
+      sourceRoleId: String(ctx?.roleId || expect.roleId || ""),
+      missionId: String(ctx?.missionId || expect.missionId || ""),
+      // Снимок ожидания, результатный маркер и решение сохраняются до передачи.
+      // Ответ вернётся только к этой роли и продолжит тот же turn_id.
+      expect: JSON.parse(JSON.stringify(expect)),
+      result: savedResult,
+    };
+    list[index] = { ...item, deferred };
+    GM_setValue(K.answers, list);
+    return list[index];
+  }
+
+  /** Вытащить сохранённое решение только для исходного маркера, вида хода и ID. */
+  function deferredResultFor(expect, marker) {
+    const saved = expect?.deferredResult;
+    if (!saved) return { found: false, decision: null, error: "" };
+    const valid = saved.version === 1 && saved.marker === marker &&
+      norm(saved.kind) === norm(expect.kind) && norm(saved.ref) === norm(expect.ref) &&
+      norm(saved.turnId) === norm(expect.turnId) && saved.decision && typeof saved.decision === "object";
+    return valid
+      ? { found: true, decision: saved.decision, error: "" }
+      : { found: true, decision: null, error: "сохранённый маркер, результат или turn_id не совпадает с исходным ходом" };
+  }
+
+  /** Обычный вопрос записывается; gate+need сначала сохраняет, затем передаёт результатный ход. */
+  async function deferResultForQuestion(raw, fallback, ctx, expect, marker, decision, parentDeferred = null) {
+    const parsed = await askQuestionFromMarker(raw, fallback, ctx);
+    if (!parsed.question?.gate || !parsed.question.need) return { held: false, parsed };
+    const live = GM_getValue(K.expect, null);
+    if (!live || norm(live.kind) !== norm(expect.kind) || norm(live.ref) !== norm(expect.ref) ||
+        norm(live.turnId) !== norm(expect.turnId) || (expect.roleId && norm(live.roleId) !== norm(expect.roleId))) {
+      pause("Пока записывался встречный вопрос, исходное ожидание изменилось. Результат сохранён в чате, другой ход не подменяю.", {
+        kind: "answer-handoff-changed", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return { held: true, parsed, queued: false };
+    }
+    const item = attachDeferredQuestion(parsed, ctx, expect, { marker, decision }, parentDeferred);
+    if (!item) {
+      pause("Встречный вопрос помечен gate+need, но его durable-очередь не найдена. Исходное ожидание и маркер сохранены; результат не применяю.", {
+        kind: "answer-handoff-missing", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return { held: true, parsed, queued: false };
+    }
+    const questionMission = await missionForQuestion(item, null);
+    const sent = await startAnswer(questionMission, item);
+    const current = GM_getValue(K.expect, null);
+    const routed = current?.kind === "answer" && norm(current.ref) === norm(item.id) &&
+      (!item.deferred?.expect?.roleId || norm(current.sourceRoleId) === norm(item.deferred.expect.roleId));
+    if (!sent && !routed) {
+      logThrottled(`result-question-held:${item.id}`, `Результат ${marker} сохранён с turn_id ${expect.turnId} и ждёт адресную выдачу «${item.need}»; повторю передачу, результат пока не применён.`, true,
+        { ntfy: "quiet", title: "Relay: результат ждёт ответ" });
+    }
+    return { held: true, parsed, queued: true, routed };
   }
 
   /**
@@ -16418,7 +16878,14 @@
   /** Ход приёмки по вопросу: записать ответ или позвать Мастера. */
   async function answerStep(role, expect, manual = false) {
     const replies = messagesAfter(expect.watermark);
-    let decision = replies.map((m) => parseMarker(m.raw, "CF_ANSWER_RESULT"))
+    const restored = deferredResultFor(expect, "CF_ANSWER_RESULT");
+    if (restored.error) {
+      pause(`Адресный результат не восстановлен: ${restored.error}. Ожидание и очередь сохранены.`, {
+        kind: "answer-handoff-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    let decision = restored.found ? restored.decision : replies.map((m) => parseMarker(m.raw, "CF_ANSWER_RESULT"))
       .filter(Boolean)
       .at(-1);
     // A `master` verdict pauses the cycle, but the Master may then answer in
@@ -16525,6 +16992,33 @@
     }
     const verdict = String(decision.verdict || "").trim().toLowerCase();
     let answer = String(decision.answer || "").trim();
+    const sourceItem = answerQueue().find((item) => norm(item.id) === norm(expect.ref)) || null;
+    if (verdict !== "answer" && verdict !== "master") {
+      pause(
+        `В маркере ответа нет verdict answer или master (пришло «${verdict || "пусто"}»): вопрос не закрываю. ` +
+          "Поправьте маркер в ответе адресата и нажмите «Продолжить».",
+        { kind: "answer-marker", ref: expect.ref },
+      );
+      return true;
+    }
+    if (verdict === "answer" && !answer) {
+      pause("Адресат ответил без текста решения: пустой ответ ничего не меняет, вопрос остаётся открытым.", {
+        kind: "answer-empty", ref: expect.ref,
+      });
+      return true;
+    }
+    if (!restored.found && !expect.followupResolved && decision.question != null) {
+      const followup = await deferResultForQuestion(decision.question,
+        "Исходный вопрос обработан; встречный вопрос — отдельный адресный ход.", {
+          roleName: role.name,
+          roleId: role.id,
+          card: sourceItem?.card || "",
+          mission: sourceItem?.mission || "",
+          missionId: expect.missionId || sourceItem?.missionId || "",
+          key: `answer-followup:${expect.ref}:${expect.turnId}`,
+        }, expect, "CF_ANSWER_RESULT", decision, sourceItem?.deferred || null);
+      if (followup.held) return true;
+    }
     if (verdict === "master") {
       const reason = firstLine(String(decision.reason || answer || "").trim()) || "приёмка не назвала причину";
       // Keep the exact answer expectation alive across the Master pause. A later
@@ -16545,21 +17039,6 @@
           "если ответ внесён вручную в Notion, поставьте «Решено» и нажмите «Продолжить».",
         { kind: "answer-needs-master", ref: expect.ref, notifyTitle: "Relay: вопрос ждёт Мастера" },
       );
-      return true;
-    }
-    if (verdict !== "answer") {
-      pause(
-        `В маркере ответа нет verdict answer или master (пришло «${verdict || "пусто"}»): вопрос не закрываю. ` +
-          "Поправьте маркер в ответе приёмки и нажмите «Продолжить».",
-        { kind: "answer-marker", ref: expect.ref },
-      );
-      return true;
-    }
-    if (!answer) {
-      pause("Приёмка ответила без текста решения: пустой ответ ничего не меняет, вопрос остаётся открытым.", {
-        kind: "answer-empty",
-        ref: expect.ref,
-      });
       return true;
     }
     // D-085: номер решения берётся из репозитория, а не из памяти модели.
@@ -16623,7 +17102,7 @@
         const row = await notion("GET", `pages/${expect.ref}`);
         const state = row?.properties?.["Статус"]?.select?.name || "";
         if (!state) throw new Error("статус строки не прочитан");
-        if (state !== Q.wait) return { state, answerRecorded: false };
+        if (state !== Q.wait) return { state, answerRecorded: false, answer: rt(row?.properties?.["Ответ"]).trim() };
         const current = GM_getValue(K.expect, null);
         if (!current || current.kind !== "answer" || norm(current.ref) !== norm(expect.ref) ||
             norm(current.turnId) !== norm(expect.turnId) ||
@@ -16647,20 +17126,48 @@
       return true;
     }
     const { state, answerRecorded } = result;
+    const savedAnswer = answerRecorded ? answer : String(result.answer || "").trim();
+    if (result.changed) {
+      pause("Вопрос обработан, но живое ожидание изменилось во время записи. Новое ожидание не перезаписываю.", {
+        kind: "answer-changed", ref: expect.ref, turnId: expect.turnId,
+      });
+      return true;
+    }
     // Не снимаем ожидание другого хода, если оно изменилось во время сети.
     const afterWrite = GM_getValue(K.expect, null);
-    if (afterWrite && afterWrite.kind === "answer" && norm(afterWrite.ref) === norm(expect.ref) &&
-        norm(afterWrite.turnId) === norm(expect.turnId)) GM_setValue(K.expect, null);
-    else {
+    if (!afterWrite || afterWrite.kind !== "answer" || norm(afterWrite.ref) !== norm(expect.ref) ||
+        norm(afterWrite.turnId) !== norm(expect.turnId)) {
       pause("Вопрос обработан, но ожидание изменилось во время записи. Проверьте обе попытки; новое ожидание сохранено.", {
         kind: "answer-changed", ref: expect.ref, turnId: expect.turnId,
       });
       return true;
     }
+    const sourceDeferred = sourceItem?.deferred || expect.deferred || null;
+    const sourceForReturn = sourceItem || {
+      id: expect.ref, text: expect.questionText || "", role: expect.sourceRoleName || "",
+      sourceRoleName: expect.sourceRoleName || "",
+      sourceRoleId: expect.sourceRoleId || sourceDeferred?.sourceRoleId || sourceDeferred?.expect?.roleId || "",
+      missionId: expect.sourceMissionId || expect.missionId || "",
+      mission: "", card: expect.sourceCard || "", deferred: sourceDeferred,
+    };
+    // Сначала сохраняем адресный возврат, затем снимаем вопрос/ожидание. При
+    // перезагрузке K.answerReturns восстанавливает этот шаг без повторного ответа.
+    const returnEvent = savedAnswer && sourceDeferred?.expect
+      ? queueAnswerReturn(sourceForReturn, savedAnswer, sourceDeferred) : null;
+    if (savedAnswer && sourceDeferred?.expect && !returnEvent) {
+      // Ответ уже устойчиво записан в Notion, но сбрасывать это ожидание нельзя:
+      // иначе потеряется единственная копия исходного результата.
+      pause("Ответ записан, но квитанцию возврата для исходного результата сохранить не удалось. Ход и исходное решение оставлены; повторите шаг, не создавая новый ответ.", {
+        kind: "answer-return-lost", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    // Durable return exists before the answer expectation and source queue are cleared.
+    GM_setValue(K.expect, null);
     dropAnswer(expect.ref);
     if (!answerRecorded) {
       log(
-        `Вопрос закрыт раньше приёмки («${state}») — ответ не перезаписываю, ход возвращается Координатору.`,
+        `Вопрос закрыт раньше адресата («${state}») — сохранённый ответ не перезаписываю.`,
         false,
         { tone: "warn", ntfy: "quiet" },
       );
@@ -16674,38 +17181,200 @@
     } catch (e) {
       dbg("вопросы: панель не обновилась", e.message);
     }
-    if (answerRecorded)
-      log(`Вопрос закрыт приёмкой «${role.name}»: ${oneLine(answer, 160)}`, false, { tone: "ok", ntfy: "quiet" });
-    // Ход возвращается Координатору: ответ придёт ему строкой в промпте
-    // («Ответы на вопросы»), а next из хода, где вопрос был задан, не
-    // применялся — он посчитан без ответа.
+    if (savedAnswer)
+      log(returnEvent
+        ? `Ответ на вопрос сохранён; автор «${sourceForReturn.role || "неизвестная роль"}» получит его напрямую.`
+        : "Ответ на вопрос сохранён в «Обратной связи» и будет учтён Координатором.",
+      false, { tone: "ok", ntfy: "quiet" });
+    if (role.fn === "Reviewer" && typeof finishReviewerTurn === "function") {
+      await finishReviewerTurn("ответ на вопрос сохранён").catch((e) => {
+        log(`Continue на странице приёмки не нажата: ${e.message}. Адресный возврат сохранён.`, true);
+      });
+    }
+    if (returnEvent) {
+      const result = await startAnswerReturn(returnEvent);
+      if (result === "queued" || result === "recovered" || result === "held") return true;
+      dropAnswerReturn(returnEvent);
+      return continueAfterAnswerReturn(returnEvent, false);
+    }
+    return continueAfterAnswerReturn({ questionId: expect.ref, missionId: expect.missionId, sourceName: sourceForReturn.role }, false);
+  }
+
+  /** Формат адресного возврата: уникальный turn_id — квитанция для K.pending. */
+  function answerReturnText(event, responderName) {
+    return [
+      `АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА · question_id ${event.questionId}`,
+      `{"turn_id":"${event.turnId}","question_id":"${event.questionId}"}`,
+      `Твой вопрос: ${event.question || "(текст вопроса в записи Обратной связи)"}`,
+      `Ответ роли «${responderName || "адресата"}»:\n${event.answer}`,
+      "Ответ уже записан в «Обратной связи». Это уведомление автору вопроса, не новая рабочая карточка: не повторяй старый результат и не меняй статусы. Ответить на эту реплику не требуется.",
+    ].join("\n\n");
+  }
+
+  /**
+   * Поставить прямой возврат автору вопроса в тот же последовательный транспорт.
+   * Нет роли в истории — legacy-запись остаётся для плана Coordinator; найденная,
+   * но отключённая роль удерживает очередь, а не скрывает ответ за общим флагом.
+   */
+  async function startAnswerReturn(event) {
+    let directory;
+    try { directory = await roleRows({ fresh: true, requireFresh: true }); }
+    catch (e) {
+      logThrottled(`answer-return-roles:${event.questionId}`, `Не удалось прочитать адрес автора вопроса (${e.message}); ответ сохранён, прямой возврат повторю.`, true);
+      return "held";
+    }
+    let hits = event.sourceRoleId
+      ? directory.filter((row) => norm(row.id) === norm(event.sourceRoleId))
+      : directory.filter((row) => norm(row.name) === norm(event.sourceName));
+    if (!hits.length && !event.sourceRoleId) {
+      if (event.deferred?.expect) {
+        pause(`Исходный результат ждёт ответа на «${event.questionId}», но автора «${event.sourceName || "?"}» нельзя однозначно адресовать. Ответ и отложенное решение сохранены; в Coordinator не перенаправляю.`, {
+          kind: "answer-return-role", ref: event.questionId, turnId: event.turnId,
+        });
+        return "held";
+      }
+      logThrottled(`answer-return-unknown:${event.questionId}`, `Автор вопроса «${event.sourceName || "?"}» не является строкой активной роли: ответ остаётся в Notion для Coordinator.`, false);
+      return "skip";
+    }
+    if (hits.length !== 1) {
+      pause(`Не удалось однозначно найти роль-автора «${event.sourceName || event.sourceRoleId}». Ответ в Notion сохранён, адресная очередь не снята.`, {
+        kind: "answer-return-role", ref: event.questionId, turnId: event.turnId,
+      });
+      return "held";
+    }
+    const row = hits[0];
+    if (row.status !== "Активна" || !row.url) {
+      pause(`Ответ на «${event.questionId}» сохранён, но автор «${row.name}» не готов к прямой доставке ` +
+        `(${row.status || "без статуса"}${row.url ? "" : ", Agent URL пуст"}). Очередь сохранена: включите роль и продолжите.`, {
+        kind: "answer-return-role", ref: event.questionId, turnId: event.turnId,
+      });
+      return "held";
+    }
+    const role = { ...row, id: row.id, name: row.name, url: row.url, fn: row.fn || "" };
+    const text = answerReturnText(event, "ответчика");
+    const expected = {
+      roleId: role.id, roleName: role.name, roleUrl: role.url, roleFn: role.fn,
+      kind: "answer-return", ref: event.questionId, questionId: event.questionId,
+      missionId: event.missionId || "", turnId: event.turnId,
+      title: "прямой возврат ответа автору вопроса", sourceRoleName: event.sourceName,
+      sourceRoleId: role.id, text,
+    };
+    // Если ожидание потерялось уже после подтверждённой отправки, квитанция
+    // восстанавливает его без второй реплики и без угадывания по старому чату.
+    const receipt = typeof deliveryReceipt === "function" ? deliveryReceipt(expected) : null;
+    if (receipt) {
+      const restored = {
+        ...expected, watermark: receipt.watermark || receipt.messageId,
+        seen: Array.isArray(receipt.seen) ? receipt.seen : [],
+        sentAt: Number(receipt.sentAt) || Date.now(), verified: true,
+      };
+      GM_setValue(K.expect, restored);
+      let same = false;
+      try { same = new URL(role.url, location.href).pathname === location.pathname; } catch { same = false; }
+      if (!same) await navigateTo(role, "квитанция подтверждает прямой возврат ответа");
+      return "recovered";
+    }
+    const queued = await sendToRole(role, text, "answer-return", event.questionId, {
+      questionId: event.questionId, missionId: event.missionId || "", turnId: event.turnId,
+      title: expected.title, sourceRoleName: event.sourceName, sourceRoleId: role.id,
+    });
+    if (queued) return "queued";
+    const live = GM_getValue(K.expect, null);
+    if (live?.kind === "answer-return" && norm(live.ref) === norm(event.questionId) &&
+        norm(live.turnId) === norm(event.turnId)) return "queued";
+    if (!isPaused()) pause(`Ответ на вопрос сохранён, но прямой возврат «${role.name}»-у не поставлен в очередь. ` +
+      "Ответ не помечен доставленным; проверьте транспорт и продолжите.", {
+      kind: "answer-return-send", ref: event.questionId, turnId: event.turnId,
+    });
+    return "held";
+  }
+
+  /** Coordinator получает очередь только после прямого подтверждения источнику. */
+  async function continueAfterAnswerReturn(event, directDelivered = true) {
+    const next = answerPending();
+    if (next) {
+      const missionForNext = await missionForQuestion(next, null);
+      if (await startAnswer(missionForNext, next)) return true;
+      if (answerQueue().some((item) => norm(item.id) === norm(next.id))) return true;
+    }
     const mission = await activeMission().catch(() => null);
     if (!mission) {
-      log("Вопрос закрыт, но активной миссии нет: продолжать не с чего.");
+      log(`Ответ на вопрос «${event.questionId || "?"}» сохранён${directDelivered ? " и возвращён автору" : ""}; активной миссии нет, Coordinator не вызываю.`);
+      return true;
+    }
+    if (event.missionId && norm(event.missionId) !== norm(mission.id)) {
+      log(`Ответ на вопрос «${event.questionId || "?"}» относится к другой миссии; прямой возврат завершён, новый план не подменяю.`, true);
       return true;
     }
     const coord = (await roles().catch(() => [])).find((r) => r.fn === "Coordinator");
     if (!coord) {
-      pause("Вопрос закрыт, но активного Coordinator нет: ход возвращать некому.", {
-        kind: "answer-nocoord",
-        ref: mission.id,
+      pause("Ответ возвращён автору, но активного Coordinator нет: продолжать миссию некому.", {
+        kind: "answer-nocoord", ref: mission.id,
       });
       return true;
     }
-    // D-096: ход приёмки заканчивается здесь, и сессия Warden должна остаться
-    // рабочей. Continue после слитого PR появляется именно на этой странице;
-    // без клика следующая работа пойдёт в мёртвую ветку. 10.11 её пришлось
-    // нажимать Мастеру — в журнале не было даже строки об этом.
-    if (typeof finishReviewerTurn === "function") {
-      await finishReviewerTurn("вопрос закрыт приёмкой").catch((e) => {
-        log(`Continue на странице приёмки не нажата: ${e.message}. Ход возвращается Координатору.`, true);
-      });
-    }
     const queue = await queueOf(mission).catch(() => ({ summary: "очередь не прочитана" }));
-    const note = answerRecorded ? "Ответ на вопрос записан — учти его и продолжи план." :
-      "Вопрос уже закрыт в Notion — учти сохранённое состояние и продолжи план.";
+    const note = directDelivered === true
+      ? `Ответ на вопрос ${event.questionId} уже возвращён напрямую автору «${event.sourceName}»; учти запись «Обратная связь» и продолжи план.`
+      : directDelivered === false
+        ? `Ответ на вопрос ${event.questionId} записан, но автора «${event.sourceName || "?"}» нельзя адресовать; прочитай его из «Обратной связи» и продолжи план.`
+        : `Ответ на вопрос ${event.questionId} сохранён в «Обратной связи»; учти его и продолжи план.`;
     await requestPlan(mission, coord, queue, note, { force: true });
     return true;
+  }
+
+  /** Квитанцию доставки проверяем до завершения адресного возврата. */
+  async function answerReturnStep(role, expect, manual = false) {
+    const live = GM_getValue(K.expect, null);
+    if (!expect || expect.kind !== "answer-return" || !live || live.kind !== "answer-return" ||
+        norm(live.ref) !== norm(expect.ref) || norm(live.turnId) !== norm(expect.turnId) ||
+        norm(live.roleId) !== norm(expect.roleId) || norm(role?.id) !== norm(expect.roleId)) {
+      pause("Ожидание прямого возврата ответа изменилось или открыта не та роль. Квитанцию и очередь сохраняю.", {
+        kind: "answer-return-changed", ref: expect?.ref || "", turnId: expect?.turnId || "",
+      });
+      return true;
+    }
+    if (!(Number(expect.sentAt) > 0 && expect.verified === true)) {
+      const restored = typeof restoreMissingSendMark === "function" ? restoreMissingSendMark(expect) : null;
+      if (!restored || restored.verified !== true || !(Number(restored.sentAt) > 0)) {
+        if (GM_getValue(K.pending, null)) return false;
+        if (manual) log(`Прямой возврат ответа на «${expect.ref}» ещё не подтверждён: очередь остаётся на месте.`);
+        return false;
+      }
+      expect = restored;
+    }
+    const event = answerReturns().find((entry) => norm(entry.questionId) === norm(expect.questionId || expect.ref) &&
+      norm(entry.turnId) === norm(expect.turnId));
+    if (!event) {
+      pause("Доставка подтверждена, но адресный ответ из локальной очереди не найден. Квитанция и чат сохранены; не повторяю отправку.", {
+        kind: "answer-return-lost", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    log(`Ответ на вопрос ${event.questionId} доставлен автору «${event.sourceName}» по квитанции чата.`, false, { tone: "ok", ntfy: "quiet" });
+    if (event.deferred?.expect) {
+      const sourceRoleId = event.deferred.sourceRoleId || event.deferred.expect.roleId || "";
+      if (sourceRoleId && norm(sourceRoleId) !== norm(role.id)) {
+        pause("Ответ на встречный вопрос доставлен, но восстановить исходный ход можно только на странице его автора. Ожидание не подменяю.", {
+          kind: "answer-return-changed", ref: event.questionId, turnId: event.turnId,
+        });
+        return true;
+      }
+      if (event.resuming) return resumeDeferredAnswerReturn(event);
+      const resuming = markAnswerReturnResuming(event);
+      if (!resuming) {
+        pause("Ответ доставлен, но durable-квитанция не обновилась; исходный результат и очередь сохранены.", {
+          kind: "answer-return-changed", ref: event.questionId, turnId: event.turnId,
+        });
+        return true;
+      }
+      return resumeDeferredAnswerReturn(resuming);
+    }
+    // Сначала снимаем ожидание, затем удаляем очередь: при сбое квитанция
+    // позволит восстановить тот же direct-return без дублирования ответа.
+    GM_setValue(K.expect, null);
+    dropAnswerReturn(event);
+    return continueAfterAnswerReturn(event, true);
   }
 
   /**
@@ -17326,8 +17995,9 @@
 
   const toolLimitRoleFn = (e) =>
     e.kind === "plan" ? "Coordinator"
-      : (e.kind === "review" || e.kind === "answer" || e.kind === "arbiter") ? "Reviewer"
-        : (e.roleFn || "Executor");
+      : (e.kind === "review" || e.kind === "arbiter") ? "Reviewer"
+        : e.kind === "answer" ? (e.roleFn || "Reviewer")
+          : (e.roleFn || "Executor");
 
   /** Запись исхода tool-limit в журнал попытки. Без секретов и полных текстов. */
   function journalToolLimit(expect, status, outcome, envelope) {
@@ -18700,6 +19370,12 @@
     "mission-change-answer",
     "dispatch-changed",
     "answer-changed",
+    "answer-return-role",
+    "answer-return-send",
+    "answer-return-undelivered",
+    "answer-return-changed",
+    "answer-return-lost",
+    "orphan-answer-return",
     "update-recovery",
   ];
 
@@ -18759,6 +19435,14 @@
     "delivery-state-lost": "transport",
     send: "transport",
     "answer-changed": "transport",
+    "answer-return-send": "transport",
+    "answer-return-undelivered": "transport",
+    "answer-return-changed": "transport",
+    "answer-return-lost": "transport",
+    "orphan-answer-return": "transport",
+    // Невозможность доставить автору из-за неактивной/неполной строки — доступ
+    // правит только Мастер (D-027/D-074), это не повод подменять адресата.
+    "answer-return-role": "master",
     // Arena: капча, авторизация, ошибка страницы, отказ агента. Авторизация
     // приходит текстом причины, поэтому своего вида паузы у неё нет: вид
     // `auth` живёт только в healTextClass, а не в этой таблице.
@@ -18788,6 +19472,14 @@
     "retry-no-run": "master",
     marker: "transport",
     "marker-mismatch": "master",
+    // D-105: адресный result при несходящейся identity нельзя безопасно
+    // применить или отправить повторно; очередь сохраняется для Мастера.
+    "dispatch-handoff-mismatch": "master",
+    "review-handoff-mismatch": "master",
+    "arbiter-handoff-mismatch": "master",
+    "answer-handoff-changed": "master",
+    "answer-handoff-missing": "master",
+    "answer-handoff-mismatch": "master",
     "poll-loop": "master",
     "dispatch-mission": "master",
     "review-needs-master": "master",
@@ -20318,7 +21010,32 @@ function reviewPullRequest({ files, pr, zone } = {}) {
    */
   function reviveUnverifiedHandoff() {
     const waiting = GM_getValue(K.expect, null);
-    if (!waiting || !Number(waiting.sentAt) || waiting.verified === true) return "";
+    if (!waiting) return "";
+    // Ответный возврат — не рабочая карточка: потеря подтверждения никогда не
+    // разрешает его снять. Сначала квитанция/собственная реплика, иначе очередь
+    // восстанавливается с теми же question_id/turn_id и тем же текстом.
+    if (waiting.kind === "answer-return" && waiting.verified !== true) {
+      const proof = typeof restoreMissingSendMark === "function" ? restoreMissingSendMark(waiting) : null;
+      if (proof?.verified === true && Number(proof.sentAt) > 0) return "";
+      if (GM_getValue(K.pending, null)) return "";
+      if (!String(waiting.text || "").trim()) {
+        pause("Прямой возврат ответа потерял текст до подтверждения доставки. Ответ в Notion сохранён; локальный маршрут удержан.", {
+          kind: "answer-return-lost", ref: waiting.ref || "", turnId: waiting.turnId || "",
+        });
+        return "answer-return-held";
+      }
+      GM_setValue(K.pending, {
+        roleId: waiting.roleId, roleName: waiting.roleName, roleUrl: waiting.roleUrl,
+        roleFn: waiting.roleFn || "", kind: waiting.kind, ref: waiting.ref,
+        questionId: waiting.questionId || waiting.ref, missionId: waiting.missionId || "",
+        turnId: waiting.turnId, title: waiting.title || "прямой возврат ответа",
+        sourceRoleName: waiting.sourceRoleName || "", sourceRoleId: waiting.sourceRoleId || "",
+        text: waiting.text, at: Date.now(),
+      });
+      log("Прямой возврат ответа не подтверждён: восстанавливаю ту же очередь, новая реплика не создана.", true);
+      return "revived";
+    }
+    if (!Number(waiting.sentAt) || waiting.verified === true) return "";
 
     // Водяной знак относится к чату адресата. На чужой странице чужой ответ
     // нельзя принять за подтверждение доставки старой карточки Reviewer.
@@ -20686,6 +21403,11 @@ function reviewPullRequest({ files, pr, zone } = {}) {
       }
 
       let expect = GM_getValue(K.expect, null);
+      // Подтверждённый адресный возврат уже восстановил исходный результат;
+      // дочищаем durable-квитанцию перед тем, как этот результат применится.
+      if (expect?.resumedAnswerReturn && typeof acknowledgeResumedAnswerReturn === "function") {
+        expect = acknowledgeResumedAnswerReturn(expect);
+      }
 
       // D-081: вопрос, который уже записан, важнее любого ожидания.
       //
@@ -20699,11 +21421,37 @@ function reviewPullRequest({ files, pr, zone } = {}) {
       // Ответ на вопрос — не «чужой ход»: ход приёмки ставится отдельной
       // записью и снимает ожидание сам. Поэтому проверка идёт до ветки
       // ожидания и работает на любой странице.
-      if (me.fn !== "Reviewer" && (fromToggle || autoOn())) {
+      if ((fromToggle || autoOn()) && !GM_getValue(K.expect, null)) {
+        const returning = typeof answerReturnPending === "function" ? answerReturnPending() : null;
+        if (returning) {
+          if (returning.resuming && typeof resumeDeferredAnswerReturn === "function") {
+            const sourceId = returning.deferred?.sourceRoleId || returning.deferred?.expect?.roleId || "";
+            if (sourceId && norm(sourceId) !== norm(me.id)) {
+              const sourceRole = list.find((row) => norm(row.id) === norm(sourceId));
+              if (sourceRole && sourceRole.url) {
+                await navigateTo(sourceRole, "восстанавливаю исходный ход после адресного ответа");
+              } else {
+                pause("Адресный ответ подтверждён, но роль-автор исходного результата не найдена. Квитанция и решение сохранены.", {
+                  kind: "answer-return-role", ref: returning.questionId || returning.ref || "", turnId: returning.turnId || "",
+                });
+              }
+              return;
+            }
+            resumeDeferredAnswerReturn(returning);
+            return;
+          }
+          const routed = await startAnswerReturn(returning);
+          if (routed === "skip") {
+            dropAnswerReturn(returning);
+            await continueAfterAnswerReturn(returning, false);
+          }
+          return;
+        }
         const waiting = answerPending();
-        if (waiting && !GM_getValue(K.expect, null)) {
-          const missionForAnswer = await activeMission().catch(() => null);
-          if (missionForAnswer && (await startAnswer(missionForAnswer, waiting))) return;
+        if (waiting) {
+          const missionForAnswer = await missionForQuestion(waiting, await activeMission().catch(() => null));
+          const started = await startAnswer(missionForAnswer, waiting);
+          if (started || answerQueue().some((item) => norm(item.id) === norm(waiting.id))) return;
         }
       }
 
@@ -20763,6 +21511,14 @@ function reviewPullRequest({ files, pr, zone } = {}) {
           );
           expect = null;
         }
+      }
+
+      // Прямой возврат — квитанция уведомления, а не запрос роли ответить.
+      // Не прогоняем его через опрос/таймаут ожидания результата: после
+      // подтверждённой доставки сразу восстанавливаем исходный ход.
+      if (expect?.kind === "answer-return") {
+        await answerReturnStep(me, expect, fromToggle);
+        return;
       }
 
       // Опрос вместо ответа — не ответ. Разбираем его раньше любых
@@ -20898,11 +21654,14 @@ function reviewPullRequest({ files, pr, zone } = {}) {
         // D-073: ответ Maintainer'а разбирается до любой другой ветки — иначе
         // передача транспорта попала бы в чужую роль по функции адресата.
         await healStep(me, expect, fromToggle);
+      } else if (expect?.kind === "answer") {
+        // Нужная роль из need может быть Warden, Maintainer, Coordinator,
+        // Executor или Auditor: answer — вид хода, не фиксированная функция.
+        await answerStep(me, expect, fromToggle);
       } else if (me.fn === "Coordinator") {
         await coordinatorStep(me, expect, fromToggle);
       } else if (me.fn === "Reviewer" && expect) {
-        if (expect.kind === "answer") await answerStep(me, expect, fromToggle);
-        else if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
+        if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
         // D-053: арбитраж петли — отдельный ход приёмки со своим маркером.
         else if (expect.kind === "arbiter") await arbiterStep(me, expect, fromToggle);
         else pause(`Неизвестный вид хода приёмки «${expect.kind || "пусто"}»: ничего не меняю.`, {

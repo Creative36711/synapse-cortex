@@ -122,6 +122,12 @@
     "mission-change-answer",
     "dispatch-changed",
     "answer-changed",
+    "answer-return-role",
+    "answer-return-send",
+    "answer-return-undelivered",
+    "answer-return-changed",
+    "answer-return-lost",
+    "orphan-answer-return",
     "update-recovery",
   ];
 
@@ -181,6 +187,14 @@
     "delivery-state-lost": "transport",
     send: "transport",
     "answer-changed": "transport",
+    "answer-return-send": "transport",
+    "answer-return-undelivered": "transport",
+    "answer-return-changed": "transport",
+    "answer-return-lost": "transport",
+    "orphan-answer-return": "transport",
+    // Невозможность доставить автору из-за неактивной/неполной строки — доступ
+    // правит только Мастер (D-027/D-074), это не повод подменять адресата.
+    "answer-return-role": "master",
     // Arena: капча, авторизация, ошибка страницы, отказ агента. Авторизация
     // приходит текстом причины, поэтому своего вида паузы у неё нет: вид
     // `auth` живёт только в healTextClass, а не в этой таблице.
@@ -210,6 +224,14 @@
     "retry-no-run": "master",
     marker: "transport",
     "marker-mismatch": "master",
+    // D-105: адресный result при несходящейся identity нельзя безопасно
+    // применить или отправить повторно; очередь сохраняется для Мастера.
+    "dispatch-handoff-mismatch": "master",
+    "review-handoff-mismatch": "master",
+    "arbiter-handoff-mismatch": "master",
+    "answer-handoff-changed": "master",
+    "answer-handoff-missing": "master",
+    "answer-handoff-mismatch": "master",
     "poll-loop": "master",
     "dispatch-mission": "master",
     "review-needs-master": "master",

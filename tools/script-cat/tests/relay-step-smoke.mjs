@@ -185,7 +185,10 @@ assert.match(src, /function debugSendButton\(editor\)/, 'отладка пока
 
 // 4.2. Неподтверждённая отправка возвращается в очередь, а не ждёт вечно.
 assert.match(src, /function reviveUnverifiedHandoff\(\)/, 'есть возврат неподтверждённой отправки');
-assert.match(src, /if \(!waiting \|\| !Number\(waiting\.sentAt\) \|\| waiting\.verified === true\) return "";/, 'проверяется отметка verified');
+assert.match(src, /if \(!waiting\) return "";[\s\S]*?waiting\.kind === "answer-return" && waiting\.verified !== true/,
+  'D-105 неподтверждённый прямой возврат сохраняется отдельно от обычной отправки');
+assert.match(src, /if \(!Number\(waiting\.sentAt\) \|\| waiting\.verified === true\) return "";/,
+  'обычная отправка проверяет отметку verified');
 assert.match(src, /return "revived";/, 'отправленное заново возвращается в очередь');
 assert.match(src, /return "dropped";/, 'фантом без текста снимается отдельно');
 assert.match(src, /messagesAfter\(waiting\.watermark \|\| "", waiting\.seen\)\.length/, 'дубль исключён: смотрим сообщения после водяного знака');
