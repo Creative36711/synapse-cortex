@@ -60,7 +60,32 @@
    */
   function reviveUnverifiedHandoff() {
     const waiting = GM_getValue(K.expect, null);
-    if (!waiting || !Number(waiting.sentAt) || waiting.verified === true) return "";
+    if (!waiting) return "";
+    // Ответный возврат — не рабочая карточка: потеря подтверждения никогда не
+    // разрешает его снять. Сначала квитанция/собственная реплика, иначе очередь
+    // восстанавливается с теми же question_id/turn_id и тем же текстом.
+    if (waiting.kind === "answer-return" && waiting.verified !== true) {
+      const proof = typeof restoreMissingSendMark === "function" ? restoreMissingSendMark(waiting) : null;
+      if (proof?.verified === true && Number(proof.sentAt) > 0) return "";
+      if (GM_getValue(K.pending, null)) return "";
+      if (!String(waiting.text || "").trim()) {
+        pause("Прямой возврат ответа потерял текст до подтверждения доставки. Ответ в Notion сохранён; локальный маршрут удержан.", {
+          kind: "answer-return-lost", ref: waiting.ref || "", turnId: waiting.turnId || "",
+        });
+        return "answer-return-held";
+      }
+      GM_setValue(K.pending, {
+        roleId: waiting.roleId, roleName: waiting.roleName, roleUrl: waiting.roleUrl,
+        roleFn: waiting.roleFn || "", kind: waiting.kind, ref: waiting.ref,
+        questionId: waiting.questionId || waiting.ref, missionId: waiting.missionId || "",
+        turnId: waiting.turnId, title: waiting.title || "прямой возврат ответа",
+        sourceRoleName: waiting.sourceRoleName || "", sourceRoleId: waiting.sourceRoleId || "",
+        text: waiting.text, at: Date.now(),
+      });
+      log("Прямой возврат ответа не подтверждён: восстанавливаю ту же очередь, новая реплика не создана.", true);
+      return "revived";
+    }
+    if (!Number(waiting.sentAt) || waiting.verified === true) return "";
 
     // Водяной знак относится к чату адресата. На чужой странице чужой ответ
     // нельзя принять за подтверждение доставки старой карточки Reviewer.
@@ -428,6 +453,11 @@
       }
 
       let expect = GM_getValue(K.expect, null);
+      // Подтверждённый адресный возврат уже восстановил исходный результат;
+      // дочищаем durable-квитанцию перед тем, как этот результат применится.
+      if (expect?.resumedAnswerReturn && typeof acknowledgeResumedAnswerReturn === "function") {
+        expect = acknowledgeResumedAnswerReturn(expect);
+      }
 
       // D-081: вопрос, который уже записан, важнее любого ожидания.
       //
@@ -441,11 +471,37 @@
       // Ответ на вопрос — не «чужой ход»: ход приёмки ставится отдельной
       // записью и снимает ожидание сам. Поэтому проверка идёт до ветки
       // ожидания и работает на любой странице.
-      if (me.fn !== "Reviewer" && (fromToggle || autoOn())) {
+      if ((fromToggle || autoOn()) && !GM_getValue(K.expect, null)) {
+        const returning = typeof answerReturnPending === "function" ? answerReturnPending() : null;
+        if (returning) {
+          if (returning.resuming && typeof resumeDeferredAnswerReturn === "function") {
+            const sourceId = returning.deferred?.sourceRoleId || returning.deferred?.expect?.roleId || "";
+            if (sourceId && norm(sourceId) !== norm(me.id)) {
+              const sourceRole = list.find((row) => norm(row.id) === norm(sourceId));
+              if (sourceRole && sourceRole.url) {
+                await navigateTo(sourceRole, "восстанавливаю исходный ход после адресного ответа");
+              } else {
+                pause("Адресный ответ подтверждён, но роль-автор исходного результата не найдена. Квитанция и решение сохранены.", {
+                  kind: "answer-return-role", ref: returning.questionId || returning.ref || "", turnId: returning.turnId || "",
+                });
+              }
+              return;
+            }
+            resumeDeferredAnswerReturn(returning);
+            return;
+          }
+          const routed = await startAnswerReturn(returning);
+          if (routed === "skip") {
+            dropAnswerReturn(returning);
+            await continueAfterAnswerReturn(returning, false);
+          }
+          return;
+        }
         const waiting = answerPending();
-        if (waiting && !GM_getValue(K.expect, null)) {
-          const missionForAnswer = await activeMission().catch(() => null);
-          if (missionForAnswer && (await startAnswer(missionForAnswer, waiting))) return;
+        if (waiting) {
+          const missionForAnswer = await missionForQuestion(waiting, await activeMission().catch(() => null));
+          const started = await startAnswer(missionForAnswer, waiting);
+          if (started || answerQueue().some((item) => norm(item.id) === norm(waiting.id))) return;
         }
       }
 
@@ -505,6 +561,14 @@
           );
           expect = null;
         }
+      }
+
+      // Прямой возврат — квитанция уведомления, а не запрос роли ответить.
+      // Не прогоняем его через опрос/таймаут ожидания результата: после
+      // подтверждённой доставки сразу восстанавливаем исходный ход.
+      if (expect?.kind === "answer-return") {
+        await answerReturnStep(me, expect, fromToggle);
+        return;
       }
 
       // Опрос вместо ответа — не ответ. Разбираем его раньше любых
@@ -640,11 +704,14 @@
         // D-073: ответ Maintainer'а разбирается до любой другой ветки — иначе
         // передача транспорта попала бы в чужую роль по функции адресата.
         await healStep(me, expect, fromToggle);
+      } else if (expect?.kind === "answer") {
+        // Нужная роль из need может быть Warden, Maintainer, Coordinator,
+        // Executor или Auditor: answer — вид хода, не фиксированная функция.
+        await answerStep(me, expect, fromToggle);
       } else if (me.fn === "Coordinator") {
         await coordinatorStep(me, expect, fromToggle);
       } else if (me.fn === "Reviewer" && expect) {
-        if (expect.kind === "answer") await answerStep(me, expect, fromToggle);
-        else if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
+        if (expect.kind === "review") await reviewStep(me, expect, fromToggle);
         // D-053: арбитраж петли — отдельный ход приёмки со своим маркером.
         else if (expect.kind === "arbiter") await arbiterStep(me, expect, fromToggle);
         else pause(`Неизвестный вид хода приёмки «${expect.kind || "пусто"}»: ничего не меняю.`, {

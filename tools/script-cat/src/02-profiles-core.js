@@ -219,6 +219,10 @@
     deadSend: "cfn-dead-send",
     qQueue: "cfn-q-queue",
     answers: "cfn-answer-queue",
+    // Ответы, которые записаны в Notion, но ещё не возвращены напрямую автору
+    // вопроса. Отдельная durable queue: K.pending остаётся единственным
+    // последовательным транспортом, а этот ключ переживает навигацию/сбой.
+    answerReturns: "cfn-answer-return-queue",
     collapsed: "cfn-panel-collapsed",
     stateV: "cfn-state-v",
     rolesCache: "cfn-roles-cache",

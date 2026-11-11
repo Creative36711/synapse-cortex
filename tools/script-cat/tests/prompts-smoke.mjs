@@ -395,6 +395,24 @@ for (const req of cases) {
   assert.match(plan, /пиши его целиком/, 'и велит писать вариант полностью');
 }
 
+// 17в. Адресный gate-вопрос сохраняет нужный результат, а план Coordinator
+// возвращается новым ходом вместо повторного применения уже принятого next.
+{
+  const resultPrompts = [
+    PromptCompiler.compile(dispatchRequest('Executor')).text,
+    PromptCompiler.compile(dispatchRequest('Auditor')).text,
+    PromptCompiler.compile(reviewRequest()).text,
+    PromptCompiler.compile(answerRequest()).text,
+  ];
+  for (const text of resultPrompts) {
+    assert.match(text, /gate:true\s*\+\s*need:/, 'адресный вопрос требует явные gate и need');
+    assert.match(text, /прежними ID/, 'после ответа возобновляется тот же результат');
+  }
+  const plan = PromptCompiler.compile(planRequest()).text;
+  assert.match(plan, /Ответ вернётся Координатору новым планом/, 'ответ Coordinator запускает новый план');
+  assert.match(plan, /не next:"blocked"/, 'не требуется остановка для прямого вопроса');
+}
+
 // 18. D-048: боевая K-43 «комментарий к примеру» встала на 7802 > 7500 —
 // оракул 2541, намерение 944, Scope 747, инварианты 642. Карточка делает правку
 // в один абзац, дробить её не за что: лимит 8000, оракул по-прежнему verbatim.

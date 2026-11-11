@@ -227,6 +227,13 @@
     const candidates = replies
       .map((m) => ({ ...m, result: parseMarker(m.raw, "CF_AGENT_RESULT") || parseMarker(m.raw, "CF_REVIEW_RESULT") }))
       .filter((m) => m.result);
+    const restored = deferredResultFor(expect, "CF_AGENT_RESULT");
+    if (restored.error) {
+      pause(`Отложенный результат карточки не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "dispatch-handoff-mismatch", ref: expect.ref || "", runId: expect.runId || "",
+      });
+      return true;
+    }
     // Синонимы допустимы, но ни один из них не может противоречить выдаче.
     // Совпадение только карточки недостаточно: она могла быть перевыдана.
     const matchesId = (result, names, expected) => {
@@ -238,6 +245,10 @@
     // Последний результат не заменяем более ранним подходящим: если новый
     // прислан с чужими ID, нужно сохранить его и остановиться для разбора.
     let hit = candidates.at(-1);
+    if (restored.found) {
+      const persistedReply = hit || replies.at(-1);
+      if (persistedReply) hit = { ...persistedReply, result: restored.decision };
+    }
     if (!hit) {
       // Напоминания исчерпаны — дальше пауза не помогает: работа сделана, а
       // страдает только формат. Читаем ответ по тексту, но обязательно с id
@@ -408,31 +419,8 @@
         return markerMissing(role, expect, "CF_REVIEW_RESULT", manual);
       }
     }
-    // `"question":null` — это «вопроса нет», а не «вопрос без варианта».
-    const asked = questionInMarker(result.question, "Работа идёт по решению исполнителя");
-    if (asked.kind === "asked") {
-      await askQuestion(asked.question, {
-        roleName: role.name,
-        card: taskTitle(page),
-        mission: rt(page.properties["Миссия"]),
-        key: `${result.dispatch_id}:${result.run_id}`,
-      });
-    } else if (asked.kind === "text") {
-      // Вопрос написан, а варианта по умолчанию нет. Раньше он выбрасывался:
-      // Мастер видел громкую ошибку и не видел вопроса. Записываем с честным
-      // вариантом — работа и так идёт по решению исполнителя.
-      log(
-        `Вопрос исполнителя пришёл без варианта по умолчанию — записан с вариантом «${asked.question.fallback}»: ответ Мастера дойдёт следующим ходом.`,
-        false,
-        { ntfy: "quiet", title: "Relay: вопрос без варианта по умолчанию" },
-      );
-      await askQuestion(asked.question, {
-        roleName: role.name,
-        card: taskTitle(page),
-        mission: rt(page.properties["Миссия"]),
-        key: `${result.dispatch_id}:${result.run_id}`,
-      });
-    }
+    // Вопрос обработается после проверки отчёта: gate не должен передать
+    // заведомо неполный/невалидный результат другому адресату.
     // Журнал собирается из всего хода: ответ мог прийти частями — отчёт первым
     // сообщением, маркер отдельным после напоминания. Маркер без отчёта в журнал
     // не пишем вовсе: именно такая запись и обманула Координатора на NAR-1.8.
@@ -440,6 +428,21 @@
     if (answer.body < C.minAnswerChars) {
       log(`В ответе ${role.name} только маркер, отчёта нет — в журнал не пишу.`, true);
       return markerMissing(role, expect, "CF_AGENT_RESULT", manual, "thin");
+    }
+    const outgoingQuestion = result.question != null
+      ? result.question
+      : review?.decision?.question != null ? review.decision.question : null;
+    if (!expect.deferredResult && outgoingQuestion != null) {
+      const followup = await deferResultForQuestion(outgoingQuestion,
+        "Работа идёт по решению исполнителя", {
+          roleName: role.name,
+          roleId: role.id,
+          card: taskTitle(page),
+          mission: rt(page.properties["Миссия"]),
+          missionId: mission.id,
+          key: `${result.dispatch_id}:${result.run_id}`,
+        }, expect, "CF_AGENT_RESULT", result);
+      if (followup.held) return true;
     }
     const declaredLog = rt(page.properties["Output Drive File ID"]);
     if (!declaredLog) throw new Error("В карточке нет Output Drive File ID.");

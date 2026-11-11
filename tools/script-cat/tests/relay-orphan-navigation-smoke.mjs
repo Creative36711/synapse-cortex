@@ -151,18 +151,18 @@ const answerPending = (over = {}) => ({
   assert.equal(h.calls.navigations.length, 0);
 }
 
-// ── 7. «Передан приёмке» — только после очереди ────────────────────────────
-assert.match(src, /const queued = await sendToRole\(role, answerPrompt\(mission, role, item, turnId\), "answer", item\.id, \{/,
-  'результат отправки сохраняется');
-assert.match(answerBlock, /if \(!queued\) \{[\s\S]{0,400}?не передан приёмке/, 'отказ транспорта назван отказом');
+// ── 7. «Передан адресной роли» — только после очереди ─────────────────────
+assert.match(src, /const queued = await sendToRole\(role, answerPrompt\(questionMission, role, item, turnId\), "answer", item\.id, \{/,
+  'результат отправки с правильной миссией сохраняется');
+assert.match(answerBlock, /if \(!queued\) \{[\s\S]{0,400}?не поставил ход в очередь/, 'отказ транспорта назван отказом');
 assert.match(answerBlock, /return false;/, 'отказ возвращает false — вопрос остаётся «Ждёт»');
 assert.ok(
-  answerBlock.indexOf('const queued = await sendToRole') < answerBlock.indexOf('передан приёмке «${role.name}»'),
+  answerBlock.indexOf('const queued = await sendToRole') < answerBlock.indexOf('передан роли «${role.name}»'),
   'строка «передан» идёт после постановки в очередь',
 );
 // Старый порядок (лог до отправки) не вернулся: он и давал ложное «передан».
 assert.ok(
-  !/log\(`Вопрос «\$\{oneLine\(item\.text, 90\)\}» передан приёмке «\$\{role\.name\}»\.`, false, \{ ntfy: "quiet" \}\);\n    const queued/.test(answerBlock),
+  !/log\(`Вопрос «\$\{oneLine\(item\.text, 90\)\}» передан роли «\$\{role\.name\}»[^`]*`, false, \{ ntfy: "quiet" \}\);\n\s*const queued/.test(answerBlock),
   'ложный порядок удалён',
 );
 

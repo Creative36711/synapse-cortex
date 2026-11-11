@@ -125,7 +125,7 @@ const api = new Function(
   'C', 'K', 'rt', 'sel', 'norm', 'richText', 'GM_getValue', 'GM_setValue', 'query', 'notion', 'patch',
   'request', 'githubHeaders', 'activeMission', 'missionSame', 'log', 'logThrottled', 'dbg', 'document', 'window',
   'technicalInfo', 'roleContext', 'reviewerRole', 'sendToRole', 'uid', 'messagesAfter', 'parseMarker',
-  'markerMissing', 'pause', 'firstLine', 'roles', 'queueOf', 'requestPlan', 'isUuid', 'retainRejectedResult',
+  'markerMissing', 'pause', 'firstLine', 'roles', 'queueOf', 'requestPlan', 'isUuid', 'retainRejectedResult', 'roleRows',
   `${promptShim}\n${questionBlock}\n${answerBlock}\nreturn { parseQuestion, questionInMarker, questionProps, askQuestion,\n` +
   'queueQuestion, flushQuestionQueue, refreshQuestions, refreshDecisions, deliverProposals, closeExpired, questionBriefing,\n' +
   'markDelivered, answerQueue, queueAnswer, answerPrompt, startAnswer, answerStep, openQuestions, notifyNewQuestions, pruneQuestionSeen, flushQuestionBodies, questionBodyPending };',
@@ -140,7 +140,7 @@ const api = new Function(
   async () => false, (reason) => { throw new Error(`неожиданная пауза: ${reason}`); },
   (text) => String(text || '').split('\n')[0], async () => [{ name: 'Coordinator', fn: 'Coordinator' }],
   async () => ({ summary: 'очередь' }), async (_m, _r, _q, note) => plans.push(note),
-  (value) => Boolean(value), () => true,
+  (value) => Boolean(value), () => true, async () => [],
 );
 
 // Границы текста, сохранение переносов и полных вариантов без молчаливого усечения.
@@ -200,14 +200,24 @@ assert.equal(open.length, 2, 'счётчик отражает только за�
 assert.equal(new Set(open.map((r) => r.id)).size, 2);
 assert.equal(logs.filter((l) => l.options?.title === 'Relay: новое предложение (ADR)').length, 0);
 
-// Приёмка отвечает по существу; решение попадает в тот же Notion, затем ровно
-// один раз доставляется в брифинг, а старая запись вопроса не изменяется.
+// Приёмка отвечает по существу; решение попадает в тот же Notion, старая запись
+// вопроса не изменяется. Доставка в брифинг — после опустошения очереди ответов:
+// D-105 делает её последовательной, а requestPlan перезаписал бы K.expect хода,
+// поставленного для следующего вопроса.
 messages = [{ raw: `CF_ANSWER_RESULT ${JSON.stringify({ question_id: proposalRow.id, turn_id: 'turn-2', verdict: 'answer', answer: 'Принять с указанной поправкой.' })}` }];
 set(K.expect, { kind: 'answer', ref: proposalRow.id, turnId: 'turn-2', watermark: 'watermark' });
+const sentBeforeAnswer = sent.length;
 await api.answerStep({ name: 'Warden' }, get(K.expect, null));
 assert.equal(sel(db[1].properties['Статус']), 'Решено');
 assert.equal(rt(db[1].properties['Ответ']), 'Принять с указанной поправкой.');
 assert.equal(sel(db[0].properties['Статус']), 'Ждёт');
+assert.equal(sent.length, sentBeforeAnswer + 1, 'следующий вопрос очереди ушёл адресату');
+assert.equal(sent.at(-1)[2], 'answer', 'следующий ход — адресный ответ');
+assert.equal(plans.length, 0, 'брифинг отложен, пока очередь ответа не пуста');
+// Очередь пуста — брифинг Координатору приходит и приходит ровно один раз.
+set(K.answers, []);
+set(K.expect, { kind: 'answer', ref: proposalRow.id, turnId: 'turn-2', watermark: 'watermark-2' });
+await api.answerStep({ name: 'Warden' }, get(K.expect, null));
 assert.equal(plans.length, 1, 'ход возвращён Координатору');
 let briefing = await api.questionBriefing(mission);
 assert.deepEqual(briefing.fresh.map((r) => r.id), [proposalRow.id]);

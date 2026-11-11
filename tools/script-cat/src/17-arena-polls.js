@@ -1499,6 +1499,24 @@
     return null;
   }
 
+  /** Своя реплика прямого возврата ответа — только по его уникальному turn_id. */
+  function answerReturnInChat(expect) {
+    const turnId = String(expect?.turnId || "");
+    if (expect?.kind !== "answer-return" || !isUuid(turnId)) return null;
+    if (!expect.roleId || norm(roleFromPath()) !== norm(expect.roleId)) return null;
+    if (expect.captcha === true || GM_getValue(K.pending, null)?.captcha === true) return null;
+    const dead = GM_getValue(K.deadSend, "");
+    const shape = new RegExp(`"turn_id"\\s*:\\s*"${turnId}"`, "i");
+    const nodes = userMessages();
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      if (!shape.test(messageRaw(nodes[i]))) continue;
+      const id = nodeId(nodes[i]);
+      if (!id || (dead && id === dead)) continue;
+      return { id, at: idTime(id) };
+    }
+    return null;
+  }
+
   /**
    * Восстановить отметку отправки по квитанции или по самой реплике в чате.
    * Возвращает восстановленное ожидание либо null, если доказательств нет.
@@ -1509,7 +1527,7 @@
     const proof = receipt
       ? { messageId: receipt.messageId, sentAt: Number(receipt.sentAt), watermark: receipt.watermark, seen: receipt.seen, source: "квитанция доставки" }
       : (() => {
-          const node = dispatchPromptInChat(expect) || reviewTurnInChat(expect);
+          const node = dispatchPromptInChat(expect) || reviewTurnInChat(expect) || answerReturnInChat(expect);
           if (!node) return null;
           return {
             messageId: node.id, sentAt: node.at || Number(expect.at) || Date.now(),
@@ -1562,6 +1580,19 @@
     if (!expect || Number(expect.sentAt)) return null;
     if (!ignoreQueue && GM_getValue(K.pending, null)) return null;
     if (restoreMissingSendMark(expect)) return null;
+    if (expect.kind === "answer-return") {
+      if (!GM_getValue(K.pending, null) && String(expect.text || "").trim()) {
+        GM_setValue(K.pending, {
+          roleId: expect.roleId, roleName: expect.roleName, roleUrl: expect.roleUrl,
+          roleFn: expect.roleFn || "", kind: expect.kind, ref: expect.ref,
+          questionId: expect.questionId || expect.ref, missionId: expect.missionId || "",
+          turnId: expect.turnId, title: expect.title || "прямой возврат ответа",
+          sourceRoleName: expect.sourceRoleName || "", sourceRoleId: expect.sourceRoleId || "",
+          text: expect.text, at: Date.now(),
+        });
+      }
+      return null;
+    }
     const rolled = await releaseUndelivered(expect, why);
     GM_setValue(K.expect, null);
     GM_setValue("cfn-plan-at", 0);
@@ -1745,6 +1776,61 @@
     return false;
   }
 
+  /** Восстановить прямой возврат ответа по question_id + уникальному turn_id. */
+  async function adoptOrphanAnswerReturn(pending, me) {
+    if (GM_getValue(K.expect, null) || pending?.kind !== "answer-return") return false;
+    const questionId = String(pending.questionId || pending.ref || "");
+    const ref = String(pending.ref || questionId);
+    const turnId = String(pending.turnId || "");
+    if (!isUuid(questionId) || !isUuid(ref) || norm(questionId) !== norm(ref) || !isUuid(turnId) || !pending.roleId) {
+      pause("В очереди остался прямой возврат ответа без корректных question_id/turn_id/адресата. Квитанцию и текст сохраняю; вслепую не отправляю.", {
+        kind: "orphan-answer-return", ref, turnId,
+      });
+      return true;
+    }
+    const restored = {
+      roleId: pending.roleId, roleName: pending.roleName || "", roleUrl: pending.roleUrl || "",
+      roleFn: pending.roleFn || "", kind: "answer-return", ref, questionId,
+      missionId: String(pending.missionId || ""), turnId,
+      title: pending.title || "прямой возврат ответа автору вопроса",
+      sourceRoleName: pending.sourceRoleName || "", sourceRoleId: pending.sourceRoleId || "",
+      watermark: "", seen: [], at: Number(pending.at) || Date.now(),
+      tries: 0, lastReplySig: "", lastReplyAt: 0,
+      text: String(pending.text || ""), prompt: null, adoptedFromQueue: true,
+    };
+    if (!restored.text.trim()) {
+      pause("Очередь прямого возврата не содержит текста. Ответ в Notion не потерян; отправку не повторяю вслепую.", {
+        kind: "orphan-answer-return", ref, turnId,
+      });
+      return true;
+    }
+    const who = await roleAddress(pending);
+    if (!who || who.status !== "Активна" || !who.url) {
+      pause(`Автор ответа «${pending.roleName || pending.roleId}» не готов к сверке чата. Очередь и квитанция сохранены; не отправляю ролью по умолчанию.`, {
+        kind: "answer-return-role", ref, turnId,
+      });
+      return true;
+    }
+    if (!me || norm(me) !== norm(pending.roleId)) {
+      return navigateTo(who, "там ждёт прямой возврат ответа без ожидания");
+    }
+    const shell = appReady();
+    if (!shell.ok) {
+      pendingSay(pending, `Страница «${who.name}» ещё грузится (${shell.why}) — сверю адресный возврат, не повторяя его.`);
+      return true;
+    }
+    GM_setValue(K.expect, restored);
+    if (restoreMissingSendMark(restored)) {
+      GM_setValue(K.pending, null);
+      pendingNoticeAt = 0;
+      log(`Прямой возврат ответа восстановлен по квитанции/turn_id ${turnId}: дубль не отправляю, проверяю подтверждение.`, true);
+      return true;
+    }
+    GM_setValue(K.pending, { ...pending, at: Date.now() });
+    log(`Прямой возврат ответа ${turnId} восстановлен без доказательства доставки; повторяю только сохранённое сообщение один раз.`, true);
+    return false;
+  }
+
   async function adoptOrphanDispatch(pending, me) {
     if (GM_getValue(K.expect, null)) return false;
     const text = String(pending.text || "");
@@ -1903,7 +1989,8 @@
     // маркер, который ход просит вернуть. Нераспознанная очередь сохраняет
     // прежнее осторожное поведение — её не отправляем.
     const queueText = String(pending.text || "");
-    const reviewQueue = isReviewTurnKind(waitingForPolicy?.kind) ||
+    const answerReturnQueue = waitingForPolicy?.kind === "answer-return" || (!waitingForPolicy && pending.kind === "answer-return");
+    const reviewQueue = isReviewTurnKind(waitingForPolicy?.kind) || answerReturnQueue ||
       (!waitingForPolicy && /\bCF_(REVIEW|ANSWER|ARBITER)_RESULT\b/.test(queueText));
     if (workPending && (waitingForPolicy.roleFn === "Reviewer" ||
         norm(waitingForPolicy.roleName) === norm("Warden"))) {
@@ -1914,9 +2001,9 @@
     if (workPending || orphanPending) {
       // Старые очереди без roleFn, псевдонимы с тем же URL и роли, изменившиеся
       // после постановки в очередь. На границе отправки нельзя верить кешу.
-      if (workPending && norm(waitingForPolicy.roleId) !== norm(pending.roleId)) {
-        pause("Ожидание и очередь адресованы разным агентам. Оба сохранены; проверьте чат и Run ID.",
-          { kind: "reviewer-task-check", ref: waitingForPolicy.ref || "" });
+      if ((workPending || (answerReturnQueue && waitingForPolicy)) && norm(waitingForPolicy.roleId) !== norm(pending.roleId)) {
+        pause("Ожидание и очередь адресованы разным агентам. Оба сохранены; проверьте чат и ID возврата.",
+          { kind: answerReturnQueue ? "answer-return-changed" : "reviewer-task-check", ref: waitingForPolicy.ref || "", turnId: waitingForPolicy.turnId || "" });
         return true;
       }
       let owners;
@@ -1948,6 +2035,10 @@
       }
     }
 
+    // Прямой ответ автору — тоже не рабочая карточка: при потерянном ожидании
+    // его сверяем по question_id/turn_id и чату, не снимая ответ из Notion.
+    if (await adoptOrphanAnswerReturn(pending, me)) return true;
+
     // Ход приёмки без ожидания сверяется по номеру хода, а не по карточке:
     // карточки у него нет (D-055).
     if (await adoptOrphanReview(pending, me)) return true;
@@ -1967,6 +2058,14 @@
     const age = Date.now() - Number(pending.at || 0);
     // Неотправленное задание ждёт Мастера дольше: он узнаёт о паузе не сразу,
     // а очередь — это тот же ход, который не надо начинать заново.
+    if (age > (pending.undelivered ? C.undeliveredTtlMs : C.pendingTtlMs) && pending.kind === "answer-return") {
+      GM_setValue(K.pending, { ...pending, at: Date.now(), busySince: 0 });
+      pause(`Прямой возврат ответа автору «${pending.roleName || pending.roleId}» не подтверждён за ${Math.round(age / 60000)} мин. ` +
+        "Очередь, ожидание и ответ в Notion сохранены; не считаю доставленным и не отправляю Coordinator вместо автора. Проверьте чат и нажмите «Продолжить».", {
+        kind: "answer-return-undelivered", ref: pending.ref || "", turnId: pending.turnId || "",
+      });
+      return true;
+    }
     if (age > (pending.undelivered ? C.undeliveredTtlMs : C.pendingTtlMs)) {
       GM_setValue(K.pending, null);
       // Карточку возвращаем с любой страницы: отметки отправки нет, работы не

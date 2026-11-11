@@ -210,7 +210,14 @@
       return true;
     }
     const replies = messagesAfter(expect.watermark);
-    const decision = replies.map((m) => parseMarker(m.raw, "CF_REVIEW_RESULT"))
+    const restored = deferredResultFor(expect, "CF_REVIEW_RESULT");
+    if (restored.error) {
+      pause(`Отложенный результат приёмки не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "review-handoff-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    const decision = restored.found ? restored.decision : replies.map((m) => parseMarker(m.raw, "CF_REVIEW_RESULT"))
       .filter(Boolean)
       .at(-1);
     if (!decision) return markerMissing(role, expect, "CF_REVIEW_RESULT", manual);
@@ -225,6 +232,17 @@
       return true;
     }
     const verdict = String(decision.verdict || "").trim().toLowerCase();
+    if (!restored.found && ["accept", "rework", "master"].includes(verdict) && decision.question != null) {
+      const followup = await deferResultForQuestion(decision.question,
+        "Результат приёмки подготовлен; встречный вопрос — адресный ход.", {
+          roleName: role.name,
+          roleId: role.id,
+          mission: rt(mission.properties["Миссия"]),
+          missionId: mission.id,
+          key: `review-followup:${mission.id}:${expect.turnId}`,
+        }, expect, "CF_REVIEW_RESULT", decision);
+      if (followup.held) return true;
+    }
     if (verdict === "accept") {
       // Очередь могла измениться, пока Reviewer проверял миссию. Старый
       // вердикт не распространяется на новые или незакрытые карточки.

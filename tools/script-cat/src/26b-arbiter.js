@@ -254,7 +254,14 @@
       return true;
     }
     const replies = messagesAfter(expect.watermark);
-    const decision = replies.map((m) => parseMarker(m.raw, "CF_ARBITER_RESULT")).filter(Boolean).at(-1);
+    const restored = deferredResultFor(expect, "CF_ARBITER_RESULT");
+    if (restored.error) {
+      pause(`Отложенный арбитраж не восстановлен: ${restored.error}. Ожидание сохранено.`, {
+        kind: "arbiter-handoff-mismatch", ref: expect.ref || "", turnId: expect.turnId || "",
+      });
+      return true;
+    }
+    const decision = restored.found ? restored.decision : replies.map((m) => parseMarker(m.raw, "CF_ARBITER_RESULT")).filter(Boolean).at(-1);
     if (!decision) return markerMissing(role, expect, "CF_ARBITER_RESULT", manual);
 
     const turn = String(decision.turn_id || "").trim();
@@ -274,6 +281,18 @@
 
     const verdict = String(decision.verdict || "").trim().toLowerCase();
     if (verdict === "master") {
+      if (!restored.found && decision.question != null) {
+        const followup = await deferResultForQuestion(decision.question,
+          "Арбитраж подготовлен; встречный вопрос — адресный ход.", {
+            roleName: role.name,
+            roleId: role.id,
+            card: expect.title || cardId,
+            missionId: expect.missionId || "",
+            mission: expect.arbiter?.missionName || expect.missionName || "",
+            key: `arbiter-followup:${cardId}:${expect.turnId}`,
+          }, expect, "CF_ARBITER_RESULT", decision);
+        if (followup.held) return true;
+      }
       // Остановка цикла — право арбитра, но снимает её по-прежнему человек.
       GM_setValue(K.expect, null);
       GM_setValue(arbiterKey(cardId), []);
@@ -313,6 +332,18 @@
         { kind: "arbiter-marker", ref: cardId, turnId: expect.turnId || "" },
       );
       return true;
+    }
+    if (!restored.found && decision.question != null) {
+      const followup = await deferResultForQuestion(decision.question,
+        "Арбитраж подготовлен; встречный вопрос — адресный ход.", {
+          roleName: role.name,
+          roleId: role.id,
+          card: expect.title || cardId,
+          mission: expect.arbiter?.missionName || expect.missionName || "арбитраж по карточке",
+          missionId: expect.missionId || "",
+          key: `arbiter-followup:${cardId}:${expect.turnId}`,
+        }, expect, "CF_ARBITER_RESULT", decision);
+      if (followup.held) return true;
     }
 
     // Дальше карточка читается заново: между разбором и решением её могли

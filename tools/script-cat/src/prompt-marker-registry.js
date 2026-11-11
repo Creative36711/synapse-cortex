@@ -6,12 +6,12 @@
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const defs = {
       CF_COORDINATOR_RESULT: { kind: "plan", ids: ["mission_id", "turn_id"], role: "Coordinator" },
-      CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor" },
-      CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer" },
-      CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Reviewer" },
+      CF_AGENT_RESULT: { kind: "dispatch", ids: ["dispatch_id", "run_id"], role: "Executor|Auditor|Reviewer", optional: ["check", "report", "pr", "merged", "question", "artifacts"] },
+      CF_REVIEW_RESULT: { kind: "review", ids: ["mission_id", "turn_id"], role: "Reviewer", optional: ["summary", "remarks", "reason", "dispatch_id", "run_id", "question"] },
+      CF_ANSWER_RESULT: { kind: "answer", ids: ["question_id", "turn_id"], role: "Executor|Auditor|Coordinator|Reviewer|Maintainer", optional: ["answer", "reason", "question"] },
       // D-053: разбор повторяющейся петли. Карточка и ход названы явно: вердикт
       // арбитра обязан относиться именно к этой выдаче, а не к похожей.
-      CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer" },
+      CF_ARBITER_RESULT: { kind: "arbiter", ids: ["dispatch_id", "turn_id"], role: "Reviewer", optional: ["action", "reason", "fix", "summary", "question"] },
       CF_AGENT_PROVISION_RESULT: { kind: "provision", ids: ["request_id"], role: "Coordinator|Reviewer" },
     };
     const forKind = (kind, roleFn) => {

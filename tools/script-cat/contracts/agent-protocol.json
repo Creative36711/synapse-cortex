@@ -1,6 +1,6 @@
 {
   "protocolVersion": "1.11",
-  "sourceSha": "5ecd35ac2b3dfca88b2445dea9a9bd50e5c8fc59",
+  "sourceSha": "55517f6a79a0437921362537a0dd390f270df4f3",
   "generatedFrom": "tools/script-cat/contracts/agent-protocol.json",
   "markers": {
     "CF_COORDINATOR_RESULT": {
@@ -90,7 +90,8 @@
         "remarks",
         "reason",
         "dispatch_id",
-        "run_id"
+        "run_id",
+        "question"
       ],
       "idSource": "mission_id и turn_id — из промпта приёмки; для исторической карточки добавляются dispatch_id/run_id",
       "example": {
@@ -113,7 +114,7 @@
       ]
     },
     "CF_ANSWER_RESULT": {
-      "role": "Reviewer",
+      "role": "точная активная роль из gate.need; без gate/need — Reviewer/Warden по умолчанию",
       "turn": "answer",
       "required": [
         "question_id",
@@ -122,9 +123,10 @@
       ],
       "optional": [
         "answer",
-        "reason"
+        "reason",
+        "question"
       ],
-      "idSource": "question_id и turn_id — из промпта вопроса; после verdict: master используется тот же turn_id",
+      "idSource": "question_id и turn_id копируются из текущего промпта ответа; адресатом может быть роль из gate.need, а после возврата сохраняются исходные IDs",
       "example": {
         "question_id": "46208c7d-7c36-41df-ac99-2a38d79dbcf2",
         "turn_id": "7f1c2d3e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
@@ -158,7 +160,8 @@
         "action",
         "reason",
         "fix",
-        "summary"
+        "summary",
+        "question"
       ],
       "idSource": "dispatch_id — карточка, из-за которой собрался арбитраж; turn_id — из промпта арбитража (тот же при verdict:master и при продолжении после лимита инструментов)",
       "example": {
@@ -255,7 +258,7 @@
     },
     {
       "turn": "ответ на вопрос",
-      "role": "Warden/Reviewer",
+      "role": "активная роль из question.need (при gate); без gate/need — Warden/Reviewer",
       "marker": "CF_ANSWER_RESULT",
       "ids": [
         "question_id",
@@ -1986,6 +1989,107 @@
     "evidence": {
       "probe": "tests/relay-pause-truth-smoke.mjs",
       "suites": 120
+    }
+  },
+  "questionEnvelope": {
+    "appliesTo": [
+      "CF_COORDINATOR_RESULT",
+      "CF_AGENT_RESULT",
+      "CF_REVIEW_RESULT",
+      "CF_ANSWER_RESULT",
+      "CF_ARBITER_RESULT"
+    ],
+    "type": "object|null",
+    "required": [
+      "text",
+      "default"
+    ],
+    "optional": [
+      "options",
+      "url",
+      "blocks",
+      "gate",
+      "need"
+    ],
+    "default": "передаётся целиком, без лимита длины кроме физического предела хранения вопроса",
+    "route": "обычный вопрос не меняет текущий маршрут; need без gate не используется; результат удерживается только при gate:true и need, точно совпадающем с активной ролью",
+    "deferredReturn": "решение и снимок исходных kind/ref/run_id/turn_id сохраняются до выдачи ответа; после подтверждённой доставки автору восстанавливается тот же результат с исходными IDs",
+    "coordinatorPlanException": "ответ на плановый вопрос Coordinator возвращается новым планом; запись обратной связи выполняет транспорт",
+    "properties": {
+      "text": {
+        "type": "string",
+        "required": true
+      },
+      "default": {
+        "type": "string",
+        "required": true,
+        "preserveWhole": true
+      },
+      "options": {
+        "type": "array",
+        "items": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "blocks": {
+        "type": "string"
+      },
+      "gate": {
+        "type": "boolean",
+        "default": false
+      },
+      "need": {
+        "type": "string",
+        "maxLength": 80,
+        "effectiveOnlyWhen": "gate=true"
+      }
+    }
+  },
+  "d105": {
+    "version": "1.14.32",
+    "title": "Durable gate-вопрос удерживает результат и возвращает его исходному автору",
+    "date": "2026-11-04",
+    "problem": {
+      "cls": "transport",
+      "reason": "встречный вопрос в result-маркере мог быть записан отдельно от результата; при ответе/перезагрузке исходное решение и его ID нельзя было безопасно связать и возобновить",
+      "wrongShape": "разговорный возврат не был отдельной durable-квитанцией с проверкой sourceRoleId, question_id, turn_id и identity исходного маркера; адресная реплика могла попасть в журнал отчёта автора"
+    },
+    "decision": [
+      "24-feedback.questionInMarker: только gate:true вместе с непустым need создаёт блокирующую адресацию; обычный вопрос и need без gate оставляют маршрут прежним",
+      "27-review-answers.deferResultForQuestion/attachDeferredQuestion: до передачи ответа сохраняются исходное expectation, marker, kind/ref/turn_id и полное decision в K.answers",
+      "27-review-answers.startAnswer: точный активный need выбирает роль; неоднозначный, неизвестный или выключенный адресат не перенаправляется молча",
+      "27-review-answers.queueAnswerReturn: ответ в Notion и durable K.answerReturns записываются до очистки ожидания; адресный возврат несёт исходные sourceRoleId и UUID квитанции",
+      "27-review-answers.answerReturnStep/resumeDeferredAnswerReturn: только проверенная доставка восстанавливает исходный ход; marker/kind/ref/role/run_id/turn_id сверяются, повтор после перезапуска идемпотентен",
+      "14-missing-marker.runAnswer: журнал исходного отчёта ограничивается первой репликой «АДРЕСНЫЙ ВОЗВРАТ ОТВЕТА»"
+    ],
+    "behaviour": [
+      "без gate маршрут и результат применяются обычно; только gate:true + точный активный need удерживают решение до ответа",
+      "ответ идёт роли из need; отсутствующая/неактивная роль не заменяется Reviewer или Coordinator",
+      "после подтверждённого возврата исходный result продолжается с прежними dispatch_id/run_id либо mission_id/turn_id",
+      "потерянная/повторная квитанция сохраняется и сверяется после перезагрузки; несовпавшее живое ожидание не перезаписывается",
+      "ручной статус «Решено» в Notion и ответ Мастера не перезаписываются; адресная реплика и последующий хвост не входят в исходный отчёт",
+      "плановый вопрос Coordinator сохраняет отдельный маршрут: ответ возвращается новым планом"
+    ],
+    "budgetsRaised": false,
+    "protocolNote": "protocolVersion остаётся 1.11: question — необязательное additive-поле result-маркеров; обязательные поля и ID не меняются. ScriptCat 1.14.32 (D-027: @version/SCRIPT_VERSION подняты синхронно)",
+    "safety": [
+      "снимок решения устойчиво сохраняется до вызова sendToRole; без durable-строки gate-результат не применяется и адресату не отправляется",
+      "точный sourceRoleId — авторитетен: совпавшее имя или первая роль Reviewer не служат fallback",
+      "без квитанции доставки возврат не считается завершённым; malformed/чужие UUID и kind/ref/turn/marker оставляют очередь и ожидание для проверки",
+      "если Notion уже вручную поставил «Решено», запись не затирается",
+      "Coordinator plan сохраняет новый план как особый, ранее установленный маршрут",
+      "CF_ANSWER_RESULT question_id/turn_id остаются IDs отдельного ответа; исходный результат возобновляется только с сохранённой собственной identity"
+    ],
+    "evidence": {
+      "probe": "tests/relay-deferred-result-smoke.mjs",
+      "suites": 121,
+      "otherProbes": [
+        "tests/relay-question-gate-persist-smoke.mjs",
+        "tests/relay-direct-answer-smoke.mjs",
+        "tests/relay-answer-smoke.mjs",
+        "tests/relay-log-answer-smoke.mjs"
+      ]
     }
   }
 }

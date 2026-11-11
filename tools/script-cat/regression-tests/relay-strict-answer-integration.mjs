@@ -25,6 +25,8 @@ const run=(overrides={},settings={})=>{
     },patch:async(id,props)=>{writes.push({id,props});Object.assign(row.properties,props)},
     richText:s=>[{text:{content:s}}],logThrottled:()=>{},log:()=>{},
     recordQuestionChange:()=>{},openQuestions:()=>({at:0,rows:[]}),paintQuestions:()=>{},dbg:()=>{},
+    deferredResultFor:()=>({found:false,decision:null,error:''}),
+    answerQueue:()=>[],answerPending:()=>null,
     oneLine:x=>x,activeMission:async()=>null,roles:async()=>[],queueOf:async()=>({}),requestPlan:async()=>{},
   };
   const keys=Object.keys(env),values=Object.values(env);

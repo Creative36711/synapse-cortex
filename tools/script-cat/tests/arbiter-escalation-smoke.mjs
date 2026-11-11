@@ -64,7 +64,7 @@ function harness({ cardState = 'Ready', check = 'fail', pr = '', answer = '', ro
     'notion', 'patch', 'roles', 'activeMission', 'queueOf', 'githubPr', 'ghToken', 'firstLine',
     'nowIso', 'uid', 'isUuid', 'richText', 'pause', 'log', 'messagesAfter', 'parseMarker',
     'markerMissing', 'retainRejectedResult', 'sendToRole', 'compileOrPause',
-    'redispatchKey', 'REDISPATCH_WINDOW', 'REDISPATCH_LIMIT', 'redispatchWhy', 'requestPlan',
+    'redispatchKey', 'REDISPATCH_WINDOW', 'REDISPATCH_LIMIT', 'redispatchWhy', 'requestPlan', 'deferredResultFor',
     `${promptShim}
      ${src}
      return { arbiterKey, noteArbitration, arbitrationCount, arbiterRole, arbiterCase, arbiterPrompt,
@@ -127,6 +127,9 @@ function harness({ cardState = 'Ready', check = 'fail', pr = '', answer = '', ro
     3,
     (card) => (sel(card?.properties?.['Check']) === 'fail' ? 'проверка ответа не прошла (Check=fail)' : 'Координатор направил её в работу снова'),
     async (mission, role, queue, note, opts) => { plans.push({ mission, role, queue, note, opts }); return true; },
+    (expect) => expect?.deferredResult
+      ? { found: true, decision: expect.deferredResult.decision, error: '' }
+      : { found: false, decision: null, error: '' },
   );
   return Object.assign(env, { api });
 }

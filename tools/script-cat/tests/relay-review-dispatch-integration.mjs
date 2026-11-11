@@ -143,6 +143,9 @@ function harness({ reviewRequired = true } = {}) {
     missionKind: (p) => p?.properties?.['Состояние']?.select?.name || '',
     nowIso: () => '2026-10-30T15:00:00.000Z', oneLine: (s, n) => String(s).slice(0, n), firstLine: (s) => String(s).split('\n')[0],
     questionInMarker: () => ({ kind: 'none' }), askQuestion: async () => { throw new Error('вопросов в тесте нет'); },
+    deferredResultFor: (expect) => expect?.deferredResult
+      ? { found: true, decision: expect.deferredResult.decision, error: '' }
+      : { found: false, decision: null, error: '' },
     ensureMerged: async () => {
       calls.merge++;
       if (h.mergeResult) return h.mergeResult;
@@ -161,7 +164,7 @@ function harness({ reviewRequired = true } = {}) {
     const { C, K, Date, GM_getValue, GM_setValue, norm, rt, taskState, taskTitle, richText,
       notion, patch, gateway, activeMission, lastClosedMission, queueOf, missionBindingBlockers, messagesAfter, messages,
       roleFromPath, isUserNode, nodeId, messageRaw, roles, goTo, log, pause, autoOn, autoSet,
-      setStatus, missionKind, nowIso, oneLine, firstLine, questionInMarker, askQuestion,
+      setStatus, missionKind, nowIso, oneLine, firstLine, questionInMarker, askQuestion, deferredResultFor,
       ensureMerged, prDeclined, prUrl, prRef, hasMergedClaim, prMergeConflict, rememberAnswerStamp, lastMergeCheck,
       markerMissing, looseResult, stillWorking, staleBranchRefusal, retryStaleBranchHandoff,
       consumePending, returnMission } = env;

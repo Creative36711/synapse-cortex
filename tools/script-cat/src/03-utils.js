@@ -80,7 +80,7 @@
   }
 
   /** Ключи, потеря которых при переходе ломает ход, а не только удобство. */
-  const handoffKeys = () => [K.expect, K.pending, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
+  const handoffKeys = () => [K.expect, K.pending, K.answers, K.answerReturns, K.lastSend, K.log, "cfn-me", "cfn-nav", "cfn-prompt-journal-v1"];
 
   const norm = (x) => String(x || "").replace(/-/g, "").toLowerCase();
   /** Текст для сравнения: без разницы в регистре и пробелах. */

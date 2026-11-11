@@ -290,9 +290,9 @@ const rules = PromptCompiler.compile(dispatchRequest('Executor')).text;
 assert.match(rules, /Scope расширяет на ход/, 'зона — рамка по умолчанию');
 // D-083: канал назван «обратной связью» — это то же поле, но слово то, которым
 // Мастер и агенты его называют: «вопрос» читалось как «строка в базе».
-assert.match(rules, /Обратная связь — question в маркере/, 'обратная связь только полем маркера');
-assert.match(rules, /default обязателен/, 'без варианта по умолчанию вопрос не принимается');
-assert.match(rules, /в чате — остановка, не делай/, 'опрос в чате по-прежнему запрещён');
+assert.match(rules, /question в маркере/, 'обратная связь только полем маркера');
+assert.match(rules, /default пиши его целиком/, 'вариант по умолчанию передаётся без усечения');
+assert.match(rules, /Чат-опрос запрещён/, 'опрос в чате по-прежнему запрещён');
 assert.doesNotMatch(rules, /Не задавай вопросов, не создавай опросов/, 'старый полный запрет убран');
 const coordRules = PromptCompiler.compile(planRequest()).text;
 assert.match(coordRules, /Scope покрывает артефакты оракула/, 'Scope покрывает пробу и npm-скрипт');

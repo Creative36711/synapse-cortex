@@ -75,6 +75,30 @@ assert.match(contract.d068?.safety || '', /не повторяется/, 'D-068:
 assert.equal(contract.markers?.CF_ARBITER_RESULT?.role, 'Reviewer', 'D-053: арбитр — роль приёмки');
 assert.deepEqual(contract.markers?.CF_ARBITER_RESULT?.required, ['dispatch_id', 'turn_id', 'verdict'],
   'D-053: маркер арбитра несёт ID этой карточки и решения');
+// D-105: вопрос остаётся optional/additive, gate — вложенное поле, а durable-return
+// сохраняет исходную идентичность без смены protocolVersion.
+assert.equal(contract.d105?.version, '1.14.32', 'D-105 привязан к выпуску ScriptCat 1.14.32');
+assert.equal(contract.d105?.budgetsRaised, false, 'D-105 не поднял бюджет');
+assert.match(contract.d105?.protocolNote || '', /protocolVersion остаётся 1\.11/, 'D-105 аддитивен');
+assert.equal(contract.questionEnvelope?.required?.includes('default'), true, 'question требует полный default');
+assert.match(contract.questionEnvelope?.route || '', /обычный вопрос не меняет текущий маршрут/);
+assert.match(contract.questionEnvelope?.route || '', /gate:true/);
+for (const marker of ['CF_REVIEW_RESULT', 'CF_ANSWER_RESULT', 'CF_ARBITER_RESULT']) {
+  assert.ok(contract.markers[marker].optional.includes('question'), `${marker}: D-105 question optional`);
+}
+assert.match(contract.d105?.safety?.join(' ') || '', /sourceRoleId/);
+assert.match(contract.d105?.safety?.join(' ') || '', /квитанции доставки/);
+assert.equal(contract.questionEnvelope?.properties?.gate?.type, 'boolean');
+assert.equal(contract.questionEnvelope?.properties?.need?.effectiveOnlyWhen, 'gate=true');
+assert.match(contract.markerMatrix.find((row) => row.marker === 'CF_ANSWER_RESULT')?.role || '', /question\.need/);
+const decisionsDoc = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
+assert.match(decisionsDoc, /## D-105 \(1\.14\.32\)/);
+const acceptanceDoc = readFileSync(join(root, 'docs/agents/acceptance-report.md'), 'utf8');
+assert.match(acceptanceDoc.split(/\r?\n/)[0], /1\.14\.32.*D-105/);
+assert.match(acceptanceDoc, /Живая.*ручн/i);
+const updateDoc = readFileSync(join(root, 'docs/scriptcat-update.md'), 'utf8');
+assert.match(updateDoc, /сейчас \*\*1\.14\.32\*\*/);
+assert.match(updateDoc, /1\.14\.32 \(D-105\)/);
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).
 const docs = ['README.md', 'protocol.md', 'markers.md', 'notion.md', 'drive.md',
@@ -111,6 +135,12 @@ for (const [name, spec] of Object.entries(contract.markers)) {
 // 4. markers.md согласован с контрактом.
 const markersDoc = readFileSync(join(root, 'docs/agents/markers.md'), 'utf8');
 for (const name of Object.keys(contract.markers)) assert.ok(markersDoc.includes(name), `markers.md: ${name}`);
+assert.match(markersDoc, /durable gate/i);
+assert.match(markersDoc, /gate:true.*need:/s);
+assert.match(markersDoc, /sourceRoleId/);
+const protoDoc = readFileSync(join(root, 'docs/agents/protocol.md'), 'utf8');
+assert.match(protoDoc, /Durable-возврат результата по `gate` \(D-105\)/);
+assert.match(protoDoc, /исходными ID/);
 
 // 5. drive.md описывает artifacts и лимиты.
 const driveDoc = readFileSync(join(root, 'docs/agents/drive.md'), 'utf8');
@@ -119,7 +149,6 @@ for (const mime of contract.drive.artifactMimeWhitelist) assert.ok(driveDoc.incl
 assert.ok(driveDoc.includes(String(contract.drive.artifactMaxBytes)));
 
 // 6. Бюджеты в protocol.md совпадают с профилями.
-const protoDoc = readFileSync(join(root, 'docs/agents/protocol.md'), 'utf8');
 for (const [id, p] of Object.entries(PROMPT_PROFILES.profiles)) {
   if (p.budget.overhead) assert.ok(protoDoc.includes(`≤${p.budget.overhead}`), `protocol.md: бюджет ${id}`);
 }

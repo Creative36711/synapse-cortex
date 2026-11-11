@@ -13,7 +13,7 @@
 | рабочая карточка | Executor | CF_AGENT_RESULT | dispatch_id, run_id |
 | проверка карточки | Auditor | CF_AGENT_RESULT | dispatch_id, run_id |
 | приёмка миссии | Warden/Reviewer | CF_REVIEW_RESULT | mission_id, turn_id |
-| ответ на вопрос | Warden/Reviewer | CF_ANSWER_RESULT | question_id, turn_id |
+| ответ на вопрос | активная роль из точного `need` (без адресата — Warden/Reviewer) | CF_ANSWER_RESULT | question_id, turn_id |
 | арбитраж петли (D-053) | Warden/Reviewer | CF_ARBITER_RESULT | dispatch_id, turn_id |
 | историческая карточка Reviewer | Reviewer | CF_AGENT_RESULT (+CF_REVIEW_RESULT по оракулу) | dispatch_id, run_id |
 | provisioning агентов | Coordinator/Reviewer (Agent Admin=true) | CF_AGENT_PROVISION_RESULT | request_id |
@@ -32,9 +32,9 @@ CF_AGENT_PROVISION_RESULT {"request_id":"8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d","
 - CF_AGENT_RESULT: `check`, `report`, `pr`, `merged`, `question`, `artifacts`.
   `artifacts` — массив ссылок на файлы в `Arena/<project>/artifacts` (см. drive.md).
 - CF_COORDINATOR_RESULT: `question`, `need`.
-- CF_REVIEW_RESULT: `summary`, `remarks`, `reason`, `dispatch_id`, `run_id`.
-- CF_ANSWER_RESULT: `answer`, `reason`.
-- CF_ARBITER_RESULT: `action` (`ready`/`rework`/`accepted`/`blocked`), `reason`, `fix`, `summary`.
+- CF_REVIEW_RESULT: `summary`, `remarks`, `reason`, `dispatch_id`, `run_id`, `question`.
+- CF_ANSWER_RESULT: `answer`, `reason`, `question`.
+- CF_ARBITER_RESULT: `action` (`ready`/`rework`/`accepted`/`blocked`), `reason`, `fix`, `summary`, `question`.
   `verdict:master` (обязателен `reason`) останавливает цикл — это право арбитра, но
   паузу снимает только человек. Для `verdict:resolve` обязательны `action` и
   `reason`: решение без причины не применяется.
@@ -43,6 +43,21 @@ CF_AGENT_PROVISION_RESULT {"request_id":"8abe7712-1111-4a2b-9c3d-4e5f6a7b8c9d","
   `role_page_id` — только из кандидатов, отправленных в запросе; `role_name` и
   `repo` сверяются со свежей строкой Notion. Отдельные команды
   `archive/delete/activate/admin` запрещены. Пустой `jobs` — корректный отказ.
+
+## Поле `question` и durable gate (D-105)
+
+`question` может быть `null` или объектом с `text`, полным `default` и при
+необходимости `options`, `url`, `gate`, `need`. Вопрос без `gate:true` — обычный:
+результат применится и маршрут останется прежним; `need` без gate не действует.
+`gate:true` без точного активного `need` не удерживает результат. Только
+`gate:true` + `need:"<точное имя активной роли>"` задерживают применение результата.
+
+Транспорт сохраняет отложенные marker/decision и исходные ID до выдачи ответа,
+затем отправляет ответ точному автору вопроса по `sourceRoleId`. Возврат считается
+завершённым только по подтверждённой квитанции доставки; после этого тот же
+результат возобновляется с исходными ID. Неизвестный/неактивный адресат не
+подменяется ролью по умолчанию. У Coordinator отдельное правило: ответ на
+плановый вопрос запускает новый план.
 
 ## Чтение маркера: лестница транспорта (D-067)
 

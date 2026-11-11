@@ -283,7 +283,9 @@ const run = async () => {
   assert.match(src, /let askRow = askedRow;/, 'вопрос при остановке берётся из уже записанной строки');
   assert.match(src, /if \(!askRow && askText\)/, 'вопрос при остановке не выбрасывается');
   assert.match(src, /Ответ Мастера: цикл уже остановлен и ждёт его/, 'у вопроса при остановке есть прямой вариант по умолчанию');
-  assert.match(src, /questionInMarker\(result\.question, "Работа идёт по решению исполнителя"\)/, 'вопрос исполнителя разбирается из маркера: null — не вопрос');
+  assert.match(src, /const outgoingQuestion = result\.question != null\s*\? result\.question\s*:\s*review\?\.decision\?\.question != null\s*\? review\.decision\.question : null;/,
+    'вопрос исполнителя разбирается из маркера, null не создаёт follow-up, review-вопрос сохраняется');
+  assert.match(src, /if \(!expect\.deferredResult && outgoingQuestion != null\)/, 'пустой вопрос не записывается');
   assert.match(src, /await questionBriefing\(mission\)/, 'перед планом читаются вопросы и ответы');
   assert.match(src, /if \(sent\) await markDelivered\(briefing\.fresh\)/, 'ответ доставляется только после отправки');
   assert.match(src, /kind === "text"/, 'вопрос без варианта по умолчанию не выбрасывается');

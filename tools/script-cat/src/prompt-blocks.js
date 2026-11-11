@@ -141,17 +141,17 @@
     // руками, он находит лишь затем, чтобы подписать и передать приёмке.
     // Поэтому первая фраза теперь называет канал явно, а «не пиши руками» —
     // отдельным запретом, а не следствием из формата.
-    def("questions.protocol", { version: 4, ruleIds: ["R-QUESTIONS"], render: (c) => [
-      'Обратная связь — question в маркере {"text","options","default","gate","need"}; default обязателен, пиши его целиком (длина не ограничена); ≤1/ход; ответ строкой. Вопрос ход НЕ держит; gate+need — ход ждёт этой роли, ответ вернётся. Опрос в чате — остановка, не делай.',
-      // D-082: клауза только Координатору.
-      //
-      // Правило общее, но нарушил его он один: 09.11 создал два предложения
-      // прямо в «Обратной связи» и считал, что спросил Warden. Держать запрет в
-      // общем блоке не вышло — карточка исполнителя упирается в свой бюджет
-      // (2800) на каждом знаке, а платили бы все роли за промах одной. У
-      // Координатора запас есть, и запрет стоит там, где его и нарушают.
-      c.role?.fn === "Coordinator" ? " Обратную связь в Notion руками не пиши — только этим полем, запись делает транспорт. Срочно нужен ответ роли — question с need:\"<роль>\", не next:\"blocked\"." : "",
-    ].filter(Boolean).join("") });
+    def("questions.protocol", { version: 7, ruleIds: ["R-QUESTIONS"], audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
+      'Обратная связь: question в маркере: text/options/default/gate/need; default пиши его целиком (длина не ограничена); ≤1/ход. Без gate — по default; gate:true+need:"<точная активная роль>" держат результат. Чат-опрос запрещён.',
+      c.role?.fn === "Coordinator" && c.kind === "plan"
+        ? ' Ответ вернётся Координатору новым планом. Срочно нужен ответ: question с gate:true + need:"<роль>", не next:"blocked". Обратную связь в Notion руками не пиши — запись делает транспорт.'
+        : ' Результат вернётся с прежними ID после ответа.',
+    ].join("") });
+    // Встречный вопрос не заменяет исходный result. gate+need адресуют ответ
+    // и после него возобновляют прежнее решение с теми же ID.
+    def("questions.outgoing", { version: 2, ruleIds: ["R-QUESTIONS"],
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      'Вопрос — поле question того же маркера: {text,options,default,gate,need}; default обязателен целиком, ≤1/ход. Без gate маршрут не меняется. gate:true + need:"<точное имя активной роли>" удерживают результат до ответа; Relay продолжит его с прежними ID.' });
 
     def("adr.protocol", { ruleIds: ["R-QUESTIONS"], render: () =>
       "Контракт/оракул — только через question «ADR:» (3 варианта, default «оставить как есть»); до решения приёмки не меняется. proposed-файл: вопрос со ссылкой; статус accepted/rejected после ответа." });
@@ -197,9 +197,17 @@
       c.mission?.result ? `ИТОГ МИССИИ:\n${c.mission.result}` : "ИТОГ МИССИИ: поле «Итог» пусто — повод не принимать.",
     ].filter(Boolean).join("\n") });
     def("review.protocol", { ruleIds: ["R-EVIDENCE", "R-VERIFY-GITHUB"], audience: ["Reviewer"], render: () =>
-      "Смотри, выполнено ли то, о чём миссия, а не только «всё ли выдано». Каждый пункт оракула закрывай командой или артефактом; нельзя запустить команду — это замечание. Accepted — состояние карточки, не доказательство pass; Check=fail и остатки не скрывай. Заявленное в «Итоге» сверь с реально сделанным карточками." });
+      "Проверь цель миссии и каждый пункт оракула командой или артефактом; незапущенное — замечание. Accepted не доказывает pass: не скрывай Check=fail и остатки. Сверь «Итог» с реально сделанными карточками." });
 
-    def("answer.question", { verbatim: true, render: (c) => [
+    def("identity.answer", { verbatim: true,
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
+      `Адресный ответ для роли «${c.role?.name}» (${c.role?.fn}).`,
+      `question_id: ${c.question?.id}`,
+      `turn_id: ${c.turnId || c.question?.turnId}`,
+      c.mission?.id ? `mission_id: ${c.mission.id}` : "",
+    ].filter(Boolean).join("\n") });
+    def("answer.question", { verbatim: true,
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => [
       c.question?.role ? `Вопрос задал: ${c.question.role}` + (c.question.card ? ` · карточка «${c.question.card}»` : "") : "",
       "ВОПРОС",
       c.question?.fullText || c.question?.text,
@@ -214,9 +222,12 @@
         : "",
     ].filter(Boolean).join("\n") });
     def("answer.protocol", { ruleIds: ["R-QUESTIONS"], audience: ["Reviewer"], render: () =>
-      "Отвечай по существу: что делать, где граница, по какому признаку считать сделанным. Ответ самодостаточен — агент увидит его без твоего чата. По ADR решай в пределах делегированных полномочий, сам оракул/файлы не меняй. Мастера зови только когда без него физически нельзя (новый агент, доступ, решение по ТЗ)." });
-    def("answer.resume", { audience: ["Reviewer"], render: () =>
-      "Продолжение того же вопроса после эскалации Мастеру: question_id и turn_id прежние, новый ход не создаётся. Если Мастер уже внёс ответ в Notion и поставил «Решено» — ответ принят, строку не перезаписывай." });
+      "Дай самодостаточное решение: действие, граница, проверяемый критерий. ADR решай в делегированных пределах; оракул/файлы не меняй. Зови Мастера лишь при физической необходимости (агент, доступ, ТЗ)." });
+    def("role.answer.protocol", { ruleIds: ["R-QUESTIONS"],
+      audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      "Ты отвечаешь на адресный вопрос в пределах своей функции и зоны: дай самодостаточное решение, границу и проверяемый критерий. Не меняй статусы и не повторяй работу. Если для ответа нужен другой адресат — вопрос добавь в свой CF_ANSWER_RESULT; gate:true + need временно удержат этот результат и вернут его с тем же turn_id после подтверждённого ответа." });
+    def("answer.resume", { audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: () =>
+      "Продолжай тот же вопрос с прежними question_id/turn_id, без нового хода. Если Мастер поставил «Решено» в Notion — не перезаписывай ответ." });
 
     // ── D-053: арбитраж повторяющейся петли ────────────────────────────────
     // Пауза «карточку перевыдали N раз» перестала быть первой реакцией: сначала
@@ -241,8 +252,8 @@
 
     const markerJson = (c, name) => {
       if (name === "CF_COORDINATOR_RESULT") return `CF_COORDINATOR_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","status":"completed","next":"<роль|done>"}`;
-      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>"}`;
-      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>"}`;
+      if (name === "CF_REVIEW_RESULT") return `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","summary":"<на что опирался>","question":null}`;
+      if (name === "CF_ANSWER_RESULT") return `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","answer":"<решение>","question":null}`;
       const auditor = c.role?.fn === "Auditor";
       // D-046: литерал `"merged":true` рядом с `"pr":"<URL|null>"` учил агента
       // противоречию «PR нет, но слит» — проверочные K-27 и K-34 уходили в
@@ -250,7 +261,8 @@
       // для настоящего PR ведёт к проверке по GitHub, а не вместо неё. Когда
       // ставить true, говорит правило ниже. Шаблон обязан оставаться валидным
       // JSON: `validateMarkerIds` разбирает его целиком.
-      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` + (auditor ? "}" : `,"pr":"<URL|null>","merged":false}`);
+      return `CF_AGENT_RESULT {"dispatch_id":"${c.task?.id}","run_id":"${c.task?.runId}","status":"submitted","check":0,"report":"<путь>"` +
+        (auditor ? "}" : `,"pr":"<URL|null>","merged":false${c.role?.fn === "Reviewer" ? `,"question":null` : ""}}`);
     };
     def("marker.agent", { version: 3, ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Reviewer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit") return [
@@ -298,20 +310,22 @@
       // в который полный текст маркера не влезает (815).
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
         "Когда проверка завершена, последней строкой дай CF_REVIEW_RESULT: accept, rework или master.",
+        "Если нужен встречный вопрос, добавь его в question; блокирует только gate:true + need.",
         "Если доказательств не хватает — не принимай миссию.",
-        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept"}`,
+        `CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"accept","question":null}`,
       ].join("\n");
       return [
-      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
+      `ОТВЕТ — одной строкой в конце, ровно один маркер. verdict: accept (миссия закрыта), rework (замечания по пунктам, проверяемо), master (только когда без Мастера физически нельзя). Встречный вопрос добавь в question; маршрут меняет только gate:true вместе с need. Предел доработок ${c.mission?.reworkLimit ?? 3}:`,
       c.kind === "reminder" ? "" : `для возврата: CF_REVIEW_RESULT {"mission_id":"${c.mission?.id}","turn_id":"${c.turnId}","verdict":"rework","remarks":"<пункты замечаний>"}`,
       markerJson(c, "CF_REVIEW_RESULT"),
       ].filter(Boolean).join("\n");
     } });
     def("marker.arbiter", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
       const ids = `{"dispatch_id":"${c.arbiter?.cardId}","turn_id":"${c.turnId}"`;
-      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>"}`;
+      const resolve = `CF_ARBITER_RESULT ${ids},"verdict":"resolve","action":"ready","reason":"<почему петля>","fix":"<что исправить>","question":null}`;
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
-        "Когда разбор завершён, последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Последней строкой дай CF_ARBITER_RESULT с этими IDs.",
+        "Встречный вопрос — в question; блокирует только gate:true + need.",
         "Решение по карточке обязательно: resolve с action или master.",
         resolve,
       ].join("\n");
@@ -319,19 +333,25 @@
       // строка продолжает работу по решению арбитра, но не останавливает цикл
       // молча. Остановка — осознанный выбор, а не значение по умолчанию.
       return [
-        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл.",
-        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>"}`,
+        "ОТВЕТ — разбор текстом, затем последней строкой ровно один маркер, ID копируй из этого промпта. verdict: resolve — решение по карточке (action: ready — та же карточка заново с исправленной постановкой, rework — вернуть автору, accepted — работа выполнена, blocked — нужен человек; fix — правка постановки). verdict: master — только когда без Мастера физически нельзя; маркер с master останавливает цикл. Встречный вопрос — в question; задерживает только gate:true вместе с need.",
+        `остановить цикл: CF_ARBITER_RESULT ${ids},"verdict":"master","reason":"<чего не хватает>","question":null}`,
         resolve,
       ].join("\n");
     } });
-    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Reviewer"], render: (c) => {
+    def("marker.answer", { ruleIds: ["R-MARKER"], audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       if (c.delivery?.tier === "tool_limit" || c.delivery?.tier === "compact" || c.delivery?.tier === "retry") return [
-        "Когда решение готово, последней строкой дай CF_ANSWER_RESULT: answer или master.",
-        "Если вопрос уже решён вручную в Notion, не перезаписывай ответ.",
-        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer"}`,
+        "Последней строкой — CF_ANSWER_RESULT: answer или master.",
+        "Встречный вопрос — в question; только gate:true + need удерживают результат.",
+        "Ручное «Решено» в Notion не перезаписывай.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","question":null}`,
       ].join("\n");
-      return [
-        "ОТВЕТ — последней строкой один маркер: answer (самодостаточное решение) или master (чего не хватает). Агент и Координатор увидят ответ без твоего чата:",
+      if (c.kind === "reminder") return [
+        "В конце дай CF_ANSWER_RESULT: verdict answer или master.",
+        "Встречный question: поля text, options, default, gate, need; default обязателен целиком. Только gate:true + need удерживают результат; Relay продолжит его с прежними ID.",
+        `CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"answer","question":null}`,
+      ].join("\n");
+      return [,
+        "Последней строкой — один маркер: answer (решение) или master (причина). Вопрос — поле question (text/options/default/gate/need), default обязателен целиком. Только gate:true + need:\"<точное имя активной роли>\" удерживают этот результат до ответа и возобновляют с прежними ID. Ответ увидят агент и Координатор:",
         c.kind === "reminder" ? "" : `для вызова Мастера: CF_ANSWER_RESULT {"question_id":"${c.question?.id}","turn_id":"${c.turnId || c.question?.turnId}","verdict":"master","reason":"<чего не хватает>"}`,
         markerJson(c, "CF_ANSWER_RESULT"),
       ].filter(Boolean).join("\n");
@@ -408,7 +428,7 @@
     } });
 
     // ── continuation после tool-call limit: тот же ход, новые IDs не создаём ──
-    def("delivery.tool_limit", { version: 2, render: (c) => {
+    def("delivery.tool_limit", { version: 2, audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       // D-103: причина повтора — отдельный факт.
       //
       // 10.11 Arena дважды отклонила сообщение Warden'у («Something went
@@ -432,7 +452,7 @@
       if (c.kind === "arbiter") return "Продолжи разбор петли после лимита инструментов. Это не новая карточка и не новая выдача.\nНе правь код и карточки. Дочитай факты и вынеси решение по этой же карточке.";
       return "Продолжи текущий ход после лимита инструментов. Это не новая задача и не повторная выдача.\nНе начинай сначала и не дублируй уже сделанное. Восстанови контекст по своим последним действиям и продолжай только недостающее.";
     } });
-    def("identity.continue", { render: (c) => {
+    def("identity.continue", { audience: ["Executor", "Auditor", "Coordinator", "Reviewer", "Maintainer"], render: (c) => {
       if (c.kind === "plan" || c.kind === "review") return `IDs прежние: mission_id=${c.mission?.id}, turn_id=${c.turnId}.`;
       if (c.kind === "answer") return `IDs прежние: question_id=${c.question?.id}, turn_id=${c.turnId || c.question?.turnId}.`;
       if (c.kind === "arbiter") return `IDs прежние: dispatch_id=${c.arbiter?.cardId}, turn_id=${c.turnId}.`;
