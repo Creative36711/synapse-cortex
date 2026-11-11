@@ -263,12 +263,12 @@ function makeHarness(values = initial, activeProfile = undefined) {
   let open = true, flushes = 0, setups = 0, statusUpdates = 0, openDuringHeal = false;
   const document = { getElementById: (id) => id === 'cfn-connections' && open ? {} : null };
   const h = new Function('document', 'flushPollJournal', 'selfHealClaim', 'autoOn', 'GM_getValue', 'K',
-    'isPaused', 'captchaDialog', 'handleToolCallLimit', 'monitorVisibleErrors', 'setup', 'setStatus', 'log',
+    'isPaused', 'captchaDialog', 'monitorDailyLimit', 'handleToolCallLimit', 'monitorVisibleErrors', 'setup', 'setStatus', 'log',
     `let busy = false, busyAt = 0, stepRestarts = 0;\n${code}\nreturn { tick, busy: () => busy };`,
   )(
     document, async () => { flushes += 1; }, async () => { if (openDuringHeal) open = true; },
     () => true, (_key, fallback) => fallback, { pending: 'pending', expect: 'expect' },
-    () => false, () => false, async () => false, () => false, async () => { setups += 1; open = true; },
+    () => false, () => false, () => false, async () => false, () => false, async () => { setups += 1; open = true; },
     () => { statusUpdates += 1; }, () => {},
   );
   await h.tick(false);

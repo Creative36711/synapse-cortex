@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Relay — передача хода между агентами
 // @namespace    https://arena.ai/
-// @version      1.14.32
+// @version      1.14.33
 // @description  Цикл Координатор → исполнитель → Координатор: агент сам коммитит, пушит и мержит PR; ScriptCat ждёт мерж и нажимает Continue.
 // @match        https://arena.ai/*
 // @match        https://www.arena.ai/*
@@ -81,7 +81,7 @@
     // D-073: отпечаток сборки вшивает build.mjs (SHA-256 источника). Номер версии
     // говорит «какой выпуск», отпечаток — «какая именно сборка»: без него проверка
     // «работает новая версия, а не прежняя под новым номером» невозможна.
-    buildFingerprint: "2cd985f043b52665",
+    buildFingerprint: "f75ae4376dd54759",
     repo: "", // для ссылки на PR из номера
     tickMs: 15000,
     mergeGraceMs: 90000, // сколько ждём мерж, прежде чем нажать кнопки за агента
@@ -738,7 +738,7 @@
 
   const NTFY_BASE = "https://ntfy.sh";
   const SCRIPT_VERSION =
-    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.32";
+    (typeof GM_info !== "undefined" && GM_info?.script?.version) || "1.14.33";
 
   /** «https://ntfy.sh/topic?x=1» и «topic» одинаково дают topic. */
   function normalizeNtfyTopic(raw) {
@@ -5955,6 +5955,43 @@
 
   function markReported(key) {
     GM_setValue(K.errSeen, key);
+  }
+
+  /**
+   * D-106: дневной лимит токенов Arena — отдельное состояние интерфейса.
+   * Кнопка-индикатор в поле ввода (`aria-label="Daily usage limit reached"`,
+   * `data-severity="blocked"`) означает, что суточная квота исчерпана и
+   * отправка заблокирована целиком. Это не отказ доставки (повтор не поможет)
+   * и не tool-call limit (там ход уже шёл и ждёт продолжение) — здесь нечего
+   * отправлять вообще.
+   *
+   * Правильное действие — остановить цикл: пауза `daily-limit`, класс `master`,
+   * адресат — Мастер (пункт закрытого списка `money`: квота и деньги аккаунта).
+   * Окно лимита суточное: когда индикатор погаснет, цикл продолжается кнопкой
+   * «Продолжить». Пока индикатор виден, повторное «Продолжить» снова ставит
+   * паузу — тик не уйдёт в заблокированную отправку.
+   */
+  const DAILY_LIMIT_RE = /daily usage limit/i;
+
+  function dailyUsageLimitBlocked() {
+    if (typeof document === "undefined") return false;
+    for (const el of document.querySelectorAll("button[aria-label]")) {
+      if (!DAILY_LIMIT_RE.test(el.getAttribute("aria-label") || "")) continue;
+      if (typeof visible === "function" && !visible(el)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function monitorDailyLimit() {
+    if (!dailyUsageLimitBlocked()) return false;
+    pause(
+      "Дневной лимит токенов Arena исчерпан: индикатор «Daily usage limit reached» в поле " +
+        "ввода, отправка заблокирована — цикл остановлен. Лимит суточный: когда индикатор " +
+        "погаснет, нажмите «Продолжить»; пока он виден, повторная попытка снова остановит цикл.",
+      { kind: "daily-limit" },
+    );
+    return true;
   }
 
   function monitorVisibleErrors() {
@@ -19301,6 +19338,8 @@
     // (D-085): это отметка, а не остановка. Пункт нужен, чтобы `update-recovery`
     // не ушёл агенту как «поломка транспорта».
     "update-recovery": "install",
+    // D-106: суточный лимит токенов — квота и деньги аккаунта.
+    "daily-limit": "money",
     // D-102: `heal-await-update` здесь НЕ значится намеренно. Это не «решает
     // человек», а «ждём установку»: пауза уже стоит и уже говорит, что делать.
     // Пока вид был привязан к пункту `install`, вторая пауза шла как
@@ -19356,6 +19395,9 @@
     "poll-loop",
     "captcha",
     "auth",
+    // D-106: суточный лимит токенов — квота аккаунта: отправка заблокирована
+    // целиком, продолжать нечего и нечем, пока окно лимита не сработает.
+    "daily-limit",
     // Неоднозначность доставки: отправлять вслепую — дубль. Пока человек не
     // посмотрит чат и карточку, продолжать нечем, поэтому стоим.
     "orphan-dispatch",
@@ -19518,6 +19560,10 @@
     // Человек тут не нужен — вопрос уже записан строкой, «Продолжить» повторит.
     "answer-handoff": "transport",
     "answer-nocoord": "master",
+    // D-106: суточный лимит токенов Arena — квота аккаунта, а не поломка
+    // транспорта: индикатор в поле ввода блокирует отправку, продолжать
+    // может только Мастер (пункт закрытого списка `money`).
+    "daily-limit": "master",
     "tool-limit": "master",
     "pilot-tool-limit": "master",
     "pilot-timeout": "master",
@@ -21240,6 +21286,10 @@ function reviewPullRequest({ files, pr, zone } = {}) {
         captchaPause();
         return;
       }
+      // D-106: дневной лимит токенов важнее любого хода — индикатор в поле
+      // ввода блокирует отправку целиком, и продолжение хода, и новое задание
+      // не уйдут. Сначала остановиться: пауза `daily-limit` ждёт сброса окна.
+      if (monitorDailyLimit()) return;
       // Tool-call limit — продолжение того же хода, раньше общей паузы по ошибке.
       if (await handleToolCallLimit()) return;
       // Ошибка на экране важнее любого шага: сначала остановиться.
