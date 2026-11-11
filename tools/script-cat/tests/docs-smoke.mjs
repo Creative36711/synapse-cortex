@@ -88,16 +88,26 @@ for (const marker of ['CF_REVIEW_RESULT', 'CF_ANSWER_RESULT', 'CF_ARBITER_RESULT
 }
 assert.match(contract.d105?.safety?.join(' ') || '', /sourceRoleId/);
 assert.match(contract.d105?.safety?.join(' ') || '', /квитанции доставки/);
+// D-106: дневной лимит токенов — транспорт-внутренняя остановка без бюджетов,
+// адресат — Мастер (пункт `money`), детектор — метка UI в поле ввода.
+assert.equal(contract.d106?.version, '1.14.33', 'D-106 привязан к выпуску ScriptCat 1.14.33');
+assert.equal(contract.d106?.budgetsRaised, false, 'D-106 не поднял бюджет');
+assert.match(contract.d106?.protocolNote || '', /protocolVersion остаётся 1\.11/, 'D-106 аддитивен');
+assert.match(contract.d106?.decision?.join(' ') || '', /daily-limit/, 'D-106: вид паузы назван');
+assert.match(contract.d106?.safety?.join(' ') || '', /aria-label/, 'D-106: детектор по метке UI');
+assert.match(contract.d106?.evidence?.probe || '', /relay-daily-limit-smoke/, 'D-106: проба названа');
 assert.equal(contract.questionEnvelope?.properties?.gate?.type, 'boolean');
 assert.equal(contract.questionEnvelope?.properties?.need?.effectiveOnlyWhen, 'gate=true');
 assert.match(contract.markerMatrix.find((row) => row.marker === 'CF_ANSWER_RESULT')?.role || '', /question\.need/);
 const decisionsDoc = readFileSync(join(root, 'docs/DECISIONS.md'), 'utf8');
 assert.match(decisionsDoc, /## D-105 \(1\.14\.32\)/);
+assert.match(decisionsDoc, /## D-106 \(1\.14\.33\)/, 'D-106 записан в решениях');
 const acceptanceDoc = readFileSync(join(root, 'docs/agents/acceptance-report.md'), 'utf8');
-assert.match(acceptanceDoc.split(/\r?\n/)[0], /1\.14\.32.*D-105/);
+assert.match(acceptanceDoc.split(/\r?\n/)[0], /1\.14\.33.*D-106/);
 assert.match(acceptanceDoc, /Живая.*ручн/i);
 const updateDoc = readFileSync(join(root, 'docs/scriptcat-update.md'), 'utf8');
-assert.match(updateDoc, /сейчас \*\*1\.14\.32\*\*/);
+assert.match(updateDoc, /сейчас \*\*1\.14\.33\*\*/);
+assert.match(updateDoc, /1\.14\.33 \(D-106\)/, 'scriptcat-update описывает выпуск D-106');
 assert.match(updateDoc, /1\.14\.32 \(D-105\)/);
 
 // 2. Все документы на месте (включая drive.md, закрывающий битую ссылку).

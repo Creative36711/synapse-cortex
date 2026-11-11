@@ -85,6 +85,43 @@
     GM_setValue(K.errSeen, key);
   }
 
+  /**
+   * D-106: дневной лимит токенов Arena — отдельное состояние интерфейса.
+   * Кнопка-индикатор в поле ввода (`aria-label="Daily usage limit reached"`,
+   * `data-severity="blocked"`) означает, что суточная квота исчерпана и
+   * отправка заблокирована целиком. Это не отказ доставки (повтор не поможет)
+   * и не tool-call limit (там ход уже шёл и ждёт продолжение) — здесь нечего
+   * отправлять вообще.
+   *
+   * Правильное действие — остановить цикл: пауза `daily-limit`, класс `master`,
+   * адресат — Мастер (пункт закрытого списка `money`: квота и деньги аккаунта).
+   * Окно лимита суточное: когда индикатор погаснет, цикл продолжается кнопкой
+   * «Продолжить». Пока индикатор виден, повторное «Продолжить» снова ставит
+   * паузу — тик не уйдёт в заблокированную отправку.
+   */
+  const DAILY_LIMIT_RE = /daily usage limit/i;
+
+  function dailyUsageLimitBlocked() {
+    if (typeof document === "undefined") return false;
+    for (const el of document.querySelectorAll("button[aria-label]")) {
+      if (!DAILY_LIMIT_RE.test(el.getAttribute("aria-label") || "")) continue;
+      if (typeof visible === "function" && !visible(el)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function monitorDailyLimit() {
+    if (!dailyUsageLimitBlocked()) return false;
+    pause(
+      "Дневной лимит токенов Arena исчерпан: индикатор «Daily usage limit reached» в поле " +
+        "ввода, отправка заблокирована — цикл остановлен. Лимит суточный: когда индикатор " +
+        "погаснет, нажмите «Продолжить»; пока он виден, повторная попытка снова остановит цикл.",
+      { kind: "daily-limit" },
+    );
+    return true;
+  }
+
   function monitorVisibleErrors() {
     // Tool-call limit обрабатывается продолжением хода (handleToolCallLimit в
     // тике стоит раньше). Здесь не превращаем его в общую паузу по UI-ошибке.
